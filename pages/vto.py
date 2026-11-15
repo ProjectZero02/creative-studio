@@ -326,7 +326,8 @@ def close_error_dialog(e: me.ClickEvent):
     yield
 
 
-@me.page(path="/vto", title="GenMedia Creative Studio - Virtual Try-On")
+# /vto is served by pages/fashion.py (Fashion, "Try on" tab). This upstream
+# layout is kept, unregistered, so upstream merges stay simple.
 def page():
     state = me.state(PageState)
 

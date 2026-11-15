@@ -30,10 +30,8 @@ from state.shop_the_look_state import PageState
 from state.state import AppState
 
 
-@me.page(
-    path="/shop_the_look",
-    title="Shop the Look",
-)
+# /shop_the_look is served by pages/fashion.py (Fashion, "Shop the look" tab).
+# This upstream layout is kept, unregistered, so upstream merges stay simple.
 def page():
     with page_scaffold(page_name="shop_the_look"): # pylint: disable=E1129:not-context-manager
         with page_frame():  # pylint: disable=E1129:not-context-manager

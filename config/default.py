@@ -201,6 +201,9 @@ class Default:
 
     # VTO
     VTO_LOCATION: str = os.environ.get("VTO_LOCATION", "us-central1")
+    # TODO: virtual-try-on-001 was deprecated by Google on 2026-09-14 and is
+    # retired on 2027-03-15. Move Fashion (/fashion, Try on) to its successor
+    # before then; set VTO_MODEL_ID to switch without a code change.
     VTO_MODEL_ID: str = os.environ.get("VTO_MODEL_ID", "virtual-try-on-001")
     GENMEDIA_VTO_MODEL_COLLECTION_NAME: str = os.environ.get(
         "GENMEDIA_VTO_MODEL_COLLECTION_NAME",

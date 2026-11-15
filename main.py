@@ -71,6 +71,7 @@ from starlette.responses import Response
 
 import pages.brand_adherence
 import pages.character_sheet
+import pages.fashion
 import pages.imagen_upscale
 import pages.shop_the_look
 import pages.story_studio
