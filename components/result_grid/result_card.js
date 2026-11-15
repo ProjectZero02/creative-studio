@@ -32,7 +32,9 @@ const P = {
   extend: 'M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z',
   edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
   play: 'M8 5v14l11-7z',
+  upscale: 'M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2zM8 12l2.5 3 3.5-4.5 4.5 6H6z',
 };
+P.edit_video = P.edit;
 
 const LABELS = {
   download: 'Download',
@@ -41,6 +43,8 @@ const LABELS = {
   video: 'Make a video from this image',
   extend: 'Extend this video',
   edit: 'Edit this image',
+  edit_video: 'Edit this video',
+  upscale: 'Upscale this video',
 };
 
 const icon = (d) =>

@@ -32,7 +32,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
         "pages.banana_studio",
         "pages.gemini_image_generation",
         "pages.vto",
-        "components.imagen.image_output",
         "components.interior_design.design_studio",
         "components.library.image_details",
     ],
@@ -48,26 +47,24 @@ def test_omni_button_is_rendered_before_veo_button(module_name: str) -> None:
     assert omni_call.start() < veo_call.start()
 
 
-def test_veo_page_renders_omni_hint() -> None:
-    """The Veo page shows the Omni hint right after its header."""
+def test_video_studio_has_no_omni_promo_banner() -> None:
+    """Omni is built into Video Studio, so the "Try Gemini Omni" banner is gone."""
     from pages import veo
 
     source = inspect.getsource(veo.veo_content)
-    assert source.index("header(") < source.index("omni_hint()")
+    assert "omni_hint" not in source
 
 
-@patch("components.omni_hint.omni_hint.log_ui_click")
-@patch("components.omni_hint.omni_hint.me.navigate")
-@patch("components.omni_hint.omni_hint.me.state")
-def test_omni_hint_navigates_to_omni_page(
-    _mock_state: MagicMock,
-    mock_navigate: MagicMock,
-    mock_log: MagicMock,
-) -> None:
-    """The hint's button opens the Gemini Omni page and logs the click."""
-    from components.omni_hint.omni_hint import on_open_omni_click
+def test_video_studio_lists_omni_first_and_defaults_to_it() -> None:
+    """The model chip leads with Gemini Omni 1.2 Flash, then the Veo models."""
+    import dataclasses
 
-    list(on_open_omni_click(MagicMock()))
+    from config.veo_models import VEO_MODELS
+    from config.video_studio_models import studio_model_ids
+    from state.veo_state import PageState
 
-    mock_navigate.assert_called_once_with(url="/gemini-omni")
-    mock_log.assert_called_once()
+    ids = studio_model_ids()
+    assert ids[0] == "gemini-omni-1.2-flash"
+    assert ids[1:] == [m.version_id for m in VEO_MODELS]
+    defaults = {f.name: f.default for f in dataclasses.fields(PageState)}
+    assert defaults["veo_model"] == "gemini-omni-1.2-flash"

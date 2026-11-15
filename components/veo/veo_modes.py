@@ -21,6 +21,14 @@ from state.state import AppState
 from state.veo_state import PageState
 from components.library.library_chooser_button import library_chooser_button
 from config.veo_models import get_veo_model_config
+from config.video_studio_models import (
+    STUDIO_MODE_LABELS,
+    StudioSettings,
+    is_known_model,
+    limits,
+    normalise,
+    studio_modes,
+)
 
 
 @me.component
@@ -70,28 +78,23 @@ def veo_modes(
             )
 
 
-# Plain-language names for the Veo modes (the values stay t2v/i2v/...).
-VEO_MODE_LABELS = {
-    "t2v": "Text",
-    "i2v": "Image",
-    "interpolation": "First + last frame",
-    "r2v": "References",
-}
+# Plain-language names for the Video Studio modes (values stay t2v/i2v/...).
+VEO_MODE_LABELS = STUDIO_MODE_LABELS
 
 
 @me.component
 def veo_mode_toggle():
-    """Segmented control for the Veo modes the selected model supports."""
+    """Segmented control for the modes the selected model (Omni or Veo) supports."""
     state = me.state(PageState)
-    selected_config = get_veo_model_config(state.veo_model)
-    if not selected_config:
+    modes = studio_modes(state.veo_model)
+    if not is_known_model(state.veo_model):
         return
-    with me.box(classes="gm-segmented"):
+    with me.box(classes="gm-segmented" + (" gm-segmented-many" if len(modes) > 4 else "")):
         me.button_toggle(
             value=state.veo_mode,
             buttons=[
                 me.ButtonToggleButton(label=VEO_MODE_LABELS.get(mode, mode), value=mode)
-                for mode in selected_config.supported_modes
+                for mode in modes
             ],
             multiple=False,
             hide_selection_indicator=True,
@@ -110,12 +113,21 @@ def veo_reference_inputs(
     on_r2v_style_remove,
     on_clear_first_image,
     on_clear_last_image,
+    render_video_input=None,
 ):
-    """Reference image slots for the current mode (nothing for t2v)."""
+    """Reference slots for the current mode (nothing for t2v).
+
+    Image slots for image, first + last frame and references; the Omni video
+    modes (edit, extend, upscale) call `render_video_input` instead.
+    """
     state = me.state(PageState)
-    if not get_veo_model_config(state.veo_model):
+    if not is_known_model(state.veo_model):
         return
     with me.box(classes="gm-veo-refs"):
+        if state.veo_mode in ("edit", "extend", "upscale"):
+            if render_video_input:
+                render_video_input()
+            return
         if state.veo_mode == "i2v":
             _image_uploader(
                 last_image=False,
@@ -158,15 +170,10 @@ def _r2v_uploader(
 ):
     """Uploader for the Reference-to-Video (r2v) mode."""
     state = me.state(PageState)
-    selected_config = get_veo_model_config(state.veo_model)
-    MAX_ASSET_IMAGES = 3
-
-    # Default to True, check for override
-    show_style_reference = True
-    if selected_config.mode_overrides and "r2v" in selected_config.mode_overrides:
-        r2v_override = selected_config.mode_overrides["r2v"]
-        if not r2v_override.supports_style_reference:
-            show_style_reference = False
+    lim = limits(state.veo_model, "r2v")
+    MAX_ASSET_IMAGES = lim.max_references if lim else 3
+    # Veo takes one style image; Omni uses subject references only.
+    show_style_reference = bool(lim and lim.supports_style_reference)
 
     # Determine if uploaders should be disabled
     style_uploader_disabled = bool(state.r2v_reference_images)
@@ -175,8 +182,14 @@ def _r2v_uploader(
     with me.box(style=me.Style(display="flex", flex_direction="row", gap=15)):
         # --- Assets Section ---
         with me.box(style=me.Style(display="flex", flex_direction="column", gap=2)):
-            me.text("Subjects (up to 3)", style=me.Style(font_size="10pt"))
-            with me.box(style=me.Style(display="flex", flex_direction="row", gap=5)):
+            me.text(
+                f"Subjects (up to {MAX_ASSET_IMAGES})", style=me.Style(font_size="10pt")
+            )
+            with me.box(
+                style=me.Style(
+                    display="flex", flex_direction="row", flex_wrap="wrap", gap=5
+                )
+            ):
                 for i in range(MAX_ASSET_IMAGES):
                     if i < len(state.r2v_reference_images):
                         image_uri = state.r2v_reference_images[i]
@@ -195,7 +208,8 @@ def _r2v_uploader(
                             key_prefix="r2v_asset",
                             disabled=asset_uploader_disabled,
                         )
-                    else:
+                    elif MAX_ASSET_IMAGES <= 3:
+                        # Long lists (Omni takes 10) show one open slot only.
                         _empty_placeholder()
         # --- Style Section (Conditionally Rendered) ---
         if show_style_reference:
@@ -345,23 +359,35 @@ def on_selection_change_veo_mode(e: me.ButtonToggleChangeEvent):
     # Yield immediately to allow the UI to rebuild with the new mode.
     yield
 
-    # Get the config for the current model
+    # Keep length and aspect ratio valid for the new mode (e.g. Veo
+    # references are 8 s only).
     model_config = get_veo_model_config(state.veo_model)
-    if not model_config:
-        yield
-        return
-
-    # Check if the new mode has a duration override and update the state if needed.
-    if model_config.mode_overrides and e.value in model_config.mode_overrides:
-        override = model_config.mode_overrides[e.value]
-        if override.default_duration:
-            state.video_length = override.default_duration
-        if (
-            override.supported_aspect_ratios
-            and state.aspect_ratio not in override.supported_aspect_ratios
-        ):
-            state.aspect_ratio = override.supported_aspect_ratios[0]
+    override = ((model_config.mode_overrides or {}) if model_config else {}).get(
+        e.value
+    )
+    if override and override.default_duration:
+        state.video_length = override.default_duration
+    apply_studio_settings(state)
     yield
+
+
+def apply_studio_settings(state: PageState) -> None:
+    """Bring mode, aspect, resolution, length and count in line with the model."""
+    fixed = normalise(
+        state.veo_model,
+        StudioSettings(
+            mode=state.veo_mode,
+            aspect_ratio=state.aspect_ratio,
+            resolution=state.resolution,
+            video_length=state.video_length,
+            video_count=state.video_count,
+        ),
+    )
+    state.veo_mode = fixed.mode
+    state.aspect_ratio = fixed.aspect_ratio
+    state.resolution = fixed.resolution
+    state.video_length = fixed.video_length
+    state.video_count = fixed.video_count
 
 def on_click_clear_reference_image(e: me.ClickEvent):
     """Clear reference image"""

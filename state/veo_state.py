@@ -15,7 +15,7 @@
 from dataclasses import field
 
 import mesop as me
-from config.veo_models import DEFAULT_VEO_VERSION_ID
+from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID
 
 
 @me.stateclass
@@ -24,7 +24,8 @@ class PageState:
     
     # pylint: disable=E3701:invalid-field-call
 
-    veo_model: str = DEFAULT_VEO_VERSION_ID
+    # Video Studio model: Gemini Omni by default, or a Veo version id.
+    veo_model: str = DEFAULT_STUDIO_MODEL_ID
     veo_prompt_input: str = ""
     veo_prompt_placeholder: str = ""
     veo_prompt_textarea_key: int = 0
@@ -110,3 +111,12 @@ class PageState:
     history_prompts: list[str] = field(default_factory=list)
     history_meta: list[str] = field(default_factory=list)
     history_aspects: list[str] = field(default_factory=list)
+
+    # Gemini Omni: the input video for edit, extend and upscale
+    reference_video_gcs: str = ""
+    reference_video_uri: str = ""
+    reference_video_mime_type: str = ""
+    reference_video_file_key: int = 0
+    video_upload_signed_url: str = ""
+    video_upload_gcs_uri: str = ""
+    video_upload_progress: int = 0

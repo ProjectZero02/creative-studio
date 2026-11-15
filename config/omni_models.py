@@ -31,6 +31,10 @@ class OmniModelConfig:
     default_duration: int
     max_samples: int
     default_samples: int
+    # Most reference images one Reference-to-Video request may carry.
+    max_reference_images: int = 3
+    # Rough wall-clock time for one generation, shown as a hint while it runs.
+    typical_generation_seconds: int = 90
 
 
 # Single source of truth for all Omni model configurations.
@@ -55,6 +59,7 @@ OMNI_MODELS: list[OmniModelConfig] = [
         default_duration=10,
         max_samples=1,  # Quota limits focus on 1 sample
         default_samples=1,
+        max_reference_images=10,
     ),
     OmniModelConfig(
         version_id="gemini-omni-1.1-flash-preview",
