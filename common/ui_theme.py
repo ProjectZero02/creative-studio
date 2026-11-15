@@ -39,12 +39,18 @@ FONT_CSS = (
 # wins over page-level sheets with the same specificity.
 GLOBAL_STYLESHEETS = [FONT_CSS, THEME_CSS_PATH]
 
+# Feature sheets every page loads too. Mesop only applies a page's own
+# stylesheets on a full page load, not after in-app navigation, so styles that
+# a page needs when reached from the side nav must be listed here.
+SHARED_STYLESHEETS = ["/ui/demos.css"]  # industry demos (components/demo_flow)
+
 _original_page = me.page
 
 
 def _with_theme(stylesheets: list[str] | None) -> list[str]:
-    sheets = [s for s in (stylesheets or []) if s not in GLOBAL_STYLESHEETS]
-    return [GLOBAL_STYLESHEETS[0], *sheets, GLOBAL_STYLESHEETS[1]]
+    shared = set(GLOBAL_STYLESHEETS) | set(SHARED_STYLESHEETS)
+    sheets = [s for s in (stylesheets or []) if s not in shared]
+    return [GLOBAL_STYLESHEETS[0], *SHARED_STYLESHEETS, *sheets, GLOBAL_STYLESHEETS[1]]
 
 
 def apply_default_theme() -> None:

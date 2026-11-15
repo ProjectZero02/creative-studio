@@ -62,6 +62,8 @@ def generate_vto_image(
 
     """
     client = init_client()
+    # TODO: virtual-try-on-001 is deprecated (2026-09-14) and retires on
+    # 2027-03-15; see VTO_MODEL_ID in config/default.py.
     model_id = cfg.VTO_MODEL_ID or "vto-1"
 
     billing_units = {

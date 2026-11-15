@@ -76,3 +76,19 @@ def fake_wait(seconds: float, prompt: str = "") -> None:
         raise RuntimeError(
             "Mock failure: the prompt asked to fail (GENMEDIA_MOCK_GENERATION)."
         )
+
+
+def uploaded_image_url(file) -> str:
+    """A data URL for an uploaded file, so mock pages can show it without GCS."""
+    mime = getattr(file, "mime_type", "") or "image/png"
+    return f"data:{mime};base64," + base64.b64encode(file.getvalue()).decode()
+
+
+def mock_uri(kind: str, index: int = 0) -> str:
+    """A fake storage URI that marks a mock result (never a real bucket path)."""
+    return f"mock://{kind}/{index}"
+
+
+def is_mock_uri(uri: str) -> bool:
+    """True for URIs made by the mock helpers (fake paths or inline data)."""
+    return (uri or "").startswith(("mock://", "data:"))

@@ -1,0 +1,303 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * Industry demos: Fashion, Product 360, Interiors, Brand kit.
+ * Loaded by those pages only (components/demo_flow DEMO_STYLESHEETS).
+ * Uses the studio tokens from studio.css (--sys-*, --gm-*), so light and dark
+ * both follow the theme.
+ */
+
+html body .gm-demo { max-width: 1040px; gap: 22px; }
+
+/* ---------- Step indicator ---------- */
+html body .gm-steps-wrap { display: flex; justify-content: center; }
+html body .gm-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  counter-reset: none;
+}
+html body .gm-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--sys-on-surface-variant);
+}
+html body .gm-step + .gm-step::before {
+  content: "";
+  width: 28px;
+  height: 1px;
+  background: var(--sys-outline-variant);
+  margin-right: 0;
+}
+html body .gm-step-num {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--sys-outline-variant);
+  background: var(--sys-surface-container-lowest);
+  color: var(--sys-on-surface-variant);
+  transition: background-color var(--gm-fast) var(--gm-ease), color var(--gm-fast) var(--gm-ease);
+}
+html body .gm-step.is-current { color: var(--sys-on-surface); font-weight: 600; }
+html body .gm-step.is-current .gm-step-num {
+  background: var(--sys-primary);
+  border-color: var(--sys-primary);
+  color: var(--sys-on-primary);
+}
+html body .gm-step.is-done { color: var(--sys-on-surface); }
+html body .gm-step.is-done .gm-step-num {
+  background: var(--sys-primary-container);
+  border-color: transparent;
+  color: var(--sys-on-primary-container);
+}
+
+/* ---------- Switch (segmented control) ---------- */
+html body .gm-demo-switch .mat-button-toggle-label-content { padding: 0 22px !important; }
+
+/* ---------- Inline alert and status ---------- */
+html body .gm-demo-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--gm-radius-md);
+  background: var(--sys-error-container);
+  color: var(--sys-on-error-container);
+  font-size: 14px;
+}
+html body .gm-demo-alert-text { flex: 1 1 auto; min-width: 0; }
+html body .gm-demo-alert .mat-mdc-icon-button { color: inherit; }
+html body .gm-demo-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--sys-on-surface-variant);
+}
+html body .gm-demo-muted { font-size: 14px; line-height: 1.5; color: var(--sys-on-surface-variant); }
+
+/* ---------- Input cards ---------- */
+html body .gm-demo-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 16px;
+}
+html body .gm-demo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border-radius: var(--gm-radius-xl);
+  border: 1px solid var(--gm-border);
+  background: var(--sys-surface-container-lowest);
+  box-shadow: var(--gm-card-shadow);
+}
+html body .gm-demo-card-head { display: flex; align-items: flex-start; gap: 12px; }
+html body .gm-demo-card-num {
+  width: 28px; height: 28px; flex: 0 0 28px;
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
+  background: var(--sys-primary-container);
+  color: var(--sys-on-primary-container);
+}
+html body .gm-demo-card-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+html body .gm-demo-card-title { font-size: 16px; font-weight: 600; line-height: 1.35; color: var(--sys-on-surface); }
+html body .gm-demo-card-hint { font-size: 13px; line-height: 1.45; color: var(--sys-on-surface-variant); }
+
+/* Image well: shows the chosen picture or an empty hint. */
+html body .gm-demo-drop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--gm-radius-lg);
+  border: 1px dashed var(--sys-outline-variant);
+  background: var(--sys-surface-container-low);
+  overflow: hidden;
+}
+html body .gm-demo-drop-tall { aspect-ratio: 4 / 5; max-height: 340px; }
+html body .gm-demo-drop { max-height: 340px; }
+html body .gm-demo-drop-icon .mat-icon { width: 36px; height: 36px; font-size: 36px; color: var(--sys-on-surface-variant); }
+html body .gm-demo-drop-text { font-size: 14px; color: var(--sys-on-surface-variant); }
+html body .gm-demo-img { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+html body .gm-demo-img img { width: 100%; height: 100%; object-fit: contain; border-radius: 0 !important; display: block; }
+
+html body .gm-demo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+html body .gm-demo-actions button { min-height: 40px; }
+
+/* ---------- Action bar ---------- */
+html body .gm-demo-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+html body .gm-demo-bar-settings { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+html body .gm-demo-bar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+html body .gm-demo-bar-actions button { min-height: 44px; padding: 0 22px; }
+html body .gm-demo-select-sm { width: 120px; }
+html body .gm-demo-select-sm .mat-mdc-form-field-subscript-wrapper,
+html body .gm-demo-settings .mat-mdc-form-field-subscript-wrapper { display: none; }
+html body .gm-demo-primary .mat-mdc-unelevated-button:not(:disabled) {
+  background: var(--sys-primary) !important;
+  color: var(--sys-on-primary) !important;
+}
+html body .gm-demo-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--gm-radius-xl);
+  border: 1px solid var(--gm-border);
+  background: var(--sys-surface-container-lowest);
+}
+html body .gm-demo-settings mat-form-field,
+html body .gm-demo-settings .mat-mdc-form-field { width: 100%; }
+
+/* ---------- Results ---------- */
+html body .gm-demo-results {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+  align-items: start;
+}
+html body .gm-demo-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--gm-radius-xl);
+  border: 1px solid var(--gm-border);
+  background: var(--sys-surface-container-lowest);
+  min-width: 0;
+}
+html body .gm-demo-result-img img { width: 100%; height: auto; display: block; border-radius: var(--gm-radius-md) !important; }
+html body .gm-demo-result-actions { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
+html body .gm-demo-critique {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--gm-radius-md);
+  background: var(--sys-surface-container-low);
+  font-size: 13px;
+  line-height: 1.45;
+}
+html body .gm-demo-critique p { margin: 0; font-size: 13px; line-height: 1.45; }
+html body .gm-demo-critique-head { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
+html body .gm-demo-critique-head .mat-icon { width: 18px; height: 18px; font-size: 18px; color: var(--sys-primary); }
+
+/* ---------- Single video / image result ---------- */
+html body .gm-demo-media { display: flex; justify-content: center; }
+html body .gm-demo-media video,
+html body .gm-demo-media img { width: 100%; max-width: 760px; border-radius: var(--gm-radius-lg) !important; display: block; }
+html body .gm-demo-center { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+html body .gm-demo-center button { min-height: 44px; }
+
+/* ---------- Shop the look (upstream components inside the Fashion page) ---------- */
+html body .gm-demo-look { min-width: 0; }
+html body .gm-demo-look .mat-headline-2,
+html body .gm-demo-look .mat-headline-4 { font-size: 20px !important; line-height: 28px !important; font-weight: 600 !important; margin: 0 0 8px !important; letter-spacing: -0.01em; }
+html body .gm-demo-manage { display: flex; justify-content: center; }
+
+/* ---------- Upstream layouts placed in demo pages: let fixed boxes shrink ---------- */
+html body .gm-demo-flow { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+html body .gm-demo-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  justify-content: center;
+  align-items: flex-start;
+}
+html body .gm-demo-row > * { min-width: 0; max-width: 100%; }
+html body .gm-demo-row component-renderer[style*="width: 400px"],
+html body .gm-demo-row component-renderer[style*="width:400px"] {
+  width: min(400px, 100%) !important;
+  height: auto !important;
+  aspect-ratio: 1 / 1;
+}
+html body .gm-demo-row component-renderer[style*="width: 300px"] { width: min(300px, 100%) !important; }
+html body .gm-demo-section-title { font-size: 16px; font-weight: 600; text-align: center; color: var(--sys-on-surface); }
+
+@media (max-width: 600px) {
+  html body .gm-demo { gap: 18px; }
+  html body .gm-step-label { display: none; }
+  html body .gm-step.is-current .gm-step-label { display: inline; }
+  html body .gm-step + .gm-step::before { width: 16px; }
+  html body .gm-demo-card { padding: 14px; }
+  html body .gm-demo-bar-actions { width: 100%; }
+  html body .gm-demo-bar-actions > * { flex: 1 1 0; }
+  html body .gm-demo-bar-actions button { width: 100%; }
+  html body .gm-demo-actions > * { flex: 1 1 auto; }
+  html body .gm-demo-actions button { min-height: 44px; width: 100%; }
+  html body .gm-demo-switch .mat-button-toggle-label-content { padding: 0 8px !important; }
+}
+
+/* ---------- Product 360: four view tiles ---------- */
+html body .gm-demo-views {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 14px;
+}
+html body .gm-demo-view { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+html body .gm-demo-view-label { font-size: 14px; font-weight: 600; color: var(--sys-on-surface); }
+html body .gm-demo-drop-square { aspect-ratio: 1 / 1; }
+@media (max-width: 600px) {
+  html body .gm-demo-views { grid-template-columns: 1fr 1fr; gap: 10px; }
+}
+
+/* ---------- Upstream components inside a demo card (Interiors) ---------- */
+html body .gm-demo-upstream > component-renderer > ng-component > component-renderer[style*="flex-direction: column"] { width: 100%; }
+html body .gm-demo-upstream .mat-headline-6 { font-size: 16px !important; line-height: 1.35 !important; font-weight: 600 !important; margin: 0 !important; color: var(--sys-on-surface); }
+html body .gm-demo-upstream component-renderer[style*="width: 400px"] {
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--gm-radius-lg) !important;
+  border: 1px dashed var(--sys-outline-variant) !important;
+  background: var(--sys-surface-container-low);
+  overflow: hidden;
+  color: var(--sys-on-surface-variant);
+  font-size: 14px;
+}
+html body .gm-demo-upstream button { min-height: 44px; }
+
+/* Fashion action bar: compact count picker next to the settings link */
+html body .gm-demo-select-sm .mat-mdc-form-field { width: 100%; }
+html body .gm-demo-bar-settings button { min-height: 44px; }
