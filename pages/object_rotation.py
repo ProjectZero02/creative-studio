@@ -25,7 +25,6 @@ from common import authz
 from common.storage import store_to_gcs
 from common.utils import create_display_url
 from components.header import header
-from components.image_thumbnail import image_thumbnail
 from components.library.events import LibrarySelectionChangeEvent
 from components.library.library_chooser_button import library_chooser_button
 from components.snackbar import snackbar
@@ -125,7 +124,14 @@ def close_info_dialog(e: me.ClickEvent):
     state.info_dialog_open = False
     yield
 
-from components.stepper import stepper
+from components.demo_flow.demo_flow import (
+    DEMO_STYLESHEETS,
+    cicon,
+    ctext,
+    demo_progress,
+    demo_steps,
+)
+from components.generation_progress.generation_progress import friendly_error
 from models.object_rotation import generate_product_views, save_object_rotation_project
 from state.state import AppState
 from config.default import Default as cfg
@@ -196,20 +202,29 @@ def on_load(e: me.LoadEvent):
     yield
 
 
+STEPS = ["Upload product photo", "Get four views", "Make the 360 video"]
+
+
 @me.page(
     path="/object-rotation",
-    title="Object Rotation - GenMedia Creative Studio",
+    title="Product 360 - GenMedia Studio",
     on_load=on_load,
+    stylesheets=DEMO_STYLESHEETS,
 )
 def object_rotation_page():
     state = me.state(PageState)
     with page_scaffold(page_name="object_rotation"):  # pylint: disable=E1129:not-context-manager
         with page_frame():  # pylint: disable=E1129:not-context-manager
             header(
-                "Object Rotation",
+                "Product 360",
                 "360",
                 show_info_button=True,
                 on_info_click=open_info_dialog,
+                description=(
+                    "Turn one product photo into four studio views and a "
+                    "360° spin video."
+                ),
+                centered=True,
             )
             page_content()
         snackbar(is_visible=state.show_snackbar, label=state.snackbar_message)
@@ -235,73 +250,116 @@ def page_content():
             with me.box(style=me.Style(margin=me.Margin(top=16))):
                 me.button("Close", on_click=close_info_dialog, type="flat")
 
-    with me.box(style=me.Style(margin=me.Margin(top=24))):
-        stepper(
-            steps=[
-                "Describe and Add Product",
-                "Generate or Upload Product Views",
-                "Generate a Video",
+    with me.box(classes="gm-studio gm-demo"):
+        demo_steps(
+            steps=STEPS,
+            current=len(STEPS) + 1
+            if state.rotation_project.get("final_video_uri")
+            else state.current_step,
+        )
+        # Conditionally render step content
+        if state.current_step == 1:
+            step1_content()
+        elif state.current_step == 2:
+            step2_content()
+        elif state.current_step == 3:
+            step3_content()
+        _rotation_progress(state)
+
+
+def _rotation_progress(state: PageState):
+    """Progress card derived from the upstream is_generating_* flags."""
+    if state.is_generating_views:
+        demo_progress(
+            stages=[
+                "Reading the product photo",
+                "Drawing front, back, left and right views",
+                "Saving the views",
             ],
-            current_step=state.current_step,
-            max_completed_step=state.max_completed_step,
-            on_change=on_step_change,
+            current=1,
+            status="running",
+            run_id="object_rotation_views",
+            typical_seconds=40,
+            work_stage=1,
+            count=4,
+            media_label="views",
+        )
+    elif state.is_generating_video:
+        demo_progress(
+            stages=[
+                "Preparing the four views",
+                "Making the 360 video with Veo",
+                "Saving to your library",
+            ],
+            current=1,
+            status="running",
+            run_id="object_rotation_video",
+            typical_seconds=90,
+            work_stage=1,
+            aspect="16:9",
+            media_label="video",
         )
 
-    # Conditionally render step content
-    if state.current_step == 1:
-        step1_content()
-    elif state.current_step == 2:
-        step2_content()
-    elif state.current_step == 3:
-        step3_content()
+
+def _card_head(number: str, title: str, hint: str):
+    with me.box(classes="gm-demo-card-head"):
+        if number:
+            ctext(number, "gm-demo-card-num")
+        with me.box(classes="gm-demo-card-titles"):
+            ctext(title, "gm-demo-card-title")
+            ctext(hint, "gm-demo-card-hint")
 
 
 @me.component
 def step1_content():
     state = me.state(PageState)
-    with me.box(
-        style=me.Style(
-            display="flex",
-            flex_direction="row",
-            gap=32,
-            margin=me.Margin(top=24),
-            justify_content="center",
-        )
-    ):
-        me.textarea(
-            label="Product Description",
-            value=state.rotation_project.get("product_description", ""),
-            on_blur=on_description_input,
-            style=me.Style(width=400, height=200),
-        )
-        with me.box(style=me.Style(display="flex", flex_direction="column", gap=8, align_items="center")):
-            me.text("Product Image", type="headline-6")
-            if state.rotation_project.get("main_product_image_uri"):
-                image_thumbnail(
-                    image_uri=create_display_url(state.rotation_project.get("main_product_image_uri")),
-                    on_remove=on_remove_main_image,
-                    index=0,
-                    icon_size=18,
-                )
-            else:
-                _uploader_placeholder(
-                    on_upload=on_main_image_upload,
-                    on_library_select=on_select_from_library,
-                    chooser_key=MAIN_IMAGE_CHOOSER_ID,
-                )
+    main_uri = state.rotation_project.get("main_product_image_uri")
+    with me.box(classes="gm-demo-pair"):
+        with me.box(classes="gm-demo-card"):
+            _card_head("1", "Product photo", "One clear photo on a plain background.")
+            with me.box(classes="gm-demo-drop"):
+                if main_uri:
+                    with me.box(classes="gm-demo-img"):
+                        me.image(src=create_display_url(main_uri), alt="Product photo")
+                else:
+                    cicon("add_photo_alternate", "gm-demo-drop-icon")
+                    ctext("No photo yet", "gm-demo-drop-text")
+            with me.box(classes="gm-demo-actions"):
+                if main_uri:
+                    me.button("Remove photo", on_click=on_remove_main_image, type="stroked")
+                else:
+                    me.uploader(
+                        label="Upload photo",
+                        on_upload=on_main_image_upload_safe,
+                        accepted_file_types=["image/jpeg", "image/png", "image/webp"],
+                        type="stroked",
+                        key="object_rotation_main_uploader",
+                    )
+                    library_chooser_button(
+                        on_library_select=on_select_from_library,
+                        button_label="From library",
+                        key=MAIN_IMAGE_CHOOSER_ID,
+                    )
+        with me.box(classes="gm-demo-card"):
+            _card_head("", "Description (optional)", "Name, material and colour help the views stay true.")
+            me.textarea(
+                label="Product description",
+                value=state.rotation_project.get("product_description", ""),
+                on_blur=on_description_input,
+                rows=6,
+                appearance="outline",
+                style=me.Style(width="100%"),
+            )
 
-    with me.box(
-        style=me.Style(
-            display="flex", justify_content="flex-end", margin=me.Margin(top=24)
-        )
-    ):
-        me.button(
-            "Next",
-            on_click=on_step1_next,
-            type="raised",
-            disabled=not state.rotation_project.get("main_product_image_uri"),
-        )
-
+    with me.box(classes="gm-demo-bar"):
+        with me.box(classes="gm-demo-bar-actions"):
+            with me.box(classes="gm-demo-primary"):
+                me.button(
+                    "Next: get the views",
+                    on_click=on_step1_next,
+                    type="flat",
+                    disabled=not main_uri,
+                )
 
 # Event Handlers for Step 1
 
@@ -332,6 +390,26 @@ def on_main_image_upload(e: me.UploadEvent):
     yield
 
     state.rotation_project = save_object_rotation_project(state.rotation_project)
+    yield
+
+
+def on_main_image_upload_safe(e: me.UploadEvent):
+    """on_main_image_upload with a plain error message if the upload fails."""
+    yield from _guard_upload(on_main_image_upload(e))
+
+
+def _guard_upload(gen):
+    state = me.state(PageState)
+    try:
+        yield from gen
+    except Exception as ex:  # noqa: BLE001 - show any upload failure plainly
+        print(f"Product 360 upload failed: {ex}")
+        yield from show_snackbar(state, "Couldn't upload the photo. " + friendly_error(ex))
+
+
+def on_step_back(e: me.ClickEvent):  # pylint: disable=unused-argument
+    state = me.state(PageState)
+    state.current_step = max(1, state.current_step - 1)
     yield
 
 
@@ -377,134 +455,95 @@ def on_step1_next(e: me.ClickEvent):
     yield
 
 
+_VIEW_UPLOADS = {
+    "front": ("Front", 0),
+    "back": ("Back", 1),
+    "left": ("Left", 2),
+    "right": ("Right", 3),
+}
+
+
 @me.component
 def step2_content():
     state = me.state(PageState)
-    with me.box(
-        style=me.Style(
-            display="flex",
-            flex_direction="column",
-            align_items="center",
-            gap=16,
-            margin=me.Margin(top=24),
+    views = state.rotation_project.get("product_views", {})
+    with me.box(classes="gm-demo-card"):
+        _card_head(
+            "2",
+            "Four views",
+            "Let Gemini draw them, or upload your own photos for any side.",
         )
-    ):
-        me.button(
-            "Generate 4 Views",
-            on_click=on_generate_views,
-            type="raised",
-            disabled=state.is_generating_views,
-        )
-        if state.is_generating_views:
-            me.progress_spinner()
+        with me.box(classes="gm-demo-center"):
+            with me.box(classes="gm-demo-primary"):
+                me.button(
+                    "Generate 4 views",
+                    on_click=on_generate_views,
+                    type="flat",
+                    disabled=state.is_generating_views,
+                )
+        with me.box(classes="gm-demo-views"):
+            _view_tile("front", views.get("front"), on_front_view_remove, on_front_view_upload)
+            _view_tile("back", views.get("back"), on_back_view_remove, on_back_view_upload)
+            _view_tile("left", views.get("left"), on_left_view_remove, on_left_view_upload)
+            _view_tile("right", views.get("right"), on_right_view_remove, on_right_view_upload)
 
-        with me.box(
-            style=me.Style(
-                display="grid",
-                grid_template_columns="1fr 1fr",
-                gap=16,
-                margin=me.Margin(top=16),
-            )
-        ):
-            # Front View
-            with me.box(style=me.Style(display="flex", flex_direction="column", gap=8, align_items="center")):
-                me.text("Front", type="headline-6")
-                if state.rotation_project.get("product_views", {}).get("front"):
-                    image_thumbnail(
-                        image_uri=create_display_url(state.rotation_project.get("product_views", {}).get("front")),
-                        on_remove=on_front_view_remove,
-                        index=0,
-                        icon_size=18,
-                    )
-                else:
-                    _uploader_placeholder(
-                        on_upload=on_front_view_upload,
-                        on_library_select=on_select_from_library,
-                        chooser_key=VIEW_CHOOSER_IDS["front"],
-                    )
+    with me.box(classes="gm-demo-bar"):
+        with me.box(classes="gm-demo-bar-actions"):
+            me.button("Back", on_click=on_step_back, type="stroked")
+            with me.box(classes="gm-demo-primary"):
+                me.button(
+                    "Next: make the video",
+                    on_click=on_step2_next,
+                    type="flat",
+                    disabled=len(views) < 4,
+                )
 
-            # Back View
-            with me.box(style=me.Style(display="flex", flex_direction="column", gap=8, align_items="center")):
-                me.text("Back", type="headline-6")
-                if state.rotation_project.get("product_views", {}).get("back"):
-                    image_thumbnail(
-                        image_uri=create_display_url(state.rotation_project.get("product_views", {}).get("back")),
-                        on_remove=on_back_view_remove,
-                        index=1,
-                        icon_size=18,
-                    )
-                else:
-                    _uploader_placeholder(
-                        on_upload=on_back_view_upload,
-                        on_library_select=on_select_from_library,
-                        chooser_key=VIEW_CHOOSER_IDS["back"],
-                    )
 
-            # Left View
-            with me.box(style=me.Style(display="flex", flex_direction="column", gap=8, align_items="center")):
-                me.text("Left", type="headline-6")
-                if state.rotation_project.get("product_views", {}).get("left"):
-                    image_thumbnail(
-                        image_uri=create_display_url(state.rotation_project.get("product_views", {}).get("left")),
-                        on_remove=on_left_view_remove,
-                        index=2,
-                        icon_size=18,
-                    )
-                else:
-                    _uploader_placeholder(
-                        on_upload=on_left_view_upload,
-                        on_library_select=on_select_from_library,
-                        chooser_key=VIEW_CHOOSER_IDS["left"],
-                    )
-
-            # Right View
-            with me.box(style=me.Style(display="flex", flex_direction="column", gap=8, align_items="center")):
-                me.text("Right", type="headline-6")
-                if state.rotation_project.get("product_views", {}).get("right"):
-                    image_thumbnail(
-                        image_uri=create_display_url(state.rotation_project.get("product_views", {}).get("right")),
-                        on_remove=on_right_view_remove,
-                        index=3,
-                        icon_size=18,
-                    )
-                else:
-                    _uploader_placeholder(
-                        on_upload=on_right_view_upload,
-                        on_library_select=on_select_from_library,
-                        chooser_key=VIEW_CHOOSER_IDS["right"],
-                    )
-
-    with me.box(
-        style=me.Style(
-            display="flex", justify_content="flex-end", margin=me.Margin(top=24)
-        )
-    ):
-        me.button(
-            "Next",
-            on_click=on_step2_next,
-            type="raised",
-            disabled=len(state.rotation_project.get("product_views", {})) < 4,
-        )
-
+def _view_tile(view: str, uri: str | None, on_remove: Callable, on_upload: Callable):
+    label, _ = _VIEW_UPLOADS[view]
+    with me.box(classes="gm-demo-view"):
+        ctext(label, "gm-demo-view-label")
+        with me.box(classes="gm-demo-drop gm-demo-drop-square"):
+            if uri:
+                with me.box(classes="gm-demo-img"):
+                    me.image(src=create_display_url(uri), alt=f"{label} view")
+            else:
+                cicon("image", "gm-demo-drop-icon")
+        with me.box(classes="gm-demo-actions"):
+            if uri:
+                me.button("Remove", on_click=on_remove, type="stroked")
+            else:
+                me.uploader(
+                    label="Upload",
+                    on_upload=on_upload,
+                    accepted_file_types=["image/jpeg", "image/png", "image/webp"],
+                    type="stroked",
+                    key=f"object_rotation_{view}_uploader",
+                )
+                library_chooser_button(
+                    on_library_select=on_select_from_library,
+                    button_type="icon",
+                    key=VIEW_CHOOSER_IDS[view],
+                )
 
 # Event Handlers for Step 2
 
 
 # Define dedicated handlers for each view to avoid lambda issues
 def on_front_view_upload(e: me.UploadEvent):
-    yield from on_view_upload(e, "front")
+    yield from _guard_upload(on_view_upload(e, "front"))
 
 
 def on_back_view_upload(e: me.UploadEvent):
-    yield from on_view_upload(e, "back")
+    yield from _guard_upload(on_view_upload(e, "back"))
 
 
 def on_left_view_upload(e: me.UploadEvent):
-    yield from on_view_upload(e, "left")
+    yield from _guard_upload(on_view_upload(e, "left"))
 
 
 def on_right_view_upload(e: me.UploadEvent):
-    yield from on_view_upload(e, "right")
+    yield from _guard_upload(on_view_upload(e, "right"))
 
 def on_front_view_remove(e: me.ClickEvent): yield from on_remove_view(e, "front")
 def on_back_view_remove(e: me.ClickEvent): yield from on_remove_view(e, "back")
@@ -565,35 +604,23 @@ def on_step2_next(e: me.ClickEvent):
 @me.component
 def step3_content():
     state = me.state(PageState)
-    with me.box(
-        style=me.Style(
-            display="flex",
-            flex_direction="column",
-            align_items="center",
-            gap=16,
-            margin=me.Margin(top=24),
-        )
-    ):
-        me.button(
-            "Generate Video",
-            on_click=on_generate_video,
-            type="raised",
-            disabled=state.is_generating_video,
-        )
-        if state.is_generating_video:
-            me.progress_spinner()
-
-        if state.rotation_project.get("final_video_uri"):
-            me.video(
-                src=create_display_url(state.rotation_project["final_video_uri"]),
-                style=me.Style(
-                    width="100%",
-                    max_width=720,
-                    margin=me.Margin(top=16),
-                    border_radius=8,
-                ),
-            )
-
+    video_uri = state.rotation_project.get("final_video_uri")
+    with me.box(classes="gm-demo-card"):
+        _card_head("3", "360 video", "Veo turns the four views into one smooth spin.")
+        if video_uri and not state.is_generating_video:
+            with me.box(classes="gm-demo-media"):
+                me.video(src=create_display_url(video_uri))
+        with me.box(classes="gm-demo-center"):
+            with me.box(classes="gm-demo-primary"):
+                me.button(
+                    "Make it again" if video_uri else "Make the 360 video",
+                    on_click=on_generate_video,
+                    type="flat",
+                    disabled=state.is_generating_video,
+                )
+    with me.box(classes="gm-demo-bar"):
+        with me.box(classes="gm-demo-bar-actions"):
+            me.button("Back", on_click=on_step_back, type="stroked")
 
 # Event Handlers for Step 3
 from common.metadata import MediaItem, add_media_item_to_firestore
