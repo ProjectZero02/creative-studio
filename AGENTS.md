@@ -236,5 +236,5 @@ Everything this project needs to sign in or connect to comes from Core (https://
 ## This fork (ProjectZero02/genmedia-studio)
 - Public fork of `GoogleCloudPlatform/genmedia-creative-studio` (remote `upstream`), for client demos on Cloud Run. Keep the Apache-2.0 LICENSE and copyright headers.
 - Goal: nicer look and feel and faster pages without breaking upstream features, so upstream fixes can still be merged (`git fetch upstream && git merge upstream/main`). Prefer changes in shared places (theme layer, scaffold, nav, home) over editing every page.
-- UI work follows Website Maker (`ui_workflow` → `audit_page` → fix → re-audit). See PLAN.md.
+- UI work follows Website Maker (`ui_workflow` → `audit_page` → fix → re-audit). See docs/PLAN.md.
 - Deploys: Cloud Run in the owner's GCP project only, through `deploy/quickstart/deploy.sh` (or upstream `deploy/scripts/deploy.sh`). Anything that costs money beyond scale-to-zero (min instances, GPUs) waits for the owner's yes. Branch to deploy from: `main`.

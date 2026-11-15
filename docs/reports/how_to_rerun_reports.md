@@ -31,7 +31,7 @@ Database paths, GCP project IDs, and service buckets are loaded dynamically duri
 
 ## 🚀 Running the Costing Script
 
-The core analysis engine is implemented in `tools/analyze_workflow_costing.py`.
+The core analysis engine is implemented in `scripts/costing/analyze_workflow_costing.py`.
 
 ### Prerequisites
 
@@ -39,11 +39,11 @@ Ensure you are in the virtual environment or have the required Google Cloud Fire
 
 ```bash
 # Recommended using uv (already configured in the project)
-uv run python3 tools/analyze_workflow_costing.py
+uv run python3 scripts/costing/analyze_workflow_costing.py
 
 # Alternatively, using standard pip
 pip install google-cloud-firestore pydantic dotenv
-python3 tools/analyze_workflow_costing.py
+python3 scripts/costing/analyze_workflow_costing.py
 ```
 
 ### CLI Command Options
@@ -55,18 +55,18 @@ The script accepts several flags to customize its execution:
 | `--days` | `int` | `60` | Number of days of historical history to analyze. |
 | `--synthetic` | `bool` | `False` | Forces synthetic generation instead of querying live Firestore. |
 | `--report-path` | `str` | `docs/reports/workflow_costing_analysis.md` | Path where the main executive markdown report is written. |
-| `--json-path` | `str` | `tools/costing_summary.json` | Path where the structured summary JSON data is written. |
+| `--json-path` | `str` | `scripts/costing/costing_summary.json` | Path where the structured summary JSON data is written. |
 
 ### Example Commands
 
 To run a 30-day analysis using the synthetic database:
 ```bash
-python3 tools/analyze_workflow_costing.py --days 30 --synthetic
+python3 scripts/costing/analyze_workflow_costing.py --days 30 --synthetic
 ```
 
 To output the main report to a custom destination:
 ```bash
-python3 tools/analyze_workflow_costing.py --report-path docs/reports/custom_report.md
+python3 scripts/costing/analyze_workflow_costing.py --report-path docs/reports/custom_report.md
 ```
 
 ---
@@ -75,5 +75,5 @@ python3 tools/analyze_workflow_costing.py --report-path docs/reports/custom_repo
 
 When you run the script, it automatically generates:
 
-1. **`tools/costing_summary.json`**: Contains raw structured metrics, rate cards, and archetype stats. Perfect for downstream API intake or BI dashboards.
+1. **`scripts/costing/costing_summary.json`**: Contains raw structured metrics, rate cards, and archetype stats. Perfect for downstream API intake or BI dashboards.
 2. **`docs/reports/workflow_costing_analysis_{days}day_{project_id}.md`**: Exactly one clean, formatted executive markdown report corresponding to the specified day range and the target GCP project name (e.g. `workflow_costing_analysis_120day_creative-studio-867.md`).

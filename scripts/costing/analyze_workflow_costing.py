@@ -587,7 +587,7 @@ Based on these findings, we recommend the following pricing tiers for product mo
 
 ---
 
-*Report compiled automatically by `tools/analyze_workflow_costing.py`.*
+*Report compiled automatically by `scripts/costing/analyze_workflow_costing.py`.*
 """
 
     with open(report_path, "w", encoding="utf-8") as f:
@@ -600,7 +600,7 @@ def main():
     parser.add_argument("--days", type=int, default=60, help="Analysis window in days (default: 60)")
     parser.add_argument("--synthetic", action="store_true", help="Force synthetic dataset generation")
     parser.add_argument("--report-path", type=str, default="docs/reports/workflow_costing_analysis.md", help="Output path for markdown report")
-    parser.add_argument("--json-path", type=str, default="tools/costing_summary.json", help="Output path for JSON summary")
+    parser.add_argument("--json-path", type=str, default="scripts/costing/costing_summary.json", help="Output path for JSON summary")
     args = parser.parse_args()
 
     end_date = datetime.now(timezone.utc)

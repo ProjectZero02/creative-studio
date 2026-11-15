@@ -37,7 +37,7 @@
 
 ### Cloud Run Deployment & CSRF
 *   **The Problem:** When deploying Mesop to Cloud Run behind a Google Cloud load balancer, the proxy rewrites the `Host` header (often to `127.0.0.1:8080`). Mesop's strict CSRF protection compares the browser's `Origin` header to this internal `Host` header, resulting in a silent `403 Forbidden` block on the `/__ui__` POST endpoint.
-*   **The Fix:** You must instruct Gunicorn to trust the proxy headers. In your `Dockerfile` and `Procfile`, append `--forwarded-allow-ips="*"` to the gunicorn command. Additionally, ensure FastAPI is configured with a `BaseHTTPMiddleware` that intercepts `X-Forwarded-Host` and rewrites the `request.scope["headers"]` before the request hits Mesop.
+*   **The Fix:** You must instruct Gunicorn to trust the proxy headers. In the `Dockerfile`, append `--forwarded-allow-ips="*"` to the gunicorn command. Additionally, ensure FastAPI is configured with a `BaseHTTPMiddleware` that intercepts `X-Forwarded-Host` and rewrites the `request.scope["headers"]` before the request hits Mesop.
 
 ### Lit WebComponents Interop
 Mesop allows integrating custom Lit WebComponents, but the bridge between JavaScript and Python is highly specific. When creating custom components like `<banana-button>`:
