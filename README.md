@@ -4,7 +4,7 @@
 
 **Google's creative AI in one studio: images, video, films, voice and music, on Vertex AI and Cloud Run.**
 
-Built for client demos. Sign in, pick a studio, and make something in minutes.
+Built for client demos. Type one idea on the home page, pick Image, Video, Film, Voice or Music, and the right studio opens.
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
@@ -44,7 +44,7 @@ Built for client demos. Sign in, pick a studio, and make something in minutes.
 | | Studio | What it does | Models |
 |---|---|---|---|
 | 🖼️ | **Image Studio** | Make and edit images from a prompt and reference pictures. | Nano Banana 2.1 |
-| 🎬 | **Video Studio** | Make video from a prompt, a picture, or a first and last frame. | Gemini Omni 1.2 (default), Veo 3.1 |
+| 🎬 | **Video Studio** | Make, edit, extend or upscale video from a prompt, a picture, first and last frames, or references. | Gemini Omni 1.2 (default), Veo 3.1 |
 | 📖 | **Story Studio** | One idea to a finished film: script, storyboard, scenes, voice-over and music. | Gemini, Nano Banana, Veo 3.1, Gemini TTS, Lyria |
 | 🎙️ | **Voice** | Turn a script into natural speech in 130+ languages, with one or two speakers. | Gemini 3.8 Flash TTS, Chirp 3 HD |
 | 🎵 | **Music** | Original music, with or without lyrics. | Lyria 3 |
