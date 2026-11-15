@@ -48,7 +48,7 @@ readonly IMAGE_PATH="creative-studio/creative-studio"  # cloudbuild.yaml _IMAGE_
 readonly EXPECTED_INDEX_COUNT=4                         # data-stores firestore_indexes (genmedia collection)
 readonly APIS_FILE="${SCRIPT_DIR}/apis.txt"
 readonly TF_APIS_VARFILE="${SCRIPT_DIR}/../terraform/modules/project-services/variables.tf"
-readonly CLOUDBUILD_CONFIG="${REPO_ROOT}/cloudbuild.yaml"
+readonly CLOUDBUILD_CONFIG="${REPO_ROOT}/deploy/cloudbuild.yaml"
 readonly HEALTH_TIMEOUT_DEFAULT=300   # seconds for post-deploy health poll
 readonly HEALTH_INTERVAL=10           # seconds between polls
 

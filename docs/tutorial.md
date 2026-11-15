@@ -65,7 +65,7 @@ Use uv to sync the prerequisites, activate the Python virtual environment, and s
 ```bash
 uv sync
 source .venv/bin/activate
-uv run main.py
+uv run src/main.py
 #mesop main.py
 ```
 

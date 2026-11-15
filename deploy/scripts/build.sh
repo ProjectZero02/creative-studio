@@ -35,7 +35,8 @@ echo "Build version tag: ${VERSION_TAG} (also updates :latest)"
 
 # 1. Build + push the image (Cloud Build runs cloudbuild.yaml as the
 #    builds-creative-studio service account).
-gcloud builds submit . --project="$PROJECT_ID" --gcs-source-staging-dir="gs://run-resources-$PROJECT_ID-$REGION/services/creative-studio" --region="$REGION" --service-account="projects/$PROJECT_ID/serviceAccounts/builds-creative-studio@$PROJECT_ID.iam.gserviceaccount.com" --substitutions="_VERSION_TAG=$VERSION_TAG"
+cd "$(dirname "$0")/../.."
+gcloud builds submit . --config=deploy/cloudbuild.yaml --project="$PROJECT_ID" --gcs-source-staging-dir="gs://run-resources-$PROJECT_ID-$REGION/services/creative-studio" --region="$REGION" --service-account="projects/$PROJECT_ID/serviceAccounts/builds-creative-studio@$PROJECT_ID.iam.gserviceaccount.com" --substitutions="_VERSION_TAG=$VERSION_TAG"
 
 # 2. Deploy the freshly-pushed image to Cloud Run as the caller.
 gcloud run deploy creative-studio --project="$PROJECT_ID" --region="$REGION" --image="$REGION-docker.pkg.dev/$PROJECT_ID/creative-studio/creative-studio:latest" --timeout=3600

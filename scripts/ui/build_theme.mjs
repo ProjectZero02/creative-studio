@@ -30,8 +30,8 @@ const tokens = [
   ...new Set(readFileSync(mesopCss, "utf8").match(/--m[a-z]*-[a-z-]*-font(?=:)/g) ?? []),
 ].sort();
 
-const src = readFileSync(join(root, "assets", "ui", "studio.src.css"), "utf8");
+const src = readFileSync(join(root, "src", "assets", "ui", "studio.src.css"), "utf8");
 const block = tokens.map((t) => `  ${t}: var(--gm-font);`).join("\n");
 const out = src.replace("%%FONT_TOKENS%%", block);
-writeFileSync(join(root, "assets", "ui", "studio.css"), out);
+writeFileSync(join(root, "src", "assets", "ui", "studio.css"), out);
 console.log(`studio.css written (${tokens.length} font tokens).`);

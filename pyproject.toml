@@ -80,12 +80,12 @@ indent-style = "space"
 line-ending = "auto"
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src"]
 markers = [
     "integration: marks tests as integration tests (slow, requires network)",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"main.py" = ["F401"]
+"src/main.py" = ["F401"]
 "test/**/*.py" = ["S101", "PLR2004"]
 "test/*.py" = ["S101", "PLR2004"]

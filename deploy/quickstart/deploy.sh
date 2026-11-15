@@ -92,7 +92,7 @@ run() {
 
 [[ -n "${PROJECT}" ]] || { echo "Missing --project" >&2; usage; exit 2; }
 [[ "${AUTH}" == "session" || "${AUTH}" == "iap" ]] || { echo "--auth must be session or iap" >&2; exit 2; }
-[[ -f main.py && -f deploy/scripts/apis.txt ]] || { echo "Run this from the repo root." >&2; exit 2; }
+[[ -f src/main.py && -f deploy/scripts/apis.txt ]] || { echo "Run this from the repo root." >&2; exit 2; }
 command -v gcloud >/dev/null || { echo "gcloud is not installed. Use Cloud Shell." >&2; exit 2; }
 
 SA_NAME="genmedia-studio-run"

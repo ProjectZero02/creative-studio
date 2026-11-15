@@ -13,6 +13,16 @@
 # limitations under the License.
 """Main Mesop App."""
 
+import os as _os
+import sys as _sys
+
+# The app reads config/ and assets/ relative to this folder (src/), so run
+# from here however it was started (uv run src/main.py, gunicorn, tests).
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+_os.chdir(_HERE)
+if _HERE not in _sys.path:
+    _sys.path.insert(0, _HERE)
+
 import datetime
 import inspect
 import os

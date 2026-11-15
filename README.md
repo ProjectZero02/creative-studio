@@ -8,7 +8,7 @@
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
 [![Runs on Cloud Run](https://img.shields.io/badge/runs_on-Cloud_Run-4285F4.svg?logo=googlecloud&logoColor=white)](deploy/quickstart/README.md)
 
-[Quick start](#quick-start) · [Deploy](#deploy-to-cloud-run) · [Configuration](environment_variables.md) · [Contributing](CONTRIBUTING.md)
+[Quick start](#quick-start) · [Deploy](#deploy-to-cloud-run) · [Configuration](docs/environment_variables.md) · [Contributing](CONTRIBUTING.md)
 
 <br>
 
@@ -59,10 +59,10 @@ You need [`uv`](https://docs.astral.sh/uv/). Mock mode needs no Google Cloud acc
 git clone https://github.com/ProjectZero02/genmedia-studio.git
 cd genmedia-studio
 uv sync
-APP_ENV=local GENMEDIA_MOCK_GENERATION=true STORY_STUDIO_MOCK=true uv run main.py
+APP_ENV=local GENMEDIA_MOCK_GENERATION=true STORY_STUDIO_MOCK=true uv run src/main.py
 ```
 
-Open <http://localhost:8080>. For real models, run `gcloud auth application-default login`, copy `dotenv.template` to `.env`, set `PROJECT_ID` and `GENMEDIA_BUCKET`, then `uv run main.py`.
+Open <http://localhost:8080>. For real models, run `gcloud auth application-default login`, copy `dotenv.template` to `.env`, set `PROJECT_ID` and `GENMEDIA_BUCKET`, then `uv run src/main.py`.
 
 ## Deploy to Cloud Run
 
@@ -80,14 +80,11 @@ A Python app: a [Mesop](https://mesop-dev.github.io/mesop/) UI on FastAPI, runni
 
 | Folder | What's in it |
 |---|---|
-| `pages/` | One file per studio page |
-| `components/` | Shared UI parts and web components |
-| `models/` | Vertex AI calls for each model |
-| `services/`, `routers/` | Background jobs, sign-in and media routes |
-| `state/`, `config/`, `common/` | Page state, settings, shared helpers |
-| `assets/ui/` | Theme, fonts and styles |
+| `src/` | The app: `main.py`, plus `pages/` (one file per studio), `components/`, `models/` (Vertex AI calls), `services/`, `routers/`, `state/`, `config/`, `common/` and `assets/` |
 | `deploy/` | Cloud Run quickstart, Terraform and scripts |
 | `test/` | `pytest` suite |
+| `docs/` | Configuration reference, FAQ and screenshots |
+| `scripts/` | Build and maintenance scripts |
 | `experiments/` | Stand-alone apps and MCP servers from upstream |
 
 ## Contributing

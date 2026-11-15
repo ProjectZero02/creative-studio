@@ -19,6 +19,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# App code lives in src/ and opens config/ and assets/ relative to it.
+SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
+os.chdir(SRC)
+
 # Ensure dummy env vars exist for tests when running without GCP environment
 os.environ.setdefault("PROJECT_ID", "test-project")
 os.environ.setdefault("LOCATION", "us-central1")

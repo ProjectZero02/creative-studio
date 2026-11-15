@@ -32,6 +32,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # 2) App code.
 COPY . .
 
+# The app lives in src/ and reads config/ and assets/ relative to it.
+WORKDIR /app/src
+
 EXPOSE 8080
 
 # One process per container; Cloud Run scales instances. Mesop keeps UI state
