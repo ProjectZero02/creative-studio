@@ -94,6 +94,15 @@
       "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/imagen__page_cover.mp4"
     },
     {
+      "id": 25,
+      "display": "Story Studio",
+      "icon": "auto_stories",
+      "route": "/story",
+      "group": "workflows",
+      "mode": "video",
+      "description": "Turn an idea into a finished film, step by step: scenario, storyboard, clips, music and voiceover."
+    },
+    {
       "id": 30,
       "display": "Virtual Try-On",
       "icon": "checkroom",
