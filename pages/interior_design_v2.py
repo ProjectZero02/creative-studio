@@ -29,7 +29,9 @@ from common.analytics import log_ui_click, track_click
 from common.metadata import MediaItem, add_media_item_to_firestore, save_storyboard
 from common.storage import store_to_gcs
 from common.utils import create_display_url
+from components.demo_flow.demo_flow import DEMO_STYLESHEETS, demo_progress, demo_steps
 from components.dialog import dialog
+from components.generation_progress.generation_progress import friendly_error
 from components.header import header
 from components.interior_design.design_studio import design_studio
 from components.interior_design.floor_plan_uploader import floor_plan_uploader
@@ -126,19 +128,28 @@ def on_load(e: me.LoadEvent):
     yield
 
 
+STEPS = ["Upload floor plan", "3D view and rooms", "Style the rooms", "Video tour"]
+
+
 @me.page(
     path="/interior_design",
-    title="Interior Design",
+    title="Interiors - GenMedia Studio",
     on_load=on_load,
+    stylesheets=DEMO_STYLESHEETS,
 )
 def interior_design_page():
     with page_scaffold(page_name="interior_design_v2"):  # pylint: disable=E1129:not-context-manager
         with page_frame():  # pylint: disable=E1129:not-context-manager
             header(
-                "Interior Design",
+                "Interiors",
                 "chair",
                 show_info_button=True,
                 on_info_click=open_info_dialog,
+                description=(
+                    "Turn a floor plan into a 3D view, restyle each room and "
+                    "make a video tour."
+                ),
+                centered=True,
             )
             page_content()
 
@@ -154,7 +165,7 @@ def page_content():
     if state.info_dialog_open:
         with dialog(is_open=state.info_dialog_open):  # pylint: disable=not-context-manager
             if INTERIOR_DESIGN_INFO:
-                me.text(f"About {INTERIOR_DESIGN_INFO[title]}", type="headline-6")
+                me.text(f"About {INTERIOR_DESIGN_INFO["title"]}", type="headline-6")
                 me.markdown(INTERIOR_DESIGN_INFO["description"])
             else:
                 me.text("About Interior Design", type="headline-6")
@@ -169,27 +180,23 @@ def page_content():
             with me.box(style=me.Style(margin=me.Margin(top=16))):
                 me.button("Close", on_click=close_info_dialog, type="flat")
 
-    with me.box(
-        style=me.Style(
-            display="flex", flex_direction="column", gap=24, align_items="center"
-        )
-    ):
+    with me.box(classes="gm-studio gm-demo"):
+        demo_steps(steps=STEPS, current=_interior_step(state))
+        _interior_progress(state)
         # Input and Output Area
-        with me.box(
-            style=me.Style(
-                display="flex", flex_direction="row", gap=32, justify_content="center"
-            )
-        ):
-            floor_plan_uploader(
-                storyboard=state.storyboard,
-                on_upload=on_upload_floor_plan,
-                on_library_select=on_select_floor_plan,
-            )
-            generated_3d_view(
-                storyboard=state.storyboard,
-                is_generating=state.is_generating,
-                on_generate=on_generate_3d_view_click,
-            )
+        with me.box(classes="gm-demo-pair"):
+            with me.box(classes="gm-demo-card gm-demo-upstream"):
+                floor_plan_uploader(
+                    storyboard=state.storyboard,
+                    on_upload=on_upload_floor_plan_safe,
+                    on_library_select=on_select_floor_plan,
+                )
+            with me.box(classes="gm-demo-card gm-demo-upstream"):
+                generated_3d_view(
+                    storyboard=state.storyboard,
+                    is_generating=state.is_generating,
+                    on_generate=on_generate_3d_view_click,
+                )
 
         if state.storyboard and state.storyboard.get("room_names"):
             with me.box(
@@ -224,16 +231,7 @@ def page_content():
 
         # Display the zoomed-in room view and design controls
         if state.storyboard and state.storyboard.get("storyboard_items"):
-            with me.box(
-                style=me.Style(
-                    display="flex",
-                    flex_direction="row",
-                    gap=24,
-                    margin=me.Margin(top=24),
-                    width="100%",
-                    justify_content="center",
-                )
-            ):
+            with me.box(classes="gm-demo-row"):
                 room_view(
                     storyboard=state.storyboard,
                     is_generating_zoom=state.is_generating_zoom,
@@ -330,6 +328,59 @@ def page_content():
                                 width="100%", max_width="720px", border_radius=8
                             ),
                         )
+
+
+def _interior_step(state: PageState) -> int:
+    """Which demo step the storyboard is on (1-based; 5 means all done)."""
+    board = state.storyboard or {}
+    if board.get("final_video_uri"):
+        return len(STEPS) + 1
+    if not board.get("original_floor_plan_uri"):
+        return 1
+    if not board.get("room_names"):
+        return 2
+    if not any(i.get("styled_image_uri") for i in board.get("storyboard_items", [])):
+        return 3
+    return 4
+
+
+def _interior_progress(state: PageState):
+    """Progress card derived from the upstream is_generating_* flags."""
+    if state.is_generating:
+        stages = ["Reading the floor plan", "Building the 3D view with Gemini", "Finding the rooms"]
+        demo_progress(
+            stages=stages, current=1, status="running", run_id="interior_3d",
+            typical_seconds=30, work_stage=1, aspect="16:9", media_label="3D view",
+        )
+    elif state.is_generating_zoom:
+        demo_progress(
+            stages=["Zooming into the room with Gemini", "Adding it to the storyboard"],
+            current=0, status="running", run_id="interior_zoom",
+            typical_seconds=20, work_stage=0, aspect="16:9", media_label="room view",
+        )
+    elif state.is_designing:
+        demo_progress(
+            stages=["Restyling the room with Gemini", "Adding it to the storyboard"],
+            current=0, status="running", run_id="interior_design",
+            typical_seconds=20, work_stage=0, aspect="16:9", media_label="room design",
+        )
+    elif state.is_generating_video:
+        joining = "concatenat" in (state.video_generation_status or "").lower()
+        demo_progress(
+            stages=["Animating each room with Veo", "Joining the clips into one tour"],
+            current=1 if joining else 0, status="running", run_id="interior_video",
+            typical_seconds=90, work_stage=0, aspect="16:9", media_label="video tour",
+        )
+
+
+def on_upload_floor_plan_safe(e: me.UploadEvent):
+    """on_upload_floor_plan with a plain message if the upload fails."""
+    state = me.state(PageState)
+    try:
+        yield from on_upload_floor_plan(e)
+    except Exception as ex:  # noqa: BLE001 - show any upload failure plainly
+        print(f"Interiors upload failed: {ex}")
+        yield from show_snackbar(state, "Couldn't upload the floor plan. " + friendly_error(ex))
 
 
 def show_snackbar(state: PageState, message: str):
