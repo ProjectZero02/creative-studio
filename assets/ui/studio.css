@@ -548,10 +548,6 @@ html body .gm-veo-refs { padding-bottom: 6px; }
 html body .gm-veo-refs > * { flex-wrap: wrap; }
 html body .gm-ref-slot { background: var(--sys-surface-container-low); }
 
-/* Omni banner (upstream component): the flex box is a styled component-renderer. */
-html body .gm-omni-slot component-renderer[style*="align-items"] { margin: 0 !important; }
-html body .gm-omni-slot component-renderer[style*="align-items"] > component-renderer:nth-of-type(2) { flex: 1 1 0; min-width: 0; }
-
 /* Segmented control (Veo modes) */
 html body .gm-segmented { display: flex; justify-content: center; }
 html body .gm-segmented .mat-button-toggle-group {
@@ -663,10 +659,6 @@ html body .gm-empty-icon {
   html body .gm-segmented .mat-button-toggle-label-content {
     line-height: 44px !important; padding: 0 8px !important; font-size: 14px;
   }
-  html body .gm-omni-slot component-renderer[style*="align-items"] { flex-wrap: wrap; }
-  html body .gm-omni-slot component-renderer[style*="align-items"] > component-renderer:nth-of-type(2) { flex-basis: calc(100% - 40px); }
-  html body .gm-omni-slot component-renderer[style*="align-items"] > component-renderer:last-child { margin-left: 36px; }
-  html body .gm-omni-slot button { min-height: 44px; }
   html body .gm-advanced { padding: 14px; }
   html body .gm-results-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 12px; }
 }
