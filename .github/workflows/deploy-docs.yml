@@ -41,6 +41,8 @@ jobs:
 
   deploy:
     needs: build
+    # Forks have no GitHub Pages site; publishing is upstream's job.
+    if: github.repository == 'GoogleCloudPlatform/genmedia-creative-studio'
     runs-on: ubuntu-latest
     permissions:
       pages: write
