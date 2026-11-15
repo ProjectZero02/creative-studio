@@ -29,10 +29,13 @@ import mesop as me
 THEME_CSS_PATH = "/ui/studio.css"
 THEME_ASSET_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "ui")
 
+# IBM Plex Sans Arabic is for Arabic text. assets/ui/rtl.css puts it in the
+# --gm-font stack (Arabic letters only), so Latin stays Google Sans.
 FONT_CSS = (
     "https://fonts.googleapis.com/css2?"
     "family=Google+Sans:ital,opsz,wght@0,17..18,400..700;1,17..18,400..700"
-    "&family=Google+Sans+Code:wght@400;500&display=swap"
+    "&family=Google+Sans+Code:wght@400;500"
+    "&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap"
 )
 
 # Stylesheets every page gets, in load order. The theme file goes last so it
@@ -42,7 +45,10 @@ GLOBAL_STYLESHEETS = [FONT_CSS, THEME_CSS_PATH]
 # Feature sheets every page loads too. Mesop only applies a page's own
 # stylesheets on a full page load, not after in-app navigation, so styles that
 # a page needs when reached from the side nav must be listed here.
-SHARED_STYLESHEETS = ["/ui/demos.css"]  # industry demos (components/demo_flow)
+SHARED_STYLESHEETS = [
+    "/ui/demos.css",  # industry demos (components/demo_flow)
+    "/ui/rtl.css",  # Arabic font and right-to-left layout (common/i18n.py)
+]
 
 _original_page = me.page
 

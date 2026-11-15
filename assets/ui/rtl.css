@@ -1,0 +1,167 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * RTL / Arabic. Loaded on every page (common/ui_theme.py SHARED_STYLESHEETS),
+ * before studio.css. <html lang/dir> is set by components/lang_manager.
+ *
+ * Every rule here starts with html[dir="rtl"] (or :lang(ar)), which is more
+ * specific than studio.css's "html body ..." rules, so load order does not
+ * matter. Rules that override an !important or an inline Mesop style use
+ * !important themselves.
+ */
+
+/* ---------- Arabic font ----------
+ * "GM Arabic" is IBM Plex Sans Arabic limited to Arabic code points, so it can
+ * sit first in the stack: Arabic letters use Plex, Latin falls through to
+ * Google Sans. (Google Sans has its own Arabic glyphs, which would win if Plex
+ * came after it.) The family is also loaded through FONT_CSS. */
+@font-face {
+  font-family: "GM Arabic";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("IBM Plex Sans Arabic"),
+    url(https://fonts.gstatic.com/s/ibmplexsansarabic/v15/Qw3CZRtWPQCuHme67tEYUIx3Kh0PHR9N6Ys43PWrfQ.woff2) format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC;
+}
+@font-face {
+  font-family: "GM Arabic";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local("IBM Plex Sans Arabic Medium"),
+    url(https://fonts.gstatic.com/s/ibmplexsansarabic/v15/Qw3NZRtWPQCuHme67tEYUIx3Kh0PHR9N6YPO_-CRXMR5Kw.woff2) format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC;
+}
+@font-face {
+  font-family: "GM Arabic";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local("IBM Plex Sans Arabic SemiBold"),
+    url(https://fonts.gstatic.com/s/ibmplexsansarabic/v15/Qw3NZRtWPQCuHme67tEYUIx3Kh0PHR9N6YPi-OCRXMR5Kw.woff2) format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC;
+}
+@font-face {
+  font-family: "GM Arabic";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("IBM Plex Sans Arabic Bold"),
+    url(https://fonts.gstatic.com/s/ibmplexsansarabic/v15/Qw3NZRtWPQCuHme67tEYUIx3Kh0PHR9N6YOG-eCRXMR5Kw.woff2) format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-08FF, U+200C-200E, U+FB50-FDFF, U+FE70-FEFC;
+}
+
+/* --gm-font is defined in studio.css (:root). html:root is more specific. */
+html:root {
+  --gm-font: "GM Arabic", "Google Sans", "Google Sans Text", "IBM Plex Sans Arabic", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Arabic needs more line height and no negative tracking. */
+html:lang(ar) body h1,
+html:lang(ar) body h2,
+html:lang(ar) body h3,
+html:lang(ar) body .gm-title h1,
+html:lang(ar) body .gm-title h2 {
+  letter-spacing: 0 !important;
+  line-height: 1.35 !important;
+}
+html:lang(ar) body .gm-hero-purpose,
+html:lang(ar) body .gm-composer-hint { line-height: 1.6; }
+/* Nav group labels are uppercase + tracked in English; neither suits Arabic. */
+html:lang(ar) body .gm-nav .mat-mdc-button-base ~ *,
+html:lang(ar) body .gm-nav { letter-spacing: 0; }
+
+/* ---------- Side nav on the right ---------- */
+/* Mesop renders me.sidenav as a fixed mat-drawer on the left with an inline
+   right border. Move it to the right edge and put the border on its inner side. */
+html[dir="rtl"] body .mat-drawer {
+  left: auto !important;
+  right: 0 !important;
+  border-right: 0 !important;
+  border-left: 1px solid var(--gm-border) !important;
+}
+html[dir="rtl"] body .mat-drawer-content,
+html[dir="rtl"] body .mat-sidenav-content {
+  margin-left: 0 !important;
+}
+
+/* Content margin follows the nav, on the right. */
+html[dir="rtl"] body .gm-content {
+  margin-left: 0;
+  margin-right: var(--gm-rail);
+  transition: margin-right var(--gm-med) var(--gm-ease);
+}
+html[dir="rtl"] body .gm-content.gm-nav-open { margin-left: 0; margin-right: var(--gm-nav-open); }
+@media (max-width: 760px) {
+  html[dir="rtl"] body .gm-content.gm-nav-open { margin-right: var(--gm-rail); }
+}
+
+/* Nav labels and the group headings read from the right. */
+html[dir="rtl"] body .gm-nav .mdc-button__label,
+html[dir="rtl"] body .gm-nav .mat-mdc-button-base { text-align: right; }
+html[dir="rtl"] body .gm-nav .mdc-button__label > div { align-items: flex-start; }
+html:lang(ar) body .gm-nav > div > div[style*="uppercase"],
+html:lang(ar) body .gm-nav [style*="text-transform: uppercase"] {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-size: 12px !important;
+}
+
+/* Phones: the floating menu button sits top-right; the top bar mirrors. */
+@media (max-width: 600px) {
+  html[dir="rtl"] body .gm-content:not(.gm-nav-open),
+  html[dir="rtl"] body .gm-content.gm-nav-open { margin-right: 0; }
+  html[dir="rtl"] body .gm-topbar { padding-left: 16px !important; padding-right: 64px !important; }
+  html[dir="rtl"] body .mat-drawer:has(.gm-nav-collapsed) { border-left: 0 !important; }
+}
+
+/* ---------- Studio chrome ---------- */
+html[dir="rtl"] body .gm-hero-info { right: auto; left: 0; }
+html[dir="rtl"] body .gm-composer-actions { margin-left: 0; margin-right: auto; }
+html[dir="rtl"] body .gm-attach-remove { right: auto; left: 2px; }
+html[dir="rtl"] body .gm-segmented .mat-button-toggle + .mat-button-toggle { border-right: none !important; }
+html[dir="rtl"] body .gm-demo-bar-actions { margin-left: 0; margin-right: auto; }
+html[dir="rtl"] body .gm-step + .gm-step::before { margin-left: 0; }
+@media (max-width: 600px) {
+  html[dir="rtl"] body .gm-composer { padding: 14px 14px 10px 12px; }
+}
+
+/* Text inputs: the caret and placeholder start on the right. Prompts that
+   contain Latin text still lay out correctly (dir="auto" behaviour). */
+html[dir="rtl"] body textarea,
+html[dir="rtl"] body input { text-align: start; unicode-bidi: plaintext; }
+/* Email addresses and URLs stay left-to-right. */
+html[dir="rtl"] body input[type="email"],
+html[dir="rtl"] body input[type="url"] { direction: ltr; text-align: right; }
+
+/* Material form fields and selects: label and arrow on the mirrored side. */
+html[dir="rtl"] body .mat-mdc-form-field,
+html[dir="rtl"] body .mat-mdc-select { direction: rtl; text-align: right; }
+html[dir="rtl"] body .mdc-floating-label { left: auto !important; right: 4px; transform-origin: right top !important; }
+html[dir="rtl"] body .mat-mdc-select-arrow-wrapper { transform: none; }
+
+/* Dialog action rows already use flex-end, which follows the direction. */
+
+/* ---------- Directional icons flip ----------
+   components/lang_manager marks Material icons whose glyph points along the
+   reading direction (arrow_forward, chevron_right, ...) with .gm-flip. */
+html[dir="rtl"] body .gm-flip,
+html[dir="rtl"] body .gm-rtl-flip { transform: scaleX(-1); }
+
+/* ---------- Numbers and Latin names inside Arabic text ---------- */
+html[dir="rtl"] body .gm-ltr { direction: ltr; unicode-bidi: isolate; }
