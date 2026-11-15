@@ -20,14 +20,13 @@ from components.styles import (
     MAIN_COLUMN_STYLE,
     PAGE_BACKGROUND_PADDING_STYLE,
     PAGE_BACKGROUND_STYLE,
-    SIDENAV_MAX_WIDTH,
-    SIDENAV_MIN_WIDTH,
 )
 from components.theme_manager.theme_manager import theme_manager
 
 def on_theme_load(e: me.WebEvent):
     s = me.state(AppState)
     s.theme_mode = e.value["theme"]
+    s.theme_chosen = True
     me.set_theme_mode(s.theme_mode)
     yield
 
@@ -40,27 +39,31 @@ def page_scaffold(page_name: str):
     app_state.current_page = page_name
     log_page_view(page_name=page_name, session_id=app_state.session_id)
 
-    theme_manager(theme=app_state.theme_mode, on_theme_load=on_theme_load)
+    # Only save a theme the user picked; otherwise follow the system setting.
+    theme_manager(
+        theme=app_state.theme_mode if app_state.theme_chosen else "",
+        on_theme_load=on_theme_load,
+    )
 
     sidenav("")
 
+    # The content margin follows the nav width. On phones the open menu
+    # overlays the page instead (see .gm-content in assets/ui/studio.css).
     with me.box(
+        classes="gm-content gm-nav-open" if app_state.sidenav_open else "gm-content",
         style=me.Style(
             display="flex",
             flex_direction="column",
             height="100%",
-            margin=me.Margin(
-                left=SIDENAV_MAX_WIDTH if app_state.sidenav_open else SIDENAV_MIN_WIDTH,
-            ),
         ),
     ):
         with me.box(
+            classes="gm-page",
             style=me.Style(
                 background=me.theme_var("background"),
                 height="100%",
-                overflow_y="scroll",
-                margin=me.Margin(bottom=20),
-            )
+                overflow_y="auto",
+            ),
         ):
             me.slot()
 
@@ -70,5 +73,5 @@ def page_frame():
     """Page Frame"""
     with me.box(style=MAIN_COLUMN_STYLE):
         with me.box(style=PAGE_BACKGROUND_STYLE):
-            with me.box(style=PAGE_BACKGROUND_PADDING_STYLE):
+            with me.box(classes="gm-frame", style=PAGE_BACKGROUND_PADDING_STYLE):
                 me.slot()

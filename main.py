@@ -49,6 +49,9 @@ except (ImportError, AttributeError):
 
 import google.auth
 import mesop as me
+
+# Studio theme: must load before any module that declares @me.page.
+import common.ui_theme  # noqa: F401  pylint: disable=unused-import
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -413,24 +416,42 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-# Test page routes are left as is, they don't need the scaffold
-me.page(path="/test_character_consistency", title="Test Character Consistency")(
-    test_character_consistency_page,
+# Test page routes are left as is, they don't need the scaffold.
+# They are only registered for local dev, or when SHOW_DEV_PAGES=true, so a
+# client demo never exposes half-built pages.
+SHOW_DEV_PAGES = (
+    os.environ.get(
+        "SHOW_DEV_PAGES",
+        "true" if config.Default.APP_ENV in LOCAL_APP_ENVS else "false",
+    ).lower()
+    == "true"
 )
-me.page(path="/test_index", title="Test Index")(test_index_page)
-me.page(path="/test_infinite_scroll", title="Test Infinite Scroll")(
-    test_infinite_scroll_page,
-)
-me.page(path="/test_pixie_compositor", title="Test Pixie Compositor")(
-    test_pixie_compositor_page,
-)
-me.page(path="/test_uploader", title="Test Uploader")(test_uploader_page)
-me.page(path="/test_vto_prompt_generator", title="Test VTO Prompt Generator")(
-    test_vto_prompt_generator_page,
-)
-me.page(path="/test_svg", title="Test SVG")(test_svg_page)
-me.page(path="/test_media_chooser", title="Test Media Chooser")(test_media_chooser_page)
-me.page(path="/test_async_veo", title="Test Async Veo")(test_async_veo_page)
+
+
+def _register_dev_pages() -> None:
+    me.page(path="/test_character_consistency", title="Test Character Consistency")(
+        test_character_consistency_page,
+    )
+    me.page(path="/test_index", title="Test Index")(test_index_page)
+    me.page(path="/test_infinite_scroll", title="Test Infinite Scroll")(
+        test_infinite_scroll_page,
+    )
+    me.page(path="/test_pixie_compositor", title="Test Pixie Compositor")(
+        test_pixie_compositor_page,
+    )
+    me.page(path="/test_uploader", title="Test Uploader")(test_uploader_page)
+    me.page(path="/test_vto_prompt_generator", title="Test VTO Prompt Generator")(
+        test_vto_prompt_generator_page,
+    )
+    me.page(path="/test_svg", title="Test SVG")(test_svg_page)
+    me.page(path="/test_media_chooser", title="Test Media Chooser")(
+        test_media_chooser_page
+    )
+    me.page(path="/test_async_veo", title="Test Async Veo")(test_async_veo_page)
+
+
+if SHOW_DEV_PAGES:
+    _register_dev_pages()
 
 # Global storage client instance to reuse connections
 _proxy_storage_client = None
@@ -538,6 +559,13 @@ def get_media_proxy(request: Request, bucket_name: str, object_path: str):
 def home() -> RedirectResponse:
     return RedirectResponse(url="/home")
 
+
+# Studio theme stylesheet (see common/ui_theme.py).
+app.mount(
+    "/ui",
+    StaticFiles(directory=common.ui_theme.THEME_ASSET_DIR),
+    name="ui",
+)
 
 # Use this to mount the static files for the Mesop app
 app.mount(

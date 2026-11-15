@@ -15,8 +15,8 @@
 import mesop as me
 
 
-SIDENAV_MIN_WIDTH = 76  # Updated to match usage in page_scaffold via pages.styles
-SIDENAV_MAX_WIDTH = 202  # Updated to match usage in page_scaffold via pages.styles
+SIDENAV_MIN_WIDTH = 72  # Collapsed icon rail
+SIDENAV_MAX_WIDTH = 248  # Expanded menu with labels
 
 DEFAULT_MENU_STYLE = me.Style(align_content="left")
 
@@ -48,14 +48,15 @@ MAIN_COLUMN_STYLE = me.Style(
 PAGE_BACKGROUND_STYLE = me.Style(
     background=me.theme_var("background"),
     height="100%",
-    overflow_y="scroll",
-    margin=me.Margin(bottom=20),
+    overflow_y="auto",
 )
 
 PAGE_BACKGROUND_PADDING_STYLE = me.Style(
     background=me.theme_var("background"),
-    padding=me.Padding(top=24, left=24, right=24, bottom=24),
+    padding=me.Padding(top=28, left=32, right=32, bottom=40),
     display="flex",
     flex_direction="column",
     height="inherit",
+    max_width=1600,
+    box_sizing="border-box",
 )

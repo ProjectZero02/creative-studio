@@ -28,6 +28,9 @@ class AppState:
 
     sidenav_open: bool = False
     theme_mode: str = "dark"
+    # True once the user picked light/dark (toggle or a saved choice). Until
+    # then the app follows the system setting (see common/ui_theme.py).
+    theme_chosen: bool = False
     user_email: str = "anonymous@google.com"
     session_id: str = ""
     current_page: str = ""
