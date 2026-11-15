@@ -151,7 +151,9 @@ def header(
         ),
     ):
         with me.box(
-            style=me.Style(display="flex", align_items="center", gap=14, min_width=0)
+            style=me.Style(
+                display="flex", align_items="center", gap=14, min_width=0, flex_grow=1
+            )
         ):
             with me.box(
                 style=me.Style(
@@ -169,7 +171,11 @@ def header(
                 _render_icon(icon)
             with me.box(
                 style=me.Style(
-                    display="flex", flex_direction="column", gap=2, min_width=0
+                    display="flex",
+                    flex_direction="column",
+                    gap=2,
+                    min_width=0,
+                    flex_grow=1,
                 )
             ):
                 with me.box(

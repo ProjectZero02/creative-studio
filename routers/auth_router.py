@@ -38,6 +38,7 @@ from common.i18n import (
     tl,
 )
 from common.passwords import burn_time, verify_password
+from common.ui_theme import versioned
 from common.user_store import ROLE_ADMIN, get_user_store, normalize_email
 from common.verified_identity import AUTH_MODE_SESSION, auth_mode
 
@@ -112,7 +113,7 @@ _PAGE = """<!doctype html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{font_css}">
-<link rel="stylesheet" href="/ui/login.css">
+<link rel="stylesheet" href="{login_css}">
 </head>
 <body>
 <div class="auth">
@@ -239,6 +240,7 @@ def render_login_page(
     tiles = _TILES.format(**{k: esc(f"login.{k}") for k in _TILE_KEYS})
     return _PAGE.format(
         font_css=html.escape(FONT_CSS, quote=True),
+        login_css=versioned("/ui/login.css"),
         brand_mark=BRAND_MARK,
         tiles=tiles,
         lang=lang,

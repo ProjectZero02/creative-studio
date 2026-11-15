@@ -21,6 +21,7 @@ upstream merges cheap.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import os
 
@@ -56,10 +57,30 @@ SHARED_STYLESHEETS = [
 _original_page = me.page
 
 
+_VERSIONS: dict[str, str] = {}
+
+
+def versioned(href: str) -> str:
+    """'/ui/x.css' -> '/ui/x.css?v=<content hash>', so browsers never mix an old
+    cached copy with new pages after an update. Other URLs pass through."""
+    if not href.startswith("/ui/") or "?" in href:
+        return href
+    if href not in _VERSIONS:
+        path = os.path.join(THEME_ASSET_DIR, href[len("/ui/") :])
+        try:
+            with open(path, "rb") as fh:
+                _VERSIONS[href] = hashlib.sha1(fh.read()).hexdigest()[:10]
+        except OSError:
+            _VERSIONS[href] = ""
+    v = _VERSIONS[href]
+    return f"{href}?v={v}" if v else href
+
+
 def _with_theme(stylesheets: list[str] | None) -> list[str]:
     shared = set(GLOBAL_STYLESHEETS) | set(SHARED_STYLESHEETS)
     sheets = [s for s in (stylesheets or []) if s not in shared]
-    return [GLOBAL_STYLESHEETS[0], *SHARED_STYLESHEETS, *sheets, GLOBAL_STYLESHEETS[1]]
+    ordered = [GLOBAL_STYLESHEETS[0], *SHARED_STYLESHEETS, *sheets, GLOBAL_STYLESHEETS[1]]
+    return [versioned(s) for s in ordered]
 
 
 def apply_default_theme() -> None:
