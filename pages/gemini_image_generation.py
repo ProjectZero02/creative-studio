@@ -21,14 +21,32 @@ import mesop as me
 
 from common.analytics import analytics_logger, log_ui_click
 from common.metadata import MediaItem, add_media_item_to_firestore
+from common.mock_generation import fake_wait, mock_enabled, placeholder_image
 from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
 from common.utils import create_display_url, https_url_to_gcs_uri
-from components.banana_button.banana_button import banana_button
+from components.composer.chip_menu import change_value, chip_menu, chip_options
+from components.composer.composer import composer, composer_attachment
 from components.content_credentials.content_credentials import (
     content_credentials_viewer,
 )
 from components.dialog import dialog
+from components.generation_progress.generation_progress import (
+    friendly_error,
+    generation_progress,
+    progress_clear,
+    progress_done,
+    progress_fail,
+    progress_start,
+    progress_step,
+)
+from components.lightbox_dialog.lightbox_dialog import lightbox_dialog
+from components.result_grid.result_card import (
+    card_action,
+    empty_results,
+    result_card,
+    result_grid,
+)
 from components.gemini_image.events import (
     get_on_aspect_ratio_change,
     get_on_image_search_change,
@@ -42,7 +60,6 @@ from components.gemini_image.events import (
     get_on_thumbnail_click,
 )
 from components.header import header
-from components.image_thumbnail import image_thumbnail
 from components.library.events import LibrarySelectionChangeEvent
 from components.library.library_chooser_button import library_chooser_button
 from components.page_scaffold import page_frame, page_scaffold
@@ -52,9 +69,11 @@ from components.snackbar import snackbar
 from components.svg_icon.svg_icon import svg_icon
 from config.banana_presets import IMAGE_ACTION_PRESETS
 from config.gemini_image_models import get_gemini_image_model_config
+from config.rewriters import REWRITER_PROMPT
 from models.gemini import (
     generate_image_from_prompt_and_images,
     generate_transformation_prompts,
+    rewriter,
 )
 from models.upscale import get_image_resolution
 from services.c2pa_service import c2pa_service
@@ -136,6 +155,24 @@ class PageState:
     info_dialog_open: bool = False
     initial_load_complete: bool = False
 
+    # Image Studio layout (composer, progress card, recent grid)
+    prompt_key: int = 0
+    is_enhancing: bool = False
+    lightbox_url: str = ""
+    last_prompt: str = ""
+    last_input_uris: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
+    # Step-by-step progress (components/generation_progress)
+    progress_stages: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
+    progress_stage: int = 0
+    progress_status: str = ""
+    progress_run_id: str = ""
+    progress_error: str = ""
+    # Session history for the "Recent" grid (display URLs, newest first)
+    history_urls: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
+    history_prompts: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
+    history_meta: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
+    history_aspects: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
+
 
 on_aspect_ratio_change = get_on_aspect_ratio_change(PageState)
 on_image_size_change = get_on_image_size_change(PageState)
@@ -216,8 +253,328 @@ def _render_grounding_info(grounding_info_str: str, theme_mode: str):
         me.text(grounding_info_str)
 
 
+_ASPECT_NAMES = {
+    "1:1": "Square",
+    "16:9": "Landscape",
+    "9:16": "Portrait",
+    "4:3": "Classic",
+    "3:4": "Classic portrait",
+    "21:9": "Cinematic",
+}
+
+
+def _image_stages(has_inputs: bool) -> list[str]:
+    return [
+        "Reading your references" if has_inputs else "Preparing prompt",
+        "Sending to Gemini",
+        "Generating image",
+        "Saving to library",
+        "Done",
+    ]
+
+
+def _render_attachments():
+    """Uploaded reference images, shown inside the composer above the prompt."""
+    state = me.state(PageState)
+    if not state.uploaded_image_display_urls:
+        return
+    with me.box(classes="gm-attach-row"):
+        for i, uri in enumerate(state.uploaded_image_display_urls):
+            composer_attachment(
+                src=uri,
+                label=f"reference image {i + 1}",
+                index=i,
+                on_remove=on_remove_image,
+            )
+
+
+def _image_chips(state: "PageState", model_config):
+    """Setting chips and attach buttons in the composer row."""
+    from config.gemini_image_models import GEMINI_IMAGE_MODELS
+
+    chip_menu(
+        key="img_chip_model",
+        label="Model",
+        icon="model",
+        value=state.selected_model,
+        options=chip_options(
+            (
+                m.model_name,
+                m.display_name,
+                f"Usually ~{m.typical_generation_seconds}s",
+            )
+            for m in GEMINI_IMAGE_MODELS
+        ),
+        on_change=on_chip_image_model,
+    )
+    aspects = (
+        model_config.supported_aspect_ratios
+        if model_config
+        else ["1:1", "16:9", "9:16"]
+    )
+    chip_menu(
+        key="img_chip_aspect",
+        label="Aspect ratio",
+        icon="aspect",
+        value=state.aspect_ratio,
+        options=chip_options(
+            (a, a, _ASPECT_NAMES[a]) if a in _ASPECT_NAMES else a for a in aspects
+        ),
+        on_change=on_chip_image_aspect,
+    )
+    if model_config and model_config.supported_image_sizes:
+        chip_menu(
+            key="img_chip_size",
+            label="Image size",
+            icon="quality",
+            value=state.image_size,
+            options=chip_options(model_config.supported_image_sizes),
+            on_change=on_chip_image_size,
+        )
+    max_output_images = model_config.max_output_images if model_config else 1
+    if max_output_images > 1:
+        chip_menu(
+            key="img_chip_count",
+            label="Number of images",
+            icon="count",
+            value=str(state.num_images_to_generate),
+            options=chip_options(
+                [("0", "Auto")]
+                + [(str(i), f"{i} images") for i in range(1, max_output_images + 1)]
+            ),
+            on_change=on_chip_image_count,
+        )
+    if model_config and model_config.supports_search:
+        chip_menu(
+            key="img_chip_search",
+            label="Ground with Google Search",
+            icon="search",
+            kind="toggle",
+            value="Search",
+            checked=state.use_search,
+            on_change=on_chip_image_search,
+        )
+
+    max_input_images = model_config.max_input_images if model_config else 3
+    upload_disabled = len(state.uploaded_image_gcs_uris) >= max_input_images
+    with me.box(classes="gm-composer-attach"):
+        with me.box(classes="gm-composer-btn"):
+            with (
+                me.tooltip(message="Attach reference images or files"),
+                me.content_uploader(
+                    on_upload=on_upload,
+                    multiple=True,
+                    accepted_file_types=model_config.supported_input_mime_types
+                    if model_config
+                    else ["image/jpeg", "image/png", "image/webp", "application/pdf"],
+                    disabled=upload_disabled,
+                    type="icon",
+                    key="img_attach",
+                ),
+            ):
+                me.icon("attach_file")
+                with me.box(classes="gm-sr-only"):
+                    me.text("Attach reference images or files")
+        with me.box(classes="gm-composer-btn"):
+            library_chooser_button(
+                on_library_select=on_library_select,
+                button_type="icon",
+                disabled=upload_disabled,
+                key="img_library",
+            )
+
+
+def _render_latest(state: "PageState", app_state):
+    """The newest result, large, with credentials, resolution and sources."""
+    if not state.generated_image_urls:
+        return
+    selected = (
+        state.selected_image_url
+        if state.selected_image_url in state.generated_image_urls
+        else state.generated_image_urls[0]
+    )
+    selected_index = state.generated_image_urls.index(selected)
+    caption = (
+        state.generated_image_captions[selected_index]
+        if selected_index < len(state.generated_image_captions)
+        else ""
+    )
+    with me.box(classes="gm-latest-media"):
+        with me.box(
+            style=me.Style(
+                position="relative",
+                width="100%",
+                display="flex",
+                justify_content="center",
+            ),
+        ):
+            with me.box(
+                key=selected,
+                on_click=on_open_latest,
+                classes="gm-zoom",
+                style=me.Style(width="100%", display="flex", justify_content="center"),
+            ):
+                me.image(
+                    src=selected,
+                    alt=caption or state.prompt[:120] or "Generated image",
+                    style=me.Style(
+                        width="100%",
+                        max_height="72vh",
+                        object_fit="contain",
+                        border_radius=16,
+                    ),
+                )
+            # Content Credentials (C2PA) Viewer
+            with me.box(style=me.Style(position="absolute", top=16, right=16)):
+                manifest_json = state.c2pa_manifests.get(selected)
+                if manifest_json:
+                    content_credentials_viewer(manifest=manifest_json)
+
+        with me.box(classes="gm-latest-meta"):
+            if state.generated_resolution:
+                pill(
+                    label=f"Resolution: {state.generated_resolution}",
+                    pill_type="resolution",
+                )
+            if state.generation_time > 0:
+                me.text(
+                    f"Made in {state.generation_time:.1f}s",
+                    style=me.Style(
+                        font_size=13, color=me.theme_var("on-surface-variant")
+                    ),
+                )
+
+        # Thumbnail strip when one prompt returned several images
+        if len(state.generated_image_urls) > 1:
+            with me.box(
+                style=me.Style(
+                    display="flex",
+                    flex_direction="row",
+                    flex_wrap="wrap",
+                    gap=12,
+                    justify_content="center",
+                ),
+            ):
+                for i, url in enumerate(state.generated_image_urls):
+                    is_selected = url == selected
+                    thumb_caption = (
+                        state.generated_image_captions[i]
+                        if i < len(state.generated_image_captions)
+                        else ""
+                    )
+                    with me.box(
+                        key=url,
+                        on_click=on_thumbnail_click,
+                        style=me.Style(
+                            padding=me.Padding.all(3),
+                            border=me.Border.all(
+                                me.BorderSide(
+                                    width=3,
+                                    style="solid",
+                                    color=me.theme_var("primary")
+                                    if is_selected
+                                    else "transparent",
+                                ),
+                            ),
+                            border_radius=14,
+                            cursor="pointer",
+                        ),
+                    ):
+                        me.image(
+                            src=url,
+                            alt=thumb_caption,
+                            style=me.Style(
+                                width=88,
+                                height=88,
+                                object_fit="cover",
+                                border_radius=10,
+                            ),
+                        )
+
+        if state.grounding_info:
+            with me.box(style=me.Style(width="100%")):
+                _render_grounding_info(state.grounding_info, app_state.theme_mode)
+
+
+def _render_next_steps(state: "PageState"):
+    """Follow-up actions for the selected image: continue, video, presets."""
+    with me.box(classes="gm-next"):
+        if state.generated_image_urls:
+            with me.box(classes="gm-title gm-title-section"):
+                me.markdown("## Keep going")
+            with me.box(classes="gm-next-actions"):
+                with me.content_button(on_click=on_continue_click, type="stroked"):
+                    with me.box(classes="gm-btn-row"):
+                        me.icon("edit")
+                        me.text("Edit this image")
+                omni_button(gcs_uri=https_url_to_gcs_uri(state.selected_image_url))
+                veo_button(gcs_uri=https_url_to_gcs_uri(state.selected_image_url))
+
+        # Image presets
+        if state.generated_image_urls or state.uploaded_image_gcs_uris:
+            all_presets = get_all_image_presets()
+            for category_name, presets in all_presets.items():
+                if not presets:
+                    continue
+                me.text(
+                    f"{category_name.capitalize()} actions",
+                    style=me.Style(
+                        font_size=13,
+                        font_weight=500,
+                        color=me.theme_var("on-surface-variant"),
+                        margin=me.Margin(top=8),
+                    ),
+                )
+                with me.box(classes="gm-preset-row"):
+                    for preset in presets:
+                        label = preset.get("label") or preset["key"]
+                        me.button(
+                            label,
+                            on_click=on_image_action_click,
+                            type="stroked",
+                            key=preset["key"],
+                            style=CHIP_STYLE,
+                        )
+
+        # Suggest transformations button
+        if (
+            state.generation_complete
+            and not state.suggested_transformations
+            and state.generated_image_urls
+        ):
+            with me.box(style=me.Style(margin=me.Margin(top=8))):
+                if state.is_suggesting_transformations:
+                    with me.content_button(disabled=True, style=CHIP_STYLE):
+                        with me.box(classes="gm-btn-row"):
+                            me.progress_spinner(diameter=18, stroke_width=3)
+                            me.text("Suggesting…")
+                else:
+                    with me.content_button(
+                        on_click=on_suggest_transformations_click,
+                        type="stroked",
+                        style=CHIP_STYLE,
+                    ):
+                        with me.box(classes="gm-btn-row"):
+                            svg_icon(icon_name="image_edit_auto")
+                            me.text("Suggest edits")
+
+        # Suggested transformations
+        if state.suggested_transformations:
+            with me.box(classes="gm-preset-row"):
+                for transformation in state.suggested_transformations:
+                    with me.content_button(
+                        on_click=on_transformation_click,
+                        key=json.dumps(transformation),
+                        type="stroked",
+                        style=CHIP_STYLE,
+                    ):
+                        with me.box(classes="gm-btn-row"):
+                            svg_icon(icon_name="image_edit_auto")
+                            me.text(transformation["title"])
+
+
 def gemini_image_gen_page_content():
-    """Renders the main UI for the Gemini Image Generation page."""
+    """Renders the Image Studio: hero, composer, progress, latest, recent."""
     state = me.state(PageState)
     app_state = me.state(AppState)
     current_model_name = state.selected_model
@@ -235,606 +592,305 @@ def gemini_image_gen_page_content():
 
     with page_frame():  # pylint: disable=E1129
         header(
-            "Gemini Image Generation",
+            "Image Studio",
             "spark",
             show_info_button=True,
             on_info_click=open_info_dialog,
+            description="Create and edit images from a prompt and your own pictures with Gemini.",
+            centered=True,
         )
 
-        with me.box(
-            style=me.Style(
-                display="flex", flex_direction="row", flex_wrap="wrap", gap=16
+        with me.box(classes="gm-studio"):
+            with composer(
+                value=state.prompt,
+                placeholder="Describe the image you want to generate…",
+                on_blur=on_prompt_blur,
+                on_submit=on_image_prompt_enter,
+                on_click_send=generate_images,
+                on_enhance=on_click_enhance_image_prompt,
+                enhance_label="Enhance prompt with Gemini",
+                enhancing=state.is_enhancing,
+                busy=state.is_generating,
+                send_label="Generate image",
+                textarea_key=f"img_prompt_{state.prompt_key}",
+                render_top=_render_attachments,
+                on_clear=on_clear_click,
+            ):
+                _image_chips(state, model_config)
+
+            generation_progress(
+                state=state,
+                typical_seconds=model_config.typical_generation_seconds
+                if model_config
+                else 15,
+                work_stage=2,
+                aspect=state.aspect_ratio,
+                count=max(1, state.num_images_to_generate),
+                media_label="image",
+                on_retry=on_image_progress_retry,
+                on_dismiss=on_image_progress_dismiss,
             )
+
+            if state.generated_image_urls and not state.is_generating:
+                with me.box(classes="gm-latest"):
+                    with me.box(classes="gm-title gm-title-section"):
+                        me.markdown("## Latest")
+                    with me.box(classes="gm-latest-split"):
+                        _render_latest(state, app_state)
+                        _render_next_steps(state)
+            elif (
+                state.generation_complete
+                and not state.generated_image_urls
+                and not state.is_generating
+                and state.progress_status != "error"
+            ):
+                empty_results(
+                    "image_not_supported",
+                    "No images came back",
+                    "Try a different prompt or another model.",
+                )
+            elif state.uploaded_image_gcs_uris and not state.is_generating:
+                _render_next_steps(state)
+            elif (
+                not state.is_generating
+                and not state.history_urls
+                and state.progress_status != "error"
+            ):
+                empty_results(
+                    "image",
+                    "Your images will show up here",
+                    "Describe a picture, or attach your own to edit, then press Enter.",
+                )
+
+            if state.history_urls:
+                with result_grid(title="Recent", count=len(state.history_urls)):
+                    for i, url in enumerate(state.history_urls):
+                        result_card(
+                            key=f"img_hist_{i}_{url[-24:]}",
+                            src=url,
+                            kind="image",
+                            prompt=state.history_prompts[i]
+                            if i < len(state.history_prompts)
+                            else "",
+                            meta=state.history_meta[i]
+                            if i < len(state.history_meta)
+                            else "",
+                            aspect=state.history_aspects[i]
+                            if i < len(state.history_aspects)
+                            else "1:1",
+                            actions="open,download,reuse,edit,video",
+                            selected=url == state.selected_image_url,
+                            on_action=on_recent_image_action,
+                        )
+
+        with lightbox_dialog(  # pylint: disable=E1129:not-context-manager
+            is_open=bool(state.lightbox_url),
+            on_close=on_close_image_lightbox,
         ):
-            # Left column (controls)
-            with me.box(
-                style=me.Style(
-                    flex="0 1 400px",
-                    min_width=0,
-                    box_sizing="border-box",
-                    background=me.theme_var("surface-container-lowest"),
-                    padding=me.Padding.all(16),
-                    border_radius=12,
-                ),
-            ):
-                from config.gemini_image_models import GEMINI_IMAGE_MODELS
-
-                with me.box(
+            if state.lightbox_url:
+                me.image(
+                    src=state.lightbox_url,
+                    alt="Generated image, full size",
                     style=me.Style(
-                        display="flex",
-                        flex_direction="row",
-                        gap=16,
-                        margin=me.Margin(bottom=16),
-                        justify_content="center",
-                    ),
-                ):
-                    for model in GEMINI_IMAGE_MODELS:
-                        is_selected = state.selected_model == model.model_name
-                        banana_button(
-                            selected=is_selected,
-                            badge=model.button_label,
-                            label=model.display_name,
-                            model_name=model.model_name,
-                            on_click=on_model_select,
-                        )
-
-                me.text(
-                    "Type a prompt or add images and a prompt",
-                    style=me.Style(
-                        margin=me.Margin(bottom=16),
+                        width="100%",
+                        height="100%",
+                        object_fit="contain",
                     ),
                 )
-                max_input_images = model_config.max_input_images if model_config else 3
-                upload_disabled = len(state.uploaded_image_gcs_uris) >= max_input_images
 
-                with me.box(
-                    style=me.Style(
-                        display="flex",
-                        flex_direction="row",
-                        gap=16,
-                        margin=me.Margin(bottom=16),
-                        justify_content="center",
-                    ),
-                ):
-                    me.uploader(
-                        label="Upload Media",
-                        on_upload=on_upload,
-                        multiple=True,
-                        accepted_file_types=model_config.supported_input_mime_types
-                        if model_config
-                        else [
-                            "image/jpeg",
-                            "image/png",
-                            "image/webp",
-                            "application/pdf",
-                        ],
-                        style=me.Style(width="100%"),
-                        disabled=upload_disabled,
-                    )
-                    library_chooser_button(
-                        on_library_select=on_library_select,
-                        button_label="Choose from Library",
-                        disabled=upload_disabled,
-                    )
-                if state.uploaded_image_gcs_uris:
-                    with me.box(
-                        style=me.Style(
-                            display="flex",
-                            flex_wrap="wrap",
-                            gap=10,
-                            justify_content="center",
-                            margin=me.Margin(bottom=16),
-                        ),
-                    ):
-                        for i, uri in enumerate(state.uploaded_image_display_urls):
-                            image_thumbnail(
-                                image_uri=uri,
-                                index=i,
-                                on_remove=on_remove_image,
-                                icon_size=18,
-                            )
-                me.textarea(
-                    label="Prompt",
-                    rows=3,
-                    max_rows=14,
-                    autosize=True,
-                    on_blur=on_prompt_blur,
-                    value=state.prompt,
-                    style=me.Style(width="100%", margin=me.Margin(bottom=16)),
-                )
-
-                with me.box(
-                    classes="gm-controls",
-                    style=me.Style(
-                        display="flex", flex_direction="row", flex_wrap="wrap", gap=16
-                    ),
-                ):
-                    me.select(
-                        label="Aspect Ratio",
-                        options=[
-                            me.SelectOption(label="1:1", value="1:1"),
-                            me.SelectOption(label="3:2", value="3:2"),
-                            me.SelectOption(label="2:3", value="2:3"),
-                            me.SelectOption(label="3:4", value="3:4"),
-                            me.SelectOption(label="4:3", value="4:3"),
-                            me.SelectOption(label="4:5", value="4:5"),
-                            me.SelectOption(label="9:16", value="9:16"),
-                            me.SelectOption(label="16:9", value="16:9"),
-                            me.SelectOption(label="21:9", value="21:9"),
-                        ],
-                        on_selection_change=on_aspect_ratio_change,
-                        value=str(state.aspect_ratio),
-                        style=me.Style(flex="1 1 140px"),
-                    )
-
-                    if model_config and model_config.supported_image_sizes:
-                        me.select(
-                            label="Image Size",
-                            options=[
-                                me.SelectOption(label=size, value=size)
-                                for size in model_config.supported_image_sizes
-                            ],
-                            on_selection_change=on_image_size_change,
-                            value=str(state.image_size),
-                            style=me.Style(flex="1 1 140px"),
-                        )
-
-                me.box(style=me.Style(height=16))
-
-                max_output_images = (
-                    model_config.max_output_images if model_config else 1
-                )
-
-                with me.box(
-                    style=me.Style(
-                        display="flex",
-                        flex_direction="row",
-                        gap=16,
-                        align_items="center",
-                        margin=me.Margin(bottom=16),
-                    ),
-                ):
-                    if max_output_images > 1:
-                        me.select(
-                            label="Number of Images",
-                            options=[me.SelectOption(label="Auto", value="0")]
-                            + [
-                                me.SelectOption(label=str(i), value=str(i))
-                                for i in range(1, max_output_images + 1)
-                            ],
-                            on_selection_change=on_num_images_change,
-                            value=str(state.num_images_to_generate),
-                            style=me.Style(flex_grow=1),
-                        )
-
-                    if model_config and model_config.supports_search:
-                        me.checkbox(
-                            label="Use Search",
-                            checked=state.use_search,
-                            on_change=on_search_change,
-                        )
-
-                with me.box(
-                    style=me.Style(
-                        display="flex",
-                        flex_direction="row",
-                        align_items="center",
-                        gap=16,
-                    ),
-                ):
-                    if state.is_generating:
-                        with me.content_button(type="raised", disabled=True):
-                            with me.box(
-                                style=me.Style(
-                                    display="flex",
-                                    flex_direction="row",
-                                    align_items="center",
-                                    gap=8,
-                                ),
-                            ):
-                                me.progress_spinner(diameter=20, stroke_width=3)
-                                me.text("Generating Images...")
-                    else:
-                        me.button(
-                            "Generate Images",
-                            on_click=generate_images,
-                            type="raised",
-                        )
-                        with me.tooltip(message="Clear results"):
-                            with me.content_button(on_click=on_clear_click, type="icon"):
-                                me.icon("delete_sweep")
-                                with me.box(classes="gm-sr-only"):
-                                    me.text("Clear results")
-
-                    if state.generation_complete and state.generation_time > 0:
-                        me.text(
-                            f"{state.generation_time:.2f} seconds",
-                            style=me.Style(font_size=12),
-                        )
-
-                # Actions row
-                if state.generated_image_urls:
-                    with me.box(
-                        style=me.Style(
-                            display="flex",
-                            flex_direction="column",
-                            gap=16,
-                            margin=me.Margin(top=16),
-                        ),
-                    ):
-                        me.text("Actions", type="headline-5")
-                        with me.box(
-                            style=me.Style(
-                                display="flex",
-                                flex_direction="row",
-                                align_items="center",
-                                gap=16,
-                            ),
-                        ):
-                            me.image(
-                                src=state.selected_image_url,
-                                style=me.Style(
-                                    width=100,
-                                    height=100,
-                                    border_radius=8,
-                                    object_fit="cover",
-                                ),
-                            )
-                            me.button(
-                                "Continue",
-                                on_click=on_continue_click,
-                                type="stroked",
-                            )
-                            # Stack the video actions so the row fits the narrow
-                            # left panel.
-                            with me.box(
-                                style=me.Style(
-                                    display="flex",
-                                    flex_direction="column",
-                                    align_items="stretch",
-                                    gap=8,
-                                ),
-                            ):
-                                omni_button(
-                                    gcs_uri=https_url_to_gcs_uri(
-                                        state.selected_image_url,
-                                    ),
-                                )
-                                veo_button(
-                                    gcs_uri=https_url_to_gcs_uri(
-                                        state.selected_image_url,
-                                    ),
-                                )
-
-                # Image presets
-                if state.generated_image_urls or state.uploaded_image_gcs_uris:
-                    with me.box(
-                        style=me.Style(
-                            display="flex",
-                            flex_direction="column",
-                            gap=8,  # Reduced gap for tighter category spacing
-                            margin=me.Margin(top=16),
-                        ),
-                    ):
-                        # me.text("Image Presets", style=me.Style(font_weight="bold"))
-
-                        all_presets = get_all_image_presets()
-
-                        for category_name, presets in all_presets.items():
-                            if not presets:
-                                continue
-
-                            me.text(
-                                f"{category_name.capitalize()} Actions",
-                                style=me.Style(
-                                    font_size=14,
-                                    margin=me.Margin(top=8),
-                                ),
-                            )
-                            with me.box(
-                                style=me.Style(
-                                    display="flex",
-                                    flex_direction="row",
-                                    align_items="center",
-                                    gap=8,  # Reduced gap
-                                    flex_wrap="wrap",
-                                ),
-                            ):
-                                for preset in presets:
-                                    label = preset.get("label") or preset["key"]
-                                    me.button(
-                                        label,
-                                        on_click=on_image_action_click,
-                                        type="stroked",
-                                        key=preset["key"],
-                                        style=CHIP_STYLE,
-                                    )
-
-                # Suggest transformations button
-                if (
-                    state.generation_complete
-                    and not state.suggested_transformations
-                    and state.generated_image_urls
-                ):
-                    with me.box(style=me.Style(margin=me.Margin(top=16))):
-                        if state.is_suggesting_transformations:
-                            with me.content_button(disabled=True, style=CHIP_STYLE):
-                                with me.box(
-                                    style=me.Style(
-                                        display="flex",
-                                        flex_direction="row",
-                                        align_items="center",
-                                        gap=8,
-                                    ),
-                                ):
-                                    me.progress_spinner(diameter=20, stroke_width=3)
-                                    me.text("Suggesting...")
-                        else:
-                            me.button(
-                                "Suggest Transformations",
-                                on_click=on_suggest_transformations_click,
-                                # type="stroked",
-                                style=CHIP_STYLE,
-                            )
-
-                # Suggested transformations
-                if state.suggested_transformations:
-                    with me.box(
-                        style=me.Style(
-                            display="flex",
-                            flex_direction="row",
-                            gap=16,
-                            margin=me.Margin(top=16),
-                        ),
-                    ):
-                        # me.text("Suggested Transformations", style=me.Style(font_weight="bold"))
-                        with me.box(
-                            style=me.Style(
-                                display="flex",
-                                flex_direction="column",
-                                align_items="flex-start",
-                                gap=8,
-                            ),
-                        ):
-                            for transformation in state.suggested_transformations:
-                                with me.content_button(
-                                    on_click=on_transformation_click,
-                                    key=json.dumps(transformation),
-                                    type="stroked",
-                                    style=CHIP_STYLE,
-                                ):
-                                    with me.box(
-                                        style=me.Style(
-                                            display="flex",
-                                            flex_direction="row",
-                                            align_items="center",
-                                            gap=8,
-                                        ),
-                                    ):
-                                        svg_icon(icon_name="image_edit_auto")
-                                        me.text(transformation["title"])
-
-            # Right column (generated images)
-            with me.box(
-                style=me.Style(
-                    flex_grow=1,
-                    display="flex",
-                    flex_direction="column",
-                    align_items="center",
-                    justify_content="center",
-                    border_radius=12,
-                    padding=me.Padding.all(16),
-                    min_height=400,
-                ),
-            ):
-                if state.generation_complete and not state.generated_image_urls:
-                    me.text("No images returned.")
-                elif state.generated_image_urls:
-                    # This box is to override the parent's centering styles
-
-                    with me.box(
-                        style=me.Style(
-                            width="100%",
-                            height="100%",
-                            display="flex",
-                            flex_direction="column",
-                            overflow_y="auto",
-                        ),
-                    ):
-                        if len(state.generated_image_urls) == 1:
-                            # Display single, maximized image
-                            with me.box(
-                                style=me.Style(
-                                    position="relative",
-                                    width="100%",
-                                    height="100%",
-                                    display="flex",
-                                    justify_content="center",
-                                ),
-                            ):
-                                me.image(
-                                    src=state.generated_image_urls[0],
-                                    alt=state.generated_image_captions[0]
-                                    if state.generated_image_captions
-                                    else "",
-                                    style=me.Style(
-                                        width="100%",
-                                        max_height="85vh",
-                                        object_fit="contain",
-                                        border_radius=8,
-                                    ),
-                                )
-                                # Content Credentials (C2PA) Viewer
-                                with me.box(
-                                    style=me.Style(
-                                        position="absolute",
-                                        top=16,
-                                        right=16,
-                                    ),
-                                ):
-                                    manifest_json = state.c2pa_manifests.get(
-                                        state.generated_image_urls[0],
-                                    )
-                                    if manifest_json:
-                                        content_credentials_viewer(
-                                            manifest=manifest_json,
-                                        )
-
-                            if state.generated_resolution:
-                                with me.box(style=me.Style(margin=me.Margin(top=8))):
-                                    pill(
-                                        label=f"Resolution: {state.generated_resolution}",
-                                        pill_type="resolution",
-                                    )
-
-                            if state.grounding_info:
-                                with me.box(
-                                    style=me.Style(
-                                        margin=me.Margin(top=16),
-                                        width="100%",
-                                    ),
-                                ):
-                                    _render_grounding_info(
-                                        state.grounding_info,
-                                        app_state.theme_mode,
-                                    )
-
-                        else:
-                            # Display multiple images in a gallery view
-                            with me.box(
-                                style=me.Style(
-                                    display="flex",
-                                    flex_direction="column",
-                                    gap=16,
-                                ),
-                            ):
-                                # Main image
-                                selected_index = (
-                                    state.generated_image_urls.index(
-                                        state.selected_image_url,
-                                    )
-                                    if state.selected_image_url
-                                    in state.generated_image_urls
-                                    else 0
-                                )
-                                caption = (
-                                    state.generated_image_captions[selected_index]
-                                    if selected_index
-                                    < len(state.generated_image_captions)
-                                    else ""
-                                )
-
-                                with me.box(
-                                    style=me.Style(
-                                        position="relative",
-                                        width="100%",
-                                        display="flex",
-                                        justify_content="center",
-                                    ),
-                                ):
-                                    me.image(
-                                        src=state.selected_image_url,
-                                        alt=caption,
-                                        style=me.Style(
-                                            width="100%",
-                                            max_height="75vh",
-                                            object_fit="contain",
-                                            border_radius=8,
-                                        ),
-                                    )
-                                    # Content Credentials (C2PA) Viewer
-                                    with me.box(
-                                        style=me.Style(
-                                            position="absolute",
-                                            top=16,
-                                            right=16,
-                                        ),
-                                    ):
-                                        manifest_json = state.c2pa_manifests.get(
-                                            state.selected_image_url,
-                                        )
-                                        if manifest_json:
-                                            content_credentials_viewer(
-                                                manifest=manifest_json,
-                                            )
-
-                                if state.generated_resolution:
-                                    with me.box(
-                                        style=me.Style(margin=me.Margin(top=8)),
-                                    ):
-                                        pill(
-                                            label=f"Resolution: {state.generated_resolution}",
-                                            pill_type="resolution",
-                                        )
-
-                                # Thumbnail strip
-                                with me.box(
-                                    style=me.Style(
-                                        display="flex",
-                                        flex_direction="row",
-                                        gap=16,
-                                        justify_content="center",
-                                    ),
-                                ):
-                                    for i, url in enumerate(state.generated_image_urls):
-                                        is_selected = url == state.selected_image_url
-                                        caption = (
-                                            state.generated_image_captions[i]
-                                            if i < len(state.generated_image_captions)
-                                            else ""
-                                        )
-                                        with me.box(
-                                            key=url,
-                                            on_click=on_thumbnail_click,
-                                            style=me.Style(
-                                                padding=me.Padding.all(4),
-                                                border=me.Border.all(
-                                                    me.BorderSide(
-                                                        width=4,
-                                                        style="solid",
-                                                        color=me.theme_var("secondary")
-                                                        if is_selected
-                                                        else "transparent",
-                                                    ),
-                                                ),
-                                                border_radius=12,
-                                                cursor="pointer",
-                                            ),
-                                        ):
-                                            me.image(
-                                                src=url,
-                                                alt=caption,
-                                                style=me.Style(
-                                                    width=100,
-                                                    height=100,
-                                                    object_fit="cover",
-                                                    border_radius=6,
-                                                ),
-                                            )
-
-                                if state.grounding_info:
-                                    with me.box(
-                                        style=me.Style(
-                                            margin=me.Margin(top=16),
-                                            width="100%",
-                                        ),
-                                    ):
-                                        _render_grounding_info(
-                                            state.grounding_info,
-                                            app_state.theme_mode,
-                                        )
-                else:
-                    # Placeholder
-                    with me.box(
-                        style=me.Style(
-                            opacity=0.2,
-                            width=128,
-                            height=128,
-                            color=me.theme_var("on-surface-variant"),
-                        ),
-                    ):
-                        svg_icon(icon_name="banana")
         snackbar(is_visible=state.show_snackbar, label=state.snackbar_message)
+
+
+def on_chip_image_model(e: me.WebEvent):
+    """Model chip: switch model and keep settings it supports."""
+    state = me.state(PageState)
+    value = change_value(e)
+    cfg = get_gemini_image_model_config(value)
+    if not cfg:
+        yield
+        return
+    state.selected_model = cfg.model_name
+    if state.aspect_ratio not in cfg.supported_aspect_ratios:
+        state.aspect_ratio = "1:1"
+    if state.image_size not in cfg.supported_image_sizes:
+        state.image_size = (
+            "1K" if "1K" in cfg.supported_image_sizes else cfg.supported_image_sizes[0]
+        )
+    if not cfg.supports_search:
+        state.use_search = False
+    yield
+
+
+def on_chip_image_aspect(e: me.WebEvent):
+    """Aspect ratio chip."""
+    me.state(PageState).aspect_ratio = change_value(e)
+    yield
+
+
+def on_chip_image_size(e: me.WebEvent):
+    """Image size chip."""
+    me.state(PageState).image_size = change_value(e)
+    yield
+
+
+def on_chip_image_count(e: me.WebEvent):
+    """Number-of-images chip."""
+    me.state(PageState).num_images_to_generate = int(change_value(e) or 0)
+    yield
+
+
+def on_chip_image_search(e: me.WebEvent):
+    """Search grounding toggle chip."""
+    me.state(PageState).use_search = change_value(e) == "true"
+    yield
+
+
+def on_image_prompt_enter(e: me.TextareaShortcutEvent):
+    """Enter in the prompt box: store the prompt and generate."""
+    state = me.state(PageState)
+    state.prompt = e.value
+    if state.is_generating:
+        yield
+        return
+    yield from generate_images(e)
+
+
+def on_click_enhance_image_prompt(e: me.ClickEvent):  # pylint: disable=unused-argument
+    """Rewrite the prompt with Gemini (uses attached images as context)."""
+    state = me.state(PageState)
+    if not state.prompt:
+        yield from show_snackbar(state, "Write a prompt first, then enhance it.")
+        return
+    state.is_enhancing = True
+    yield
+    try:
+        images = [
+            (uri, _guess_mime(uri))
+            for uri in state.uploaded_image_gcs_uris
+            if _guess_mime(uri).startswith("image/")
+        ]
+        state.prompt = rewriter(state.prompt, REWRITER_PROMPT, images=images)
+        state.prompt_key += 1
+    except Exception as ex:  # pylint: disable=broad-except
+        analytics_logger.error(f"Prompt enhancement failed: {ex}")
+        state.is_enhancing = False
+        yield from show_snackbar(
+            state, f"Couldn't enhance the prompt. {friendly_error(ex)}"
+        )
+        return
+    state.is_enhancing = False
+    yield
+
+
+def _guess_mime(uri: str) -> str:
+    lowered = uri.lower()
+    if lowered.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if lowered.endswith(".webp"):
+        return "image/webp"
+    if lowered.endswith(".pdf"):
+        return "application/pdf"
+    if lowered.endswith((".mp4", ".mov", ".webm", ".mkv")):
+        return "video/mp4"
+    return "image/png"
+
+
+def on_image_progress_retry(e: me.WebEvent):
+    """'Try again' on the progress card repeats the last request."""
+    state = me.state(PageState)
+    yield from _generate_and_save(
+        base_prompt=state.last_prompt or state.prompt,
+        input_gcs_uris=list(state.last_input_uris)
+        if state.last_prompt
+        else state.uploaded_image_gcs_uris,
+    )
+
+
+def on_image_progress_dismiss(e: me.WebEvent):  # pylint: disable=unused-argument
+    """Hide the progress card after an error."""
+    progress_clear(me.state(PageState))
+    yield
+
+
+def on_open_latest(e: me.ClickEvent):
+    """Open the latest image in the lightbox."""
+    me.state(PageState).lightbox_url = e.key
+    yield
+
+
+def on_close_image_lightbox(e: me.ClickEvent):  # pylint: disable=unused-argument
+    """Close the lightbox."""
+    me.state(PageState).lightbox_url = ""
+    yield
+
+
+def on_recent_image_action(e: me.WebEvent):
+    """Actions from a card in the Recent grid."""
+    state = me.state(PageState)
+    action, src = card_action(e)
+    if action == "open":
+        state.lightbox_url = src
+    elif action == "reuse":
+        if src in state.history_urls:
+            i = state.history_urls.index(src)
+            if i < len(state.history_prompts):
+                state.prompt = state.history_prompts[i]
+                state.prompt_key += 1
+    elif action == "edit":
+        state.selected_image_url = src
+        yield from on_continue_click(e)
+        return
+    elif action == "video":
+        gcs_uri = https_url_to_gcs_uri(src)
+        if gcs_uri.startswith("gs://"):
+            me.navigate(
+                url="/veo",
+                query_params={"image_path": gcs_uri.replace("gs://", "")},
+            )
+        else:
+            yield from show_snackbar(
+                state, "This image isn't saved in Cloud Storage yet."
+            )
+            return
+    yield
+
+
+def _remember_images(state: "PageState", prompt: str):
+    """Put new images at the front of the Recent grid."""
+    cfg = get_gemini_image_model_config(state.selected_model)
+    name = cfg.display_name if cfg else state.selected_model
+    meta = f"{name} · {state.aspect_ratio} · {state.image_size}"
+    for url in reversed(state.generated_image_urls):
+        state.history_urls.insert(0, url)
+        state.history_prompts.insert(0, prompt)
+        state.history_meta.insert(0, meta)
+        state.history_aspects.insert(0, state.aspect_ratio)
+
+
+def _mock_image_run(final_prompt: str):
+    """Dev-only: walk the stages with fake waits and placeholder pictures."""
+    state = me.state(PageState)
+    start_time = time.time()
+    progress_step(state, 1)
+    yield
+    time.sleep(0.6)
+    progress_step(state, 2)
+    yield
+    fake_wait(2.5, final_prompt)
+    progress_step(state, 3)
+    yield
+    time.sleep(0.5)
+    count = max(1, state.num_images_to_generate)
+    state.generated_image_urls = [
+        placeholder_image(final_prompt, state.aspect_ratio, i) for i in range(count)
+    ]
+    state.generated_image_captions = [final_prompt] * count
+    state.generated_resolution = state.image_size
+    state.selected_image_url = state.generated_image_urls[0]
+    state.generation_time = time.time() - start_time
+    _remember_images(state, final_prompt)
+    progress_done(state)
+    yield
 
 
 def on_upload(e: me.UploadEvent):
@@ -915,6 +971,8 @@ def on_clear_click(e: me.ClickEvent):
     state.previous_media_item_id = None  # Reset the chain
     state.num_images_to_generate = 0
     state.suggested_transformations = []
+    state.prompt_key += 1  # redraw the prompt box empty
+    progress_clear(state)
     yield
 
 
@@ -1098,10 +1156,20 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
 
     state.is_generating = True
     state.generation_complete = False
+    state.last_prompt = base_prompt
+    state.last_input_uris = list(input_gcs_uris)
+    progress_start(state, _image_stages(bool(input_gcs_uris)))
     yield
 
     start_time = time.time()
     try:
+        if mock_enabled():
+            yield from _mock_image_run(final_prompt)
+            return
+        progress_step(state, 1)
+        yield
+        progress_step(state, 2)
+        yield
         gcs_uris, execution_time, captions, grounding_info, all_thoughts = (
             generate_image_from_prompt_and_images(
                 prompt=final_prompt,
@@ -1119,6 +1187,8 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
             )
         )
 
+        progress_step(state, 3)
+        yield
         state.generation_time = execution_time
         state.grounding_info = json.dumps(grounding_info) if grounding_info else ""
         state.thoughts = all_thoughts[0] if all_thoughts else ""
@@ -1144,6 +1214,7 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
             )
             add_media_item_to_firestore(item)
             state.previous_media_item_id = item.id
+            progress_done(state)
             yield from show_snackbar(
                 state,
                 "No images were generated, but the attempt was logged to the library.",
@@ -1187,11 +1258,16 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
             )
             add_media_item_to_firestore(item)
             state.previous_media_item_id = item.id
+            _remember_images(state, final_prompt)
+            progress_done(state)
+            state.is_generating = False
+            state.generation_complete = True
             yield from show_snackbar(state, "Automatically saved to library.")
 
     except Exception as ex:
         execution_time = time.time() - start_time
         analytics_logger.error(f"Failed to generate images. Details: {ex}")
+        progress_fail(state, friendly_error(ex))
         item = MediaItem(
             prompt=final_prompt,
             mime_type="image/png",
@@ -1204,8 +1280,14 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
             error_message=str(ex),
             generation_time=execution_time,
         )
-        add_media_item_to_firestore(item)
-        state.previous_media_item_id = item.id
+        try:
+            add_media_item_to_firestore(item)
+            state.previous_media_item_id = item.id
+        except Exception as log_ex:  # pylint: disable=broad-except
+            # Keep the error card on screen even if the library is unreachable.
+            analytics_logger.error(f"Could not log the failed attempt: {log_ex}")
+        state.is_generating = False
+        state.generation_complete = True
         yield from show_snackbar(state, f"An error occurred: {ex}")
 
     finally:
@@ -1265,12 +1347,12 @@ def on_load(e: me.LoadEvent):
 
 @me.page(
     path="/gemini_image_generation",
-    title="Gemini Image Generation - GenMedia Creative Studio",
+    title="Image Studio - GenMedia Creative Studio",
     on_load=on_load,
 )
 @me.page(
     path="/nano-banana",
-    title="Gemini Image Generation - GenMedia Creative Studio",
+    title="Image Studio - GenMedia Creative Studio",
     on_load=on_load,
 )
 def page():
