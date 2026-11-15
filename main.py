@@ -71,7 +71,6 @@ from starlette.responses import Response
 
 import pages.brand_adherence
 import pages.character_sheet
-import pages.imagen_upscale
 import pages.shop_the_look
 import pages.story_studio
 import pages.storyboarder
@@ -115,7 +114,6 @@ from pages import gemini_tts as gemini_tts_page
 from pages import gemini_writers_workshop as gemini_writers_workshop_page
 from pages import guideline_analysis as guideline_analysis_page
 from pages import home as home_page
-from pages import imagen as imagen_page
 from pages import interior_design_v2 as interior_design_page
 from pages import lyria as lyria_page
 from pages import omni as omni_page

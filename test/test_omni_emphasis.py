@@ -32,7 +32,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
         "pages.banana_studio",
         "pages.gemini_image_generation",
         "pages.vto",
-        "components.imagen.image_output",
         "components.interior_design.design_studio",
         "components.library.image_details",
     ],
