@@ -1,0 +1,27 @@
+# Keep the image (and `gcloud run deploy --source` uploads) small: only what
+# the running app needs. Experiments, docs and tests are not part of the app.
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.claude
+.beads
+.env
+.env.*
+!.env.example
+
+archive/
+docs/
+docs-site/
+experiments/
+test/
+tools/
+scripts/
+deploy/
+terraform.tfvars*
+*.md
+!README.md

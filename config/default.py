@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+import functools
 import json
 import os
 from dataclasses import dataclass, field
@@ -362,6 +364,17 @@ validate_identity_config()
 
 
 def get_welcome_page_config():
+    """Visible nav pages, sorted by id.
+
+    Cached: the side nav calls this on every UI event, and the file and the
+    feature flags do not change while the server runs. Returns a fresh copy so
+    callers can't mutate the cache.
+    """
+    return copy.deepcopy(_load_welcome_page_config())
+
+
+@functools.lru_cache(maxsize=1)
+def _load_welcome_page_config():
     path = get_config_path("config/navigation.json")
     with open(path) as f:
         data = json.load(f)
