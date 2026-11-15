@@ -713,7 +713,7 @@ def test_phase2_appstate_source_reads_only_bridged_identity() -> None:
     """Source-level guarantee: state.py derives identity ONLY from the internal
     bridge environ key and never re-introduces a raw-header identity read
     (taint site B closed)."""
-    source = (Path(__file__).resolve().parents[1] / "state" / "state.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "src" / "state" / "state.py").read_text()
 
     assert "INTERNAL_VERIFIED_EMAIL_ENVIRON" in source
     assert "INTERNAL_SESSION_ID_ENVIRON" in source

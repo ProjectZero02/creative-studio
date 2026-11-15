@@ -38,10 +38,10 @@ from unittest import mock
 import pytest
 
 _CC_SOURCE_PATH = (
-    Path(__file__).resolve().parent.parent / "models" / "character_consistency.py"
+    Path(__file__).resolve().parent.parent / "src" / "models" / "character_consistency.py"
 )
 _CONFIG_SOURCE_PATH = (
-    Path(__file__).resolve().parent.parent / "config" / "default.py"
+    Path(__file__).resolve().parent.parent / "src" / "config" / "default.py"
 )
 
 

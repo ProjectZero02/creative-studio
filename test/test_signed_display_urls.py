@@ -230,7 +230,7 @@ def test_signed_display_url_round_trips_to_gcs_uri(signing):
 
 def test_media_tile_guards_empty_source():
     js = (
-        Path(__file__).parent.parent / "components/media_tile/media_tile.js"
+        Path(__file__).parent.parent / "src/components/media_tile/media_tile.js"
     ).read_text()
 
     assert "!this.thumbnailSrc" in js
