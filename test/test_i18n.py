@@ -61,6 +61,7 @@ def test_arabic_values_are_arabic_or_names():
     arabic = re.compile(r"[؀-ۿ]")
     names_only = {
         "lang.name.en",
+        "home.eyebrow",
         "nav.gemini_omni",
         "nav.gemini_tts",
         "nav.gemini_writers_workshop",

@@ -30,7 +30,8 @@ const MAX_LEN = 2000;
 
 class HomePrompt extends LitElement {
   static properties = {
-    modes: { type: Array }, // [{id, label, icon, placeholder, examples: []}]
+    modes: { type: Array }, // [{id, label, action, icon, placeholder, examples: []}]
+    strings: { type: Object }, // {what, describe, try} in the page language
     submitEvent: { type: String },
     _mode: { state: true },
     _text: { state: true },
@@ -39,6 +40,7 @@ class HomePrompt extends LitElement {
   constructor() {
     super();
     this.modes = [];
+    this.strings = {};
     this.submitEvent = '';
     this._mode = '';
     this._text = '';
@@ -217,6 +219,8 @@ class HomePrompt extends LitElement {
       box-shadow: 0 6px 20px rgba(60, 70, 220, 0.35);
       transition: transform 160ms ease, box-shadow 160ms ease;
     }
+    /* Right-to-left: the arrow points the reading way. */
+    .go:dir(rtl) .ico { transform: scaleX(-1); }
     .go:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(60, 70, 220, 0.42); }
 
     .examples {
@@ -279,7 +283,7 @@ class HomePrompt extends LitElement {
     const examples = cur.examples || [];
     return html`
       <div class="panel">
-        <div class="modes" role="radiogroup" aria-label="What to make">
+        <div class="modes" role="radiogroup" aria-label=${this.strings.what || 'What to make'}>
           ${this.modes.map(
             (m, i) => html`<button
               type="button"
@@ -295,25 +299,25 @@ class HomePrompt extends LitElement {
           )}
         </div>
         <div class="row">
-          <label class="sr" for="idea">Describe your idea</label>
+          <label class="sr" for="idea">${this.strings.describe || 'Describe your idea'}</label>
           <textarea
             id="idea"
             rows="1"
             maxlength=${MAX_LEN}
             .value=${this._text}
-            placeholder=${cur.placeholder || 'Describe your idea'}
+            placeholder=${cur.placeholder || this.strings.describe || 'Describe your idea'}
             @input=${this._onInput}
             @keydown=${this._onKey}
           ></textarea>
           <button type="button" class="go" @click=${this._submit}>
             <span class="ico" aria-hidden="true">arrow_forward</span>
-            Create ${cur.label ? cur.label.toLowerCase() : ''}
+            ${cur.action || 'Create ' + (cur.label || '').toLowerCase()}
           </button>
         </div>
       </div>
       ${examples.length
         ? html`<div class="examples">
-            <span class="examples-label">Try:</span>
+            <span class="examples-label">${this.strings.try || 'Try:'}</span>
             ${examples.map(
               (t) => html`<button type="button" class="ex" @click=${() => this._useExample(t)}>${t}</button>`,
             )}

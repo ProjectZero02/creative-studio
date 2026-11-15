@@ -292,11 +292,11 @@ class UserMenu extends LitElement {
     const switchLabel = L.switch || 'Switch to Arabic (العربية)';
     const accountLabel = (L.account_of || 'Account: {name}').replace('{name}', label);
     return html`
-      ${this.langEvent ? html`
+      ${html`
         <button class="lang-btn" type="button" @click=${this._lang}
           aria-label=${switchLabel} title=${switchLabel}>
           ${GLOBE}<span lang=${other}>${otherName}</span>
-        </button>` : nothing}
+        </button>`}
       <button class="trigger" type="button" aria-haspopup="true"
         aria-expanded=${this._open ? 'true' : 'false'}
         aria-label=${accountLabel} @click=${this._toggle}>

@@ -222,6 +222,9 @@ class CapabilityCard extends LitElement {
       transform: translateX(3px);
       color: var(--sys-primary, #1a5fd8);
     }
+    /* Right-to-left: mirror the arrow and nudge it the other way. */
+    a:dir(rtl) .arrow { transform: scaleX(-1); }
+    a:dir(rtl):hover .arrow { transform: scaleX(-1) translateX(3px); }
     .desc {
       font-size: 13.5px;
       line-height: 1.45;

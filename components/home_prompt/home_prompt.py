@@ -22,6 +22,7 @@ import mesop as me
 def home_prompt(
     *,
     modes: list[dict],
+    strings: dict | None = None,
     on_submit: typing.Callable[[me.WebEvent], None] | None = None,
     key: str | None = None,
 ):
@@ -29,6 +30,6 @@ def home_prompt(
     return me.insert_web_component(
         key=key,
         name="home-prompt",
-        properties={"modes": modes},
+        properties={"modes": modes, "strings": strings or {}},
         events={"submitEvent": on_submit},
     )

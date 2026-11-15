@@ -21,6 +21,7 @@ import mesop as me
 from components.capability_card.capability_card import capability_card
 from components.home_prompt.home_prompt import home_prompt
 from components.page_scaffold import page_frame, page_scaffold
+from common.i18n import route_key, t, tr
 from config.default import get_welcome_page_config
 from state.state import AppState
 
@@ -140,6 +141,35 @@ CARD_BADGES = {
     "/lyria": "Lyria 3",
 }
 
+
+def _badge(route: str) -> str:
+    """The card badge in the current language (model names stay as they are)."""
+    text = CARD_BADGES.get(route, "")
+    if route == "/story":
+        return t("home.badge.story", text)
+    if text.endswith(" · New"):
+        return text[: -len("New")] + t("home.badge.new", "New")
+    return text
+
+
+def _localized_modes(modes: list[dict]) -> list[dict]:
+    """Prompt modes with labels, placeholders and examples in the current language."""
+    out = []
+    for m in modes:
+        k = f"home.mode.{m['id']}"
+        out.append(
+            {
+                **m,
+                "label": tr(f"{k}.label", m["label"]),
+                "action": tr(f"{k}.action", f"Create {m['label'].lower()}"),
+                "placeholder": tr(f"{k}.placeholder", m["placeholder"]),
+                "examples": [
+                    tr(f"{k}.ex{i + 1}", ex) for i, ex in enumerate(m["examples"])
+                ],
+            }
+        )
+    return out
+
 _POSTER_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "ui", "posters")
 
 
@@ -182,21 +212,38 @@ def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
 
 
 def _hero(enabled_routes: set):
-    modes = [m for m in PROMPT_MODES if m["route"] in enabled_routes]
+    modes = _localized_modes([m for m in PROMPT_MODES if m["route"] in enabled_routes])
     with me.box(classes="gm-home-hero"):
         with me.box(classes="gm-home-eyebrow"):
-            me.text("Google Cloud · Vertex AI")
+            me.text(t("home.eyebrow", "Google Cloud · Vertex AI"))
         with me.box(classes="gm-title gm-home-title"):
-            me.markdown("# Google's creative AI, in one studio")
+            me.markdown("# " + tr("home.title", "Google's creative AI, in one studio"))
         with me.box(classes="gm-home-lede"):
-            me.text("Turn one idea into images, video, voice and music, or a finished short film.")
+            me.text(
+                tr(
+                    "home.lede",
+                    "Turn one idea into images, video, voice and music, or a finished short film.",
+                )
+            )
         if modes:
             with me.box(classes="gm-home-prompt"):
-                home_prompt(key="home-prompt", modes=modes, on_submit=on_prompt_submit)
+                home_prompt(
+                    key="home-prompt",
+                    modes=modes,
+                    strings={
+                        "what": t("home.prompt.what", "What to make"),
+                        "describe": t("home.prompt.describe", "Describe your idea"),
+                        "try": t("home.prompt.try", "Try:"),
+                    },
+                    on_submit=on_prompt_submit,
+                )
 
 
 def _section(group_name: str, items: list[dict]):
     title, blurb = SECTIONS.get(group_name, (group_name.title(), ""))
+    key = {"foundation": "home.create", "workflows": "home.demos"}.get(group_name)
+    if key:
+        title, blurb = tr(key, title), tr(f"{key}_sub", blurb)
     media = group_name == "foundation"
     with me.box(classes="gm-home-section"):
         with me.box(classes="gm-home-section-head"):
@@ -213,12 +260,14 @@ def _section(group_name: str, items: list[dict]):
                 with me.box(classes=cell):
                     capability_card(
                         key=f"card-{route}",
-                        label=page_data.get("display", ""),
+                        label=tr(f"nav.{route_key(route)}", page_data.get("display", "")),
                         route=route,
-                        description=page_data.get("description", ""),
+                        description=tr(
+                            f"nav.{route_key(route)}.desc", page_data.get("description", "")
+                        ),
                         icon=page_data.get("icon", ""),
                         icon_family=page_data.get("icon_family", ""),
-                        mode=CARD_BADGES.get(route, "") if media else "",
+                        mode=_badge(route) if media else "",
                         video_url=page_data.get("video_url", "") if media else "",
                         poster=poster_for(page_data.get("video_url", "")) if media else "",
                         video_object_position=page_data.get("video_object_position", "center"),
