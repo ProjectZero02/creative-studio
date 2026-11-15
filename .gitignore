@@ -96,3 +96,6 @@ bin/
 
 # local provider lock (platform-specific hashes); owner re-inits at their venue
 .terraform.lock.hcl
+
+# Story Studio demo mode data (stories.json, generated media)
+.local/
