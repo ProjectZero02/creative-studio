@@ -22,6 +22,7 @@ from components.styles import (
     PAGE_BACKGROUND_STYLE,
 )
 from components.theme_manager.theme_manager import theme_manager
+from components.user_menu.user_menu import user_menu_bar
 
 def on_theme_load(e: me.WebEvent):
     s = me.state(AppState)
@@ -65,6 +66,7 @@ def page_scaffold(page_name: str):
                 overflow_y="auto",
             ),
         ):
+            user_menu_bar()
             me.slot()
 
 

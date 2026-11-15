@@ -17,6 +17,7 @@ import datetime
 import inspect
 import os
 import uuid
+from urllib.parse import quote
 
 try:
     import urllib3.contrib.pyopenssl
@@ -78,6 +79,8 @@ from common.identity import (
     ANONYMOUS_USER_EMAIL,
     INTERNAL_SESSION_ID_HEADER,
     INTERNAL_VERIFIED_EMAIL_HEADER,
+    INTERNAL_VERIFIED_NAME_HEADER,
+    INTERNAL_VERIFIED_ROLE_HEADER,
     LOCAL_APP_ENVS,
     set_internal_scope_headers,
 )
@@ -91,8 +94,11 @@ from common.http_security import (
     should_send_hsts,
 )
 from common.prompt_template_service import PromptTemplate
+from common.user_store import bootstrap_admin
 from common.utils import create_display_url, https_url_to_gcs_uri
 from common.verified_identity import (
+    AUTH_MODE_SESSION,
+    auth_mode,
     get_verified_user_identity,
     validate_serving_environment,
 )
@@ -130,7 +136,9 @@ from pages.test_pixie_compositor import test_pixie_compositor_page
 from pages.test_svg import test_svg_page
 from pages.test_uploader import test_uploader_page
 from pages.test_vto_prompt_generator import page as test_vto_prompt_generator_page
-from routers import veo_router
+from pages import admin_users as admin_users_page
+from routers import auth_router, veo_router
+from routers.auth_router import session_gate
 from state.state import AppState
 from workflows.retro_games import page as retro_games
 
@@ -171,6 +179,14 @@ validate_serving_environment()
 # FastAPI server with Mesop
 router = APIRouter()
 app.include_router(router)
+
+# Sign-in pages (/login, /logout). They only act when AUTH_MODE=session.
+app.include_router(auth_router.router)
+if auth_mode() == AUTH_MODE_SESSION:
+    try:
+        bootstrap_admin()
+    except Exception as exc:  # noqa: BLE001 - don't crash boot on a store outage
+        print(f"Could not create the first admin: {type(exc).__name__}: {exc}")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -328,7 +344,19 @@ async def set_request_context(request: Request, call_next):
     identity = await run_in_threadpool(get_verified_user_identity, request.headers)
     user_email = identity.email if identity else ANONYMOUS_USER_EMAIL
 
-    if (
+    if auth_mode() == AUTH_MODE_SESSION:
+        # App sign-in: no session -> /login (page loads) or 401 (API/XHR);
+        # /admin/* needs the admin role. See routers/auth_router.session_gate.
+        denied = session_gate(
+            identity,
+            request.method,
+            request.url.path,
+            request.url.query,
+            request.headers.get("accept"),
+        )
+        if denied is not None:
+            return denied
+    elif (
         config.Default.REQUIRE_AUTHENTICATED_USER
         and identity is None
         and not _is_public_path(request.url.path)
@@ -362,6 +390,12 @@ async def set_request_context(request: Request, call_next):
         {
             INTERNAL_VERIFIED_EMAIL_HEADER: user_email,
             INTERNAL_SESSION_ID_HEADER: session_id,
+            # Role/name only exist in session mode; always set (possibly empty)
+            # so a client-supplied copy is stripped in every mode.
+            INTERNAL_VERIFIED_ROLE_HEADER: (identity.role or "") if identity else "",
+            INTERNAL_VERIFIED_NAME_HEADER: quote(
+                (identity.name or "") if identity else ""
+            ),
         },
     )
 
