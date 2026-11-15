@@ -49,6 +49,29 @@ Every leading studio pairs generation with a shot list or timeline, reusable cha
 
 Phase 2 needs a GCP project to test against real Vertex AI. The code can be built with mocked tests first.
 
+## Built so far (2026-11-15)
+
+- **Shell:** theme, side nav (floating menu button on phones), page header, home with quick starts.
+- **Sign-in** (`AUTH_MODE=session`): split-screen `/login`, signed session cookie, scrypt passwords, admin and user roles, `/admin/users`, avatar menu. Users in Firestore `studio_users`.
+- **Story Studio** (`/story`, Phase 2 #1, #2 and #5): Stories → Create → Scenario → Storyboard → Editor → Video, live progress per scene, camera presets, MoviePy stitching with music and voiceover. Demo mode runs locally with no cloud calls.
+- **Image Studio and Video Studio** (`/nano-banana`, `/veo`): prompt composer with setting chips, stage-by-stage progress, result cards with actions.
+- **Cloud Run quickstart:** `deploy/quickstart/` (not run).
+
+## First live test (after the owner deploys)
+
+1. Sign in as the bootstrap admin, add a user, sign out and in as that user.
+2. Image Studio: generate, edit with a reference image, send to Video Studio.
+3. Video Studio: text, image, first + last frame and references modes; extend.
+4. Story Studio, real mode: a 3-scene film end to end (Gemini scenario, storyboard frames, Veo clips, Lyria, voiceover, stitch, library).
+5. Library shows everything; the credential-dependent tests pass with ADC.
+
+## Follow-ups
+
+- Self-host Lit instead of loading it from jsdelivr: the chip menus paint late on a cold phone load (Video Studio lab LCP 4.2–4.6 s at 390 px; 1 s on desktop).
+- Story Studio jobs live in memory on one instance: move to Cloud Tasks or a job record in Firestore before heavy use.
+- Change-password-on-first-sign-in; session expiry while a page is open shows an error until reload.
+- Phase 2 #3 (characters library), #4 (captions), #6 (background removal).
+
 ## Needs the owner later
 
 - A GCP project with billing, for a real end-to-end test (Vertex AI, Firestore, GCS). Core has a pending `gcp` request. Until then, generation can't be tested. Only the UI is checked locally.
@@ -58,7 +81,10 @@ Phase 2 needs a GCP project to test against real Vertex AI. The code can be buil
 | Page | Before | After |
 |---|---|---|
 | /home | 3 errors, 2 warnings; 390 px rendered blank | 0 errors; left: no `<main>` landmark (Mesop can't set roles), lab LCP |
-| /veo | 3 errors | 0 errors; left: small tap targets and labels on phones (composer redesign in progress) |
+| /veo (Video Studio) | 3 errors | 0 errors on desktop; phone lab LCP 4.2–4.6 s (see Follow-ups) |
+| /nano-banana (Image Studio) | 1 error, 2 warnings | 0 errors, 1 warning (no `<main>`) |
+| /story | 1 error, 2 warnings | 0 errors, 1 warning (no `<main>`); Video step: Tab gets stuck in the native player |
+| /login | 1 warning (small show-password button) | 0 warnings |
 | /lyria | 0 errors, 4 warnings; cards squeezed side by side at 390 | 0 errors, 3 warnings; cards stack, full width on phones |
 | /library_v2 | 0 errors, 2 warnings; filters ran off-screen at 390 | 0 errors, 2 warnings; filters wrap, empty state with next step |
 
