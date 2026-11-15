@@ -169,7 +169,6 @@ class CapabilityCard extends LitElement {
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.02em;
-      text-transform: capitalize;
       color: #fff;
       background: rgba(10, 12, 16, 0.62);
       backdrop-filter: blur(6px);
@@ -229,8 +228,9 @@ class CapabilityCard extends LitElement {
       border-radius: 12px;
       display: grid;
       place-items: center;
-      background: var(--sys-primary-container, #dce7fd);
-      color: var(--sys-on-primary-container, #0a2a66);
+      /* Quiet tile: a light wash of the accent, not a solid block. */
+      background: color-mix(in srgb, var(--sys-primary, #1a5fd8) 12%, transparent);
+      color: var(--sys-primary, #1a5fd8);
       font-family: 'Material Symbols Rounded', 'Material Icons';
       font-size: 24px;
       font-feature-settings: 'liga';

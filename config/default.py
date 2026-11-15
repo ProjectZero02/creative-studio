@@ -245,11 +245,7 @@ class Default:
     LYRIA_PROJECT_ID: str = os.environ.get("LYRIA_PROJECT_ID", PROJECT_ID)
     MEDIA_BUCKET: str = os.environ.get("MEDIA_BUCKET", f"{PROJECT_ID}-assets")
 
-    # Imagen
-    MODEL_IMAGEN4 = "imagen-4.0-generate-001"
-    MODEL_IMAGEN4_FAST = "imagen-4.0-fast-generate-001"
-    MODEL_IMAGEN4_ULTRA = "imagen-4.0-ultra-generate-001"
-
+    # Image output folders (names kept for stored media paths).
     IMAGEN_GENERATED_SUBFOLDER: str = os.environ.get(
         "IMAGEN_GENERATED_SUBFOLDER",
         "generated_images",
@@ -258,8 +254,6 @@ class Default:
         "IMAGEN_EDITED_SUBFOLDER",
         "edited_images",
     )
-
-    IMAGEN_PROMPTS_JSON = "prompts/imagen_prompts.json"
 
     USE_MEDIA_PROXY: bool = os.environ.get("USE_MEDIA_PROXY", "true").lower() == "true"
 
@@ -296,8 +290,18 @@ class Default:
     # lookup `getattr(Default, "EDIT_IMAGES_ENABLED", False)` fell back to False
     # and the page was hidden only implicitly. Defining it here makes that intent
     # explicit while still allowing an operator to opt in via the environment.
+    # This fork shows it as "Product 360" in Industry demos, so it is on by default.
     EDIT_IMAGES_ENABLED: bool = (
-        os.environ.get("EDIT_IMAGES_ENABLED", "false").lower() == "true"
+        os.environ.get("EDIT_IMAGES_ENABLED", "true").lower() == "true"
+    )
+
+    # Pages merged into others or kept only for reference (Gemini Omni, Gemini TTS,
+    # Chirp 3 HD, Writers Workshop, Virtual Try-On, Shop the Look, Motion Portraits,
+    # Character Consistency, Storyboarder, Pixie Compositor, Labs, About, Settings)
+    # stay reachable by URL but are left out of the menu and home page unless this
+    # is true. See config/navigation.json (feature_flag SHOW_LEGACY_PAGES).
+    SHOW_LEGACY_PAGES: bool = (
+        os.environ.get("SHOW_LEGACY_PAGES", "false").lower() == "true"
     )
 
     OBJECT_ROTATION_VIDEO_MODEL: str = os.environ.get(
@@ -400,7 +404,7 @@ def get_welcome_page_config():
 @functools.lru_cache(maxsize=1)
 def _load_welcome_page_config():
     path = get_config_path("config/navigation.json")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     # This will raise a validation error if the JSON is malformed

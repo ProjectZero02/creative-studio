@@ -279,8 +279,9 @@ html body .gm-page > * { animation: gm-fade-up var(--gm-med) var(--gm-ease); }
 @media (max-width: 760px) {
   html body .gm-hero { padding: 22px 18px !important; border-radius: 16px !important; }
   html body .gm-quick > * { flex: 1 1 100%; }
-  html body .gm-quick .mdc-button,
-  html body .gm-quick .mat-mdc-button-base { width: 100%; }
+  html body .gm-quick > component-renderer > .mdc-button,
+  html body .gm-quick > * > .mat-mdc-button-base { width: 100%; }
+  html body .gm-quick-links { justify-content: center; }
   html body .gm-header .mat-headline-1 { font-size: 22px !important; }
 }
 

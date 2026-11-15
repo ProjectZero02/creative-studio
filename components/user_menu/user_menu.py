@@ -31,6 +31,7 @@ def _user_menu(
     dark: bool,
     show_sign_out: bool,
     show_users: bool,
+    show_settings: bool = False,
     on_theme: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     key: str | None = None,
 ):
@@ -44,6 +45,7 @@ def _user_menu(
             "dark": dark,
             "showSignOut": show_sign_out,
             "showUsers": show_users,
+            "showSettings": show_settings,
         },
         events={"themeEvent": on_theme},
     )
@@ -83,5 +85,6 @@ def user_menu_bar():
             dark=me.theme_brightness() == "dark",
             show_sign_out=session_mode,
             show_users=session_mode and s.user_role == "admin",
+            show_settings=(not session_mode) or s.user_role == "admin",
             on_theme=on_theme,
         )

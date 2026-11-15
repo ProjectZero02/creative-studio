@@ -15,31 +15,32 @@
       "group": "foundation",
       "mode": "video",
       "description": "Generate and edit videos from text, images, or base video inputs using Gemini Omni.",
-      "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/FfbFqJ8qhY_ZWZyz/gemini-omni__page-cover__hero.webm"
+      "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/FfbFqJ8qhY_ZWZyz/gemini-omni__page-cover__hero.webm",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 8,
-      "display": "Gemini Image Generation",
+      "display": "Image Studio",
       "icon": "spark",
       "icon_family": "Google Symbols",
       "route": "/nano-banana",
       "group": "foundation",
       "mode": "image",
-      "description": "Generate images from text prompts using Gemini.",
+      "description": "Create and edit images with Nano Banana.",
       "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/gemini-image__page-cover.mp4"
     },
     {
       "id": 10,
-      "display": "Veo",
+      "display": "Video Studio",
       "icon": "movie_filter",
       "route": "/veo",
       "group": "foundation",
       "mode": "video",
-      "description": "Generate videos from text or image prompts using Veo.",
-      "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/veo__cover_s0RKXWX.mp4"
+      "description": "Make video from a prompt, a picture or two frames.",
+      "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/FfbFqJ8qhY_ZWZyz/gemini-omni__page-cover__hero.webm"
     },
     {
-      "id": 14,
+      "id": 200,
       "display": "Gemini TTS",
       "icon": "spark",
       "route": "/gemini-tts",
@@ -47,17 +48,18 @@
       "mode": "speech",
       "description": "Gemini's latest Text to Speech mode",
       "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/lyria_header.mp4",
-      "video_object_position": "bottom"
+      "video_object_position": "bottom",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 16,
-      "display": "Lyria",
+      "display": "Music",
       "icon": "music_note",
       "route": "/lyria",
       "group": "foundation",
       "feature_flag": "LYRIA_PROJECT_ID",
       "mode": "music",
-      "description": "Generate music from text prompts using Lyria.",
+      "description": "Original music, with or without lyrics.",
       "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/lyria_header.mp4",
       "video_object_position": "bottom"
     },
@@ -70,7 +72,8 @@
       "mode": "text",
       "description": "Collaborate with Gemini in the Writers Workshop",
       "video_url": "https://storage.googleapis.com/gweb-uniblog-publish-prod/original_videos/capability__native-audio_16-9.mp4",
-      "video_object_position": "bottom"
+      "video_object_position": "bottom",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 20,
@@ -81,29 +84,21 @@
       "mode": "speech",
       "description": "Generate high-definition speech from text using Chirp 3.",
       "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/lyria_realtime_header.mp4",
-      "video_object_position": "bottom"
+      "video_object_position": "bottom",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
-      "id": 22,
-      "display": "Imagen",
-      "icon": "image",
-      "route": "/imagen",
-      "group": "foundation",
-      "mode": "image",
-      "description": "Generate images from text prompts using Imagen.",
-      "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/imagen__page_cover.mp4"
-    },
-    {
-      "id": 25,
+      "id": 12,
       "display": "Story Studio",
       "icon": "auto_stories",
       "route": "/story",
-      "group": "workflows",
+      "group": "foundation",
       "mode": "video",
-      "description": "Turn an idea into a finished film, step by step: scenario, storyboard, clips, music and voiceover."
+      "description": "One idea to a finished film, with music and voice.",
+      "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/veo__cover_s0RKXWX.mp4"
     },
     {
-      "id": 30,
+      "id": 201,
       "display": "Virtual Try-On",
       "icon": "checkroom",
       "route": "/vto",
@@ -112,16 +107,17 @@
         "video",
         "image"
       ],
-      "description": "Virtually try on clothing items."
+      "description": "Virtually try on clothing items.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
-      "id": 35,
-      "display": "Starter Pack",
+      "id": 33,
+      "display": "Brand kit",
       "icon": "style",
       "route": "/starter-pack",
       "group": "workflows",
       "mode": "image",
-      "description": "Generate a starter pack of images for a concept."
+      "description": "A set of on-brand images from one campaign idea."
     },
     {
       "id": 50,
@@ -130,7 +126,8 @@
       "route": "/motion_portraits",
       "group": "workflows",
       "mode": "video",
-      "description": "Create animated portraits from a still image."
+      "description": "Create animated portraits from a still image.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 55,
@@ -142,7 +139,8 @@
         "image",
         "video"
       ],
-      "description": "Create consistent characters across multiple images and videos."
+      "description": "Create consistent characters across multiple images and videos.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 56,
@@ -154,16 +152,17 @@
         "image",
         "video"
       ],
-      "description": "Create a 'shop the look' experience from a model and clothing."
+      "description": "Create a 'shop the look' experience from a model and clothing.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
-      "id": 57,
-      "display": "Interior Design",
+      "id": 32,
+      "display": "Interiors",
       "icon": "chair",
       "route": "/interior_design",
       "group": "workflows",
       "mode": "image",
-      "description": "Generate 3D views from floor plans."
+      "description": "A floor plan to furnished rooms and a walkthrough."
     },
     {
       "id": 58,
@@ -175,16 +174,16 @@
         "image",
         "video"
       ],
-      "description": "Create multi-scene narrative video storyboards."
+      "description": "Create multi-scene narrative video storyboards.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
-      "id": 60,
-      "display": "Object Rotation",
+      "id": 31,
+      "display": "Product 360",
       "icon": "360",
       "route": "/object-rotation",
       "group": "workflows",
-      "feature_flag": "EDIT_IMAGES_ENABLED",
-      "description": "Create 360-degree product videos from a single image."
+      "description": "Turn one product photo into a 360° turntable video."
     },
     {
       "id": 70,
@@ -204,7 +203,8 @@
         "image",
         "video"
       ],
-      "description": "Pixie helps you combine generative media."
+      "description": "Pixie helps you combine generative media.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 85,
@@ -217,7 +217,8 @@
         "image",
         "video"
       ],
-      "description": "Odd things are bubbling."
+      "description": "Odd things are bubbling.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 95,
@@ -226,7 +227,8 @@
       "route": "/about",
       "align": "bottom",
       "group": "studio",
-      "description": "Information about GenMedia Creative Studio."
+      "description": "Information about GenMedia Creative Studio.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {
       "id": 99,
@@ -235,7 +237,25 @@
       "route": "/config",
       "align": "bottom",
       "group": "studio",
-      "description": "Configure application settings."
+      "description": "Configure application settings.",
+      "feature_flag": "SHOW_LEGACY_PAGES"
+    },
+    {
+      "id": 14,
+      "display": "Voice",
+      "icon": "record_voice_over",
+      "route": "/voice",
+      "group": "foundation",
+      "description": "Natural speech in 130+ languages with Gemini TTS.",
+      "video_url": "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/lyria_realtime_header.mp4"
+    },
+    {
+      "id": 30,
+      "display": "Fashion",
+      "icon": "checkroom",
+      "route": "/fashion",
+      "group": "workflows",
+      "description": "Dress a model in any outfit, or build a shop-the-look set."
     }
   ]
 }

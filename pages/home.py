@@ -52,29 +52,29 @@ def on_quick_start(e: me.ClickEvent):
         me.navigate(e.key)
 
 
-GROUP_ORDER = ["foundation", "workflows", "studio"]
+# The library lives in the side menu, so the home page shows only these two.
+GROUP_ORDER = ["foundation", "workflows"]
 
 SECTIONS = {
-    "foundation": ("Models", "Google's generative models. Open one to try it with your own prompt."),
-    "workflows": ("Workflows", "Ready-made flows that combine models for a real task."),
-    "studio": ("Studio", "Everything you've made, and tools to edit it."),
+    "foundation": ("Create", "Google's latest models for images, video, film, voice and music."),
+    "workflows": ("Industry demos", "Ready-made flows for retail, products, real estate and marketing."),
 }
 
-# Quick starts shown under the hero: (label, route, icon). Only routes that are
-# enabled in navigation.json are shown.
-QUICK_STARTS = [
-    ("Generate an image", "/nano-banana", "image"),
-    ("Create a video", "/veo", "movie"),
-    ("Make a short film", "/story", "movie_filter"),
-    ("Make music", "/lyria", "music_note"),
-    ("Open library", "/library_v2", "photo_library"),
+# Small label on each Create card: the model behind it.
+CARD_BADGES = {
+    "/nano-banana": "Nano Banana 2.1",
+    "/veo": "Gemini Omni 1.2 · New",
+    "/story": "Idea to film",
+    "/voice": "Gemini 3.8 TTS · New",
+    "/lyria": "Lyria 3",
+}
+
+# Hero: one main action and two quiet links. Only enabled routes are shown.
+PRIMARY_START = ("Make a short film", "/story", "movie_filter")
+SECONDARY_STARTS = [
+    ("Create an image", "/nano-banana"),
+    ("Create a video", "/veo"),
 ]
-
-
-def _mode_label(mode: str) -> str:
-    """'image,video' -> 'Image + video'."""
-    parts = [p.strip() for p in (mode or "").split(",") if p.strip()]
-    return " + ".join(parts).capitalize() if parts else ""
 
 
 def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
@@ -110,7 +110,7 @@ def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
                     style=me.Style(
                         display="grid",
                         grid_template_columns=(
-                            "repeat(auto-fill, minmax(260px, 1fr))"
+                            "repeat(auto-fit, minmax(200px, 1fr))"
                             if media
                             else "repeat(auto-fill, minmax(280px, 1fr))"
                         ),
@@ -125,7 +125,7 @@ def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
                             description=page_data.get("description", ""),
                             icon=page_data.get("icon", ""),
                             icon_family=page_data.get("icon_family", ""),
-                            mode=_mode_label(page_data.get("mode", "")),
+                            mode=CARD_BADGES.get(page_data.get("route", ""), "") if media else "",
                             video_url=page_data.get("video_url", "") if media else "",
                             video_object_position=page_data.get("video_object_position", "center"),
                             size="media" if media else "compact",
@@ -157,9 +157,9 @@ def _hero(enabled_routes: set):
                 ),
             )
             with me.box(classes="gm-title gm-title-hero"):
-                me.markdown("# Create images, video, music and speech with Google's generative AI")
+                me.markdown("# Google's creative AI, in one studio")
             me.text(
-                "Pick a model to try it with your own prompt, or start from a workflow. "
+                "Turn one idea into images, video, voice and music, or a finished short film. "
                 "Everything you make is saved to your library.",
                 style=me.Style(
                     font_size=16,
@@ -167,19 +167,31 @@ def _hero(enabled_routes: set):
                     color=me.theme_var("on-surface-variant"),
                 ),
             )
-        with me.box(classes="gm-quick", style=me.Style(display="flex", flex_wrap="wrap", gap=10)):
-            first = True
-            for label, route, icon in QUICK_STARTS:
-                if route not in enabled_routes:
-                    continue
+        with me.box(
+            classes="gm-quick",
+            style=me.Style(display="flex", flex_wrap="wrap", align_items="center", gap=16),
+        ):
+            label, route, icon = PRIMARY_START
+            if route in enabled_routes:
                 with me.content_button(
                     key=route,
-                    type="flat" if first else "stroked",
-                    color="primary" if first else None,
+                    type="flat",
+                    color="primary",
                     on_click=on_quick_start,
-                    style=me.Style(height=44, padding=me.Padding.symmetric(horizontal=18)),
+                    style=me.Style(height=48, padding=me.Padding.symmetric(horizontal=22)),
                 ):
                     with me.box(style=me.Style(display="flex", align_items="center", gap=8)):
                         me.icon(icon, style=me.Style(font_size=20, width=20, height=20))
-                        me.text(label, style=me.Style(font_size=14, font_weight=500))
-                first = False
+                        me.text(label, style=me.Style(font_size=15, font_weight=600))
+            links = [(lbl, r) for lbl, r in SECONDARY_STARTS if r in enabled_routes]
+            if links:
+                with me.box(
+                    classes="gm-quick-links",
+                    style=me.Style(display="flex", align_items="center", gap=4, flex_wrap="wrap"),
+                ):
+                    me.text(
+                        "or",
+                        style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
+                    )
+                    for lbl, r in links:
+                        me.button(lbl, key=r, on_click=on_quick_start, style=me.Style(height=44))

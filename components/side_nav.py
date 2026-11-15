@@ -25,9 +25,9 @@ from state.state import AppState
 cfg = Default()
 
 GROUP_LABELS = {
-    "foundation": "Models",
-    "workflows": "Workflows",
-    "studio": "Studio",
+    "foundation": "Create",
+    "workflows": "Industry demos",
+    "studio": "Your work",
 }
 
 # Page names (as passed to page_scaffold) that differ from their nav route.

@@ -32,6 +32,7 @@ class UserMenu extends LitElement {
     dark: { type: Boolean },
     showSignOut: { type: Boolean },
     showUsers: { type: Boolean },
+    showSettings: { type: Boolean },
     themeEvent: { type: String },
     _open: { state: true },
   };
@@ -44,6 +45,7 @@ class UserMenu extends LitElement {
     this.dark = false;
     this.showSignOut = false;
     this.showUsers = false;
+    this.showSettings = false;
     this.themeEvent = '';
     this._open = false;
     this._onDocClick = (e) => {
@@ -261,6 +263,15 @@ class UserMenu extends LitElement {
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 1.9 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg>
               <span class="grow">Users</span>
             </a>` : nothing}
+          ${this.showSettings ? html`
+            <a class="item" href="/config">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.9a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 3.5-3.5 3.5 3.5 0 0 1-3.5 3.5z"/></svg>
+              <span class="grow">Settings</span>
+            </a>` : nothing}
+          <a class="item" href="/about">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17h2v-6h-2zm1-15a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm-1-11h2V7h-2z"/></svg>
+            <span class="grow">About</span>
+          </a>
           ${this.showSignOut ? html`
             <hr>
             <form method="post" action="/logout">
