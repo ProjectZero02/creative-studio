@@ -56,6 +56,11 @@ Phase 2 needs a GCP project to test against real Vertex AI. The code can be buil
 - **Story Studio** (`/story`, Phase 2 #1, #2 and #5): Stories → Create → Scenario → Storyboard → Editor → Video, live progress per scene, camera presets, MoviePy stitching with music and voiceover. Demo mode runs locally with no cloud calls.
 - **Image Studio and Video Studio** (`/nano-banana`, `/veo`): prompt composer with setting chips, stage-by-stage progress, result cards with actions.
 - **Cloud Run quickstart:** `deploy/quickstart/` (not run).
+- **Ten-item menu** (customer audit, 2026-11-15): Create (Image Studio, Video Studio, Story Studio, Voice, Music), Industry demos (Fashion, Product 360, Interiors, Brand kit), Library. About and Settings live in the avatar menu. Merged and older pages stay reachable but hidden; `SHOW_LEGACY_PAGES=true` shows them.
+- **Video Studio** runs Gemini Omni 1.2 Flash by default, Veo 3.1 as an option; `/gemini-omni` redirects there.
+- **Fashion** (`/fashion`) combines Virtual try-on and Shop the look; `/vto` and `/shop_the_look` still work.
+- **Voice** (`/voice`) combines Gemini 3.8 Flash TTS and Chirp 3 HD; `/gemini-tts` and `/chirp-3hd` redirect there.
+- **Removed:** the retired Imagen 3/4 and Imagen upscale pages, models and tests (Google retired them 2026-06-30).
 
 ## First live test (after the owner deploys)
 
@@ -70,6 +75,9 @@ Phase 2 needs a GCP project to test against real Vertex AI. The code can be buil
 - Self-host Lit instead of loading it from jsdelivr: the chip menus paint late on a cold phone load (Video Studio lab LCP 4.2–4.6 s at 390 px; 1 s on desktop).
 - Story Studio jobs live in memory on one instance: move to Cloud Tasks or a job record in Firestore before heavy use.
 - Change-password-on-first-sign-in; session expiry while a page is open shows an error until reload.
+- Virtual Try-On (`virtual-try-on-001`) retires 2027-03-15: move Fashion's try-on to Nano Banana before then.
+- Omni's "typical time" on the progress bar is a 90 s guess: replace with measured times after the first live runs.
+- Hidden legacy pages are still imported at start-up; drop the ones nobody opens after the first demos to cut cold-start time.
 - Phase 2 #3 (characters library), #4 (captions), #6 (background removal).
 
 ## Needs the owner later
