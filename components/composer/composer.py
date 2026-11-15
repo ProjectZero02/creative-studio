@@ -26,6 +26,8 @@ import typing
 
 import mesop as me
 
+from common.i18n import t, tx
+
 ENTER = me.Shortcut(key="Enter")
 
 
@@ -64,24 +66,37 @@ def composer(
     on_blur: typing.Callable[[me.InputBlurEvent], typing.Any],
     on_submit: typing.Callable[[me.TextareaShortcutEvent], typing.Any],
     on_click_send: typing.Callable[[me.ClickEvent], typing.Any],
-    placeholder: str = "Describe what you want to create…",
+    placeholder: str | None = None,
     on_enhance: typing.Callable[[me.ClickEvent], typing.Any] | None = None,
-    enhance_label: str = "Enhance prompt",
+    enhance_label: str | None = None,
     busy: bool = False,
     enhancing: bool = False,
-    send_label: str = "Generate",
+    send_label: str | None = None,
     textarea_key: str = "composer_prompt",
-    hint: str = "Enter to generate · Shift+Enter for a new line",
+    hint: str | None = None,
     render_top: typing.Callable[[], None] | None = None,
     on_clear: typing.Callable[[me.ClickEvent], typing.Any] | None = None,
-    clear_label: str = "Clear prompt and results",
+    clear_label: str | None = None,
 ):
     """Render the composer card. Children are rendered in the chip row.
 
     `on_submit` receives the textarea value on Enter, so the page can store it
     and start generating in one step. `render_top` draws reference images
     above the prompt (uploads, first/last frame...).
+
+    Text left as None uses the shared wording in the current language; English
+    text a page passes is translated when common/i18n.py knows it (`tx`).
+    Pass hint="" to hide the hint.
     """
+    placeholder = (
+        tx(placeholder) if placeholder is not None else t("composer.placeholder")
+    )
+    enhance_label = (
+        tx(enhance_label) if enhance_label is not None else t("composer.enhance")
+    )
+    send_label = tx(send_label) if send_label is not None else t("composer.send")
+    hint = tx(hint) if hint is not None else t("composer.hint")
+    clear_label = tx(clear_label) if clear_label is not None else t("composer.clear")
     with me.box(classes="gm-composer" + (" gm-busy" if busy else "")):
         if render_top:
             render_top()
@@ -143,7 +158,7 @@ def composer(
                     ):
                         me.progress_spinner(diameter=22, stroke_width=3)
                         with me.box(classes="gm-sr-only"):
-                            me.text("Generating")
+                            me.text(t("composer.generating"))
                 else:
                     composer_icon_button(
                         icon="arrow_upward",
@@ -172,4 +187,4 @@ def composer_attachment(
                 with me.content_button(type="icon", on_click=on_remove, key=str(index)):
                     me.icon("close")
                     with me.box(classes="gm-sr-only"):
-                        me.text(f"Remove {label}")
+                        me.text(t("composer.remove", label=label))

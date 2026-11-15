@@ -28,6 +28,7 @@ import json
 import mesop as me
 from flask import request
 
+from common.i18n import plural, t
 from common.identity import (
     INTERNAL_VERIFIED_EMAIL_ENVIRON,
     INTERNAL_VERIFIED_ROLE_ENVIRON,
@@ -330,7 +331,7 @@ def dismiss_notice(e: me.ClickEvent):  # pylint: disable=unused-argument
 # --------------------------------------------------------------------------- #
 def _fmt(ts: str) -> str:
     if not ts:
-        return "Never"
+        return t("admin.never")
     try:
         dt = datetime.datetime.fromisoformat(ts)
     except ValueError:
@@ -357,7 +358,7 @@ def _cell_text(text: str, *, muted: bool = False, strong: bool = False):
 
 def _status_pill(active: bool):
     me.text(
-        "Active" if active else "Disabled",
+        t("admin.active") if active else t("admin.disabled"),
         style=me.Style(
             display="inline-block",
             padding=me.Padding.symmetric(vertical=2, horizontal=10),
@@ -392,14 +393,14 @@ def _row(user: dict, me_email: str):
         ),
     ):
         _cell_text(user.get("name") or "-", strong=True)
-        _cell_text(email + (" (you)" if is_self else ""), muted=True)
+        _cell_text(email + (t("admin.you") if is_self else ""), muted=True)
         me.select(
             key=email,
-            label="Role",
+            label=t("admin.role"),
             appearance="outline",
             options=[
-                me.SelectOption(label="Admin", value=ROLE_ADMIN),
-                me.SelectOption(label="User", value=ROLE_USER),
+                me.SelectOption(label=t("admin.role_admin"), value=ROLE_ADMIN),
+                me.SelectOption(label=t("admin.role_user"), value=ROLE_USER),
             ],
             value=user.get("role", ROLE_USER),
             disabled=is_self,
@@ -411,9 +412,14 @@ def _row(user: dict, me_email: str):
         _cell_text(_fmt(user.get("created_at", "")), muted=True)
         _cell_text(_fmt(user.get("last_login", "")), muted=True)
         with me.box(style=me.Style(display="flex", gap=4, flex_wrap="wrap")):
-            me.button("Reset password", key=email, on_click=open_reset, type="stroked")
             me.button(
-                "Disable" if user.get("active") else "Enable",
+                t("admin.reset_password"),
+                key=email,
+                on_click=open_reset,
+                type="stroked",
+            )
+            me.button(
+                t("admin.disable") if user.get("active") else t("admin.enable"),
                 key=email,
                 on_click=toggle_active,
                 type="flat" if not user.get("active") else "stroked",
@@ -431,17 +437,17 @@ def _header_row():
             background=me.theme_var("surface-container"),
         ),
     ):
-        for label in (
-            "Name",
-            "Email",
-            "Role",
-            "Status",
-            "Created",
-            "Last sign-in",
-            "Actions",
+        for key in (
+            "admin.col_name",
+            "admin.col_email",
+            "admin.col_role",
+            "admin.col_status",
+            "admin.col_created",
+            "admin.col_last",
+            "admin.col_actions",
         ):
             me.text(
-                label,
+                t(key),
                 style=me.Style(
                     font_size=12,
                     font_weight=600,
@@ -471,14 +477,14 @@ def _banner(text: str, *, error: bool):
         ),
     ):
         me.text(text, style=me.Style(font_size=14, word_wrap="break-word"))
-        me.button("Dismiss", on_click=dismiss_notice, type="flat")
+        me.button(t("admin.dismiss"), on_click=dismiss_notice, type="flat")
 
 
 def _add_dialog(state: AdminUsersState):
     with dialog(is_open=state.add_open, key="add-user-dialog"):  # pylint: disable=not-context-manager
-        me.text("Add user", type="headline-6")
+        me.text(t("admin.add_user"), type="headline-6")
         me.text(
-            "They sign in with this email and the temporary password.",
+            t("admin.add_help"),
             style=me.Style(
                 font_size=14,
                 color=me.theme_var("on-surface-variant"),
@@ -486,14 +492,14 @@ def _add_dialog(state: AdminUsersState):
             ),
         )
         me.input(
-            label="Name",
+            label=t("admin.name"),
             value=state.add_name,
             on_blur=on_add_name,
             appearance="outline",
             style=me.Style(width="100%"),
         )
         me.input(
-            label="Email",
+            label=t("admin.email"),
             value=state.add_email,
             on_blur=on_add_email,
             type="email",
@@ -501,11 +507,11 @@ def _add_dialog(state: AdminUsersState):
             style=me.Style(width="100%"),
         )
         me.select(
-            label="Role",
+            label=t("admin.role"),
             appearance="outline",
             options=[
-                me.SelectOption(label="User: can use the studio", value=ROLE_USER),
-                me.SelectOption(label="Admin: can also manage users", value=ROLE_ADMIN),
+                me.SelectOption(label=t("admin.role_user_long"), value=ROLE_USER),
+                me.SelectOption(label=t("admin.role_admin_long"), value=ROLE_ADMIN),
             ],
             value=state.add_role,
             on_selection_change=on_add_role,
@@ -513,28 +519,28 @@ def _add_dialog(state: AdminUsersState):
         )
         with me.box(style=me.Style(display="flex", gap=8, align_items="center")):
             me.input(
-                label="Temporary password",
+                label=t("admin.temp_password"),
                 value=state.add_password,
                 on_blur=on_add_password,
                 appearance="outline",
                 style=me.Style(flex_grow=1),
             )
-            me.button("New", on_click=new_add_password, type="stroked")
+            me.button(t("admin.new"), on_click=new_add_password, type="stroked")
         if state.add_error:
             me.text(
                 state.add_error,
                 style=me.Style(color=me.theme_var("error"), font_size=14),
             )
         with dialog_actions():  # pylint: disable=not-context-manager
-            me.button("Cancel", on_click=close_add)
-            me.button("Add user", on_click=submit_add, type="flat")
+            me.button(t("admin.cancel"), on_click=close_add)
+            me.button(t("admin.add_user"), on_click=submit_add, type="flat")
 
 
 def _reset_dialog(state: AdminUsersState):
     with dialog(is_open=state.reset_open, key="reset-dialog"):  # pylint: disable=not-context-manager
-        me.text("Reset password", type="headline-6")
+        me.text(t("admin.reset_password"), type="headline-6")
         me.text(
-            f"Set a new password for {state.reset_email}. Their current sessions end.",
+            t("admin.reset_help", email=state.reset_email),
             style=me.Style(
                 font_size=14,
                 color=me.theme_var("on-surface-variant"),
@@ -542,7 +548,7 @@ def _reset_dialog(state: AdminUsersState):
             ),
         )
         me.input(
-            label="New password",
+            label=t("admin.new_password"),
             value=state.reset_password,
             on_blur=on_reset_password,
             appearance="outline",
@@ -554,8 +560,8 @@ def _reset_dialog(state: AdminUsersState):
                 style=me.Style(color=me.theme_var("error"), font_size=14),
             )
         with dialog_actions():  # pylint: disable=not-context-manager
-            me.button("Cancel", on_click=close_reset)
-            me.button("Reset password", on_click=submit_reset, type="flat")
+            me.button(t("admin.cancel"), on_click=close_reset)
+            me.button(t("admin.reset_password"), on_click=submit_reset, type="flat")
 
 
 def admin_users_content():
@@ -568,7 +574,7 @@ def admin_users_content():
             description="Add people, set their role and reset passwords. Only admins see this page.",
         )
         if admin is None:
-            _banner(ADMIN_ONLY, error=True)
+            _banner(t("admin.only_admins"), error=True)
             return
 
         if state.error:
@@ -598,13 +604,13 @@ def admin_users_content():
         ):
             with me.box(style=me.Style(flex="1 1 260px", max_width=420)):
                 me.input(
-                    label="Search by name or email",
+                    label=t("admin.search"),
                     value=state.search,
                     on_input=on_search,
                     appearance="outline",
                     style=me.Style(width="100%"),
                 )
-            me.button("Add user", on_click=open_add, type="flat")
+            me.button(t("admin.add_user"), on_click=open_add, type="flat")
 
         with me.box(
             style=me.Style(
@@ -624,11 +630,12 @@ def admin_users_content():
             if not users:
                 with me.box(style=me.Style(padding=me.Padding.all(24))):
                     _cell_text(
-                        "No users match." if query else "No users yet.", muted=True,
+                        t("admin.no_match") if query else t("admin.no_users"),
+                        muted=True,
                     )
 
         me.text(
-            f"{len(users)} user{'s' if len(users) != 1 else ''}",
+            plural("admin.count", len(users)),
             style=me.Style(
                 font_size=13,
                 color=me.theme_var("on-surface-variant"),

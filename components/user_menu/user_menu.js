@@ -21,8 +21,15 @@
  * switch, a "Users" link for admins and "Sign out" (a real POST form to
  * /logout, so it works without Mesop). Escape or a click outside closes it and
  * focus goes back to the avatar.
+ *
+ * A globe button sits next to the avatar and switches English / Arabic in one
+ * click. It is labelled in the other language ("العربية" while in English,
+ * "English" while in Arabic) so a speaker of that language can find it. The
+ * panel has the same switch. Text comes from Python (`labels`, JSON).
  */
 import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+
+const GLOBE = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4a14 14 0 0 1 1.9 4h-3.8A14 14 0 0 1 12 4zM4.3 14a8.2 8.2 0 0 1 0-4h3.4a16.5 16.5 0 0 0 0 4zm.8 2h2.9a15.7 15.7 0 0 0 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6A15.7 15.7 0 0 0 8 8zm4 12a14 14 0 0 1-1.9-4h3.8A14 14 0 0 1 12 20zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6a15.7 15.7 0 0 0 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.7-5.6a16.5 16.5 0 0 0 0-4h3.4a8.2 8.2 0 0 1 0 4z"/></svg>`;
 
 class UserMenu extends LitElement {
   static properties = {
@@ -33,7 +40,10 @@ class UserMenu extends LitElement {
     showSignOut: { type: Boolean },
     showUsers: { type: Boolean },
     showSettings: { type: Boolean },
+    lang: { type: String },
+    labels: { type: String },
     themeEvent: { type: String },
+    langEvent: { type: String },
     _open: { state: true },
   };
 
@@ -46,7 +56,10 @@ class UserMenu extends LitElement {
     this.showSignOut = false;
     this.showUsers = false;
     this.showSettings = false;
+    this.lang = 'en';
+    this.labels = '{}';
     this.themeEvent = '';
+    this.langEvent = '';
     this._open = false;
     this._onDocClick = (e) => {
       if (this._open && !e.composedPath().includes(this)) this._close(false);
@@ -74,7 +87,9 @@ class UserMenu extends LitElement {
   static styles = css`
     :host {
       position: relative;
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-family: var(--gm-font, 'Google Sans', system-ui, sans-serif);
       color: var(--sys-on-surface, #15171c);
     }
@@ -103,6 +118,27 @@ class UserMenu extends LitElement {
       cursor: pointer;
     }
     .trigger .avatar { width: 36px; height: 36px; font-size: 14px; }
+    .lang-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 40px;
+      min-width: 44px;
+      padding: 0 14px;
+      border: 1px solid var(--sys-outline-variant, #d6dae1);
+      border-radius: 999px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .lang-btn:hover { background: var(--sys-surface-container-high, #e6e9ee); }
+    .lang-btn svg { width: 18px; height: 18px; flex: none; fill: currentColor; opacity: 0.85; }
+    @media (max-width: 420px) {
+      .lang-btn { padding: 0 10px; }
+    }
     .trigger:hover .avatar { box-shadow: 0 0 0 3px var(--sys-surface-container-high, #e6e9ee); }
     button:focus-visible, a:focus-visible {
       outline: 2px solid var(--sys-primary, #1a5fd8);
@@ -111,7 +147,7 @@ class UserMenu extends LitElement {
     .panel {
       position: absolute;
       top: calc(100% + 6px);
-      right: 0;
+      inset-inline-end: 0;
       z-index: 1000;
       width: 300px;
       max-width: calc(100vw - 24px);
@@ -165,7 +201,7 @@ class UserMenu extends LitElement {
       color: inherit;
       font: inherit;
       font-size: 14px;
-      text-align: left;
+      text-align: start;
       text-decoration: none;
       cursor: pointer;
       box-sizing: border-box;
@@ -173,6 +209,7 @@ class UserMenu extends LitElement {
     .item:hover { background: var(--sys-surface-container-high, #e6e9ee); }
     .item svg { width: 20px; height: 20px; flex: none; fill: currentColor; opacity: 0.85; }
     .item .grow { flex: 1; }
+    .item .value { font-size: 13px; color: var(--sys-on-surface-variant, #4b515d); white-space: nowrap; }
     .switch {
       position: relative;
       width: 36px;
@@ -186,20 +223,28 @@ class UserMenu extends LitElement {
       content: '';
       position: absolute;
       top: 2px;
-      left: 2px;
+      inset-inline-start: 2px;
       width: 16px;
       height: 16px;
       border-radius: 50%;
       background: var(--sys-surface, #fff);
-      transition: transform 160ms;
+      transition: inset-inline-start 160ms;
     }
     .switch.on { background: var(--sys-primary, #1a5fd8); }
-    .switch.on::after { transform: translateX(16px); }
+    .switch.on::after { inset-inline-start: 18px; }
     form { margin: 0; }
     @media (prefers-reduced-motion: reduce) {
       .switch, .switch::after { transition: none; }
     }
   `;
+
+  get _l() {
+    try {
+      return JSON.parse(this.labels || '{}') || {};
+    } catch (_) {
+      return {};
+    }
+  }
 
   _initials() {
     const source = (this.name || this.email || '?').trim();
@@ -231,53 +276,76 @@ class UserMenu extends LitElement {
     this.dispatchEvent(new MesopEvent(this.themeEvent, { dark: !this.dark }));
   }
 
+  _lang() {
+    if (!this.langEvent) return;
+    this.dispatchEvent(new MesopEvent(this.langEvent, { lang: this.lang === 'ar' ? 'en' : 'ar' }));
+  }
+
   render() {
     const initials = this._initials();
     const label = this.name || this.email;
     const isAdmin = this.role === 'admin';
+    const L = this._l;
+    const other = this.lang === 'ar' ? 'en' : 'ar';
+    const otherName = L[`name.${other}`] || (other === 'ar' ? 'العربية' : 'English');
+    const thisName = L[`name.${this.lang}`] || (this.lang === 'ar' ? 'العربية' : 'English');
+    const switchLabel = L.switch || 'Switch to Arabic (العربية)';
+    const accountLabel = (L.account_of || 'Account: {name}').replace('{name}', label);
     return html`
+      ${this.langEvent ? html`
+        <button class="lang-btn" type="button" @click=${this._lang}
+          aria-label=${switchLabel} title=${switchLabel}>
+          ${GLOBE}<span lang=${other}>${otherName}</span>
+        </button>` : nothing}
       <button class="trigger" type="button" aria-haspopup="true"
         aria-expanded=${this._open ? 'true' : 'false'}
-        aria-label=${`Account: ${label}`} @click=${this._toggle}>
+        aria-label=${accountLabel} @click=${this._toggle}>
         <span class="avatar" aria-hidden="true">${initials}</span>
       </button>
       ${this._open ? html`
-        <div class="panel" role="group" aria-label="Account">
+        <div class="panel" role="group" aria-label=${L.account || 'Account'}>
           <div class="who">
             <span class="avatar" aria-hidden="true">${initials}</span>
             <div class="who-text">
               ${this.name ? html`<span class="name">${this.name}</span>` : nothing}
               <span class="email">${this.email}</span>
-              ${this.role ? html`<span class="badge ${isAdmin ? 'admin' : ''}">${isAdmin ? 'Admin' : 'User'}</span>` : nothing}
+              ${this.role ? html`<span class="badge ${isAdmin ? 'admin' : ''}">${isAdmin ? (L.admin || 'Admin') : (L.user || 'User')}</span>` : nothing}
             </div>
           </div>
           <hr>
           <button class="item" type="button" role="switch"
             aria-checked=${this.dark ? 'true' : 'false'} @click=${this._theme}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
-            <span class="grow">Dark mode</span>
+            <span class="grow">${L.dark_mode || 'Dark mode'}</span>
             <span class="switch ${this.dark ? 'on' : ''}" aria-hidden="true"></span>
           </button>
+          ${this.langEvent ? html`
+            <button class="item" type="button" @click=${this._lang}
+              aria-label=${`${L.label || 'Language'}: ${thisName}. ${switchLabel}`}>
+              ${GLOBE}
+              <span class="grow">${L.label || 'Language'}</span>
+              <span class="value"><span lang="en">English</span> / <span lang="ar">العربية</span></span>
+            </button>` : nothing}
           ${this.showUsers ? html`
             <a class="item" href="/admin/users">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 1.9 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg>
-              <span class="grow">Users</span>
+              <span class="grow">${L.users || 'Users'}</span>
             </a>` : nothing}
           ${this.showSettings ? html`
             <a class="item" href="/config">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.9a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 3.5-3.5 3.5 3.5 0 0 1-3.5 3.5z"/></svg>
-              <span class="grow">Settings</span>
+              <span class="grow">${L.settings || 'Settings'}</span>
             </a>` : nothing}
           <a class="item" href="/about">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17h2v-6h-2zm1-15a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm-1-11h2V7h-2z"/></svg>
-            <span class="grow">About</span>
+            <span class="grow">${L.about || 'About'}</span>
           </a>
           ${this.showSignOut ? html`
             <hr>
             <form method="post" action="/logout">
               <button class="item" type="submit">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l1.4-1.4-2.6-2.6H20v-2H8.8l2.6-2.6L10 7l-5 5zM4 5h8V3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8v-2H4z"/></svg>
-                <span class="grow">Sign out</span>
+                <span class="grow">${L.sign_out || 'Sign out'}</span>
               </button>
             </form>` : nothing}
         </div>` : nothing}

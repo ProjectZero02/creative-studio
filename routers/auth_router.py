@@ -29,6 +29,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from starlette.concurrency import run_in_threadpool
 
 from common import session_auth as sa
+from common.i18n import (
+    LANG_COOKIE,
+    LANGS,
+    is_rtl,
+    lang_from_accept_language,
+    other_lang,
+    tl,
+)
 from common.passwords import burn_time, verify_password
 from common.user_store import ROLE_ADMIN, get_user_store, normalize_email
 from common.verified_identity import AUTH_MODE_SESSION, auth_mode
@@ -39,7 +47,8 @@ router = APIRouter(include_in_schema=False)
 
 FONT_CSS = (
     "https://fonts.googleapis.com/css2?"
-    "family=Google+Sans:opsz,wght@17..18,400..700&display=swap"
+    "family=Google+Sans:opsz,wght@17..18,400..700"
+    "&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap"
 )
 
 BRAND_MARK = """<svg class="brand-mark" viewBox="0 0 36 36" aria-hidden="true">
@@ -56,8 +65,8 @@ _TILES = """
       <path d="M0 150 L70 92 L120 128 L178 74 L300 152 L300 188 L0 188Z" fill="#1d3361"/>
       <path d="M0 170 L90 128 L160 160 L230 124 L300 168 L300 188 L0 188Z" fill="#274580"/>
     </svg>
-    <span class="tile-label">Image</span>
-    <span class="tile-sub">Gemini Image and Imagen</span>
+    <span class="tile-label">{tile_image}</span>
+    <span class="tile-sub">{tile_image_sub}</span>
   </div>
   <div class="tile tile-video">
     <svg class="art" viewBox="0 0 300 88" preserveAspectRatio="xMidYMid slice">
@@ -66,7 +75,7 @@ _TILES = """
       <rect x="198" y="14" width="40" height="60" rx="6"/><rect x="246" y="14" width="40" height="60" rx="6"/></g>
       <path d="M212 34 L228 44 L212 54Z" fill="#8cb4ff"/>
     </svg>
-    <span class="tile-label">Video</span>
+    <span class="tile-label">{tile_video}</span>
     <span class="tile-sub">Veo</span>
   </div>
   <div class="tile tile-music">
@@ -77,7 +86,7 @@ _TILES = """
       <rect x="208" y="16" width="8" height="54" rx="4"/><rect x="224" y="36" width="8" height="34" rx="4"/>
       <rect x="240" y="26" width="8" height="44" rx="4"/><rect x="256" y="44" width="8" height="26" rx="4"/></g>
     </svg>
-    <span class="tile-label">Music</span>
+    <span class="tile-label">{tile_music}</span>
     <span class="tile-sub">Lyria</span>
   </div>
   <div class="tile tile-speech">
@@ -86,19 +95,19 @@ _TILES = """
       <polyline fill="none" stroke="#3b64b0" stroke-width="3" stroke-linecap="round"
         points="300,44 316,30 332,58 348,22 364,66 380,36 396,52 412,26 428,62 444,40 460,48 476,32 492,56 508,42 524,46 540,38 556,50 572,44 604,44"/>
     </svg>
-    <span class="tile-label">Speech</span>
-    <span class="tile-sub">Gemini TTS and Chirp 3 HD</span>
+    <span class="tile-label">{tile_speech}</span>
+    <span class="tile-sub">{tile_speech_sub}</span>
   </div>
 </div>
 """
 
 _PAGE = """<!doctype html>
-<html lang="en">
+<html lang="{lang}" dir="{dir}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Sign in | GenMedia Studio</title>
+<title>{s_title}</title>
 <link rel="icon" href="/favicon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -110,38 +119,43 @@ _PAGE = """<!doctype html>
   <aside class="auth-visual">
     <div class="brand">{brand_mark}<span>GenMedia Studio</span></div>
     <div class="visual-copy">
-      <h2>Create with Google's generative media models.</h2>
-      <p>Image, video, music and speech on Vertex AI, in one studio.</p>
+      <h2>{s_visual_title}</h2>
+      <p>{s_visual_body}</p>
     </div>
     {tiles}
-    <p class="visual-foot">Your work stays in your own Google Cloud project.</p>
+    <p class="visual-foot">{s_visual_foot}</p>
   </aside>
   <main class="auth-main">
+    <button type="button" class="lang-switch" id="lang-switch" data-lang="{other_lang}"
+      aria-label="{s_switch}" title="{s_switch}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4a14 14 0 0 1 1.9 4h-3.8A14 14 0 0 1 12 4zM4.3 14a8.2 8.2 0 0 1 0-4h3.4a16.5 16.5 0 0 0 0 4zm.8 2h2.9a15.7 15.7 0 0 0 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6A15.7 15.7 0 0 0 8 8zm4 12a14 14 0 0 1-1.9-4h3.8A14 14 0 0 1 12 20zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6a15.7 15.7 0 0 0 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.7-5.6a16.5 16.5 0 0 0 0-4h3.4a8.2 8.2 0 0 1 0 4z"/></svg>
+      <span lang="{other_lang}">{s_other_name}</span>
+    </button>
     <div class="auth-card">
       <div class="brand">{brand_mark}<span>GenMedia Studio</span></div>
-      <h1>Welcome back</h1>
-      <p class="lead">Sign in to GenMedia Studio.</p>
+      <h1>{s_welcome}</h1>
+      <p class="lead">{s_lead}</p>
       <form method="post" action="/login" autocomplete="on">
         <input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="next" value="{next}">
         <div class="field">
-          <label for="email">Email</label>
+          <label for="email">{s_email}</label>
           <input id="email" name="email" type="email" required autocomplete="username"
             inputmode="email" spellcheck="false" value="{email}"{invalid}{autofocus_email}>
         </div>
         <div class="field">
-          <label for="password">Password</label>
+          <label for="password">{s_password}</label>
           <div class="input-wrap">
             <input id="password" name="password" type="password" required
               autocomplete="current-password"{invalid}{autofocus_password}>
             <button type="button" class="reveal" id="reveal" aria-controls="password"
-              aria-pressed="false">Show<span class="sr-only"> password</span></button>
+              aria-pressed="false" data-show="{s_show}" data-hide="{s_hide}">{s_show}<span class="sr-only">{s_sr_password}</span></button>
           </div>
         </div>
-        <button type="submit" class="submit">Sign in</button>
+        <button type="submit" class="submit">{s_submit}</button>
         <p class="error" id="form-error" role="alert"{error_hidden}>{error}</p>
       </form>
-      <p class="help">No account yet? Ask your studio admin to add you.</p>
+      <p class="help">{s_help}</p>
     </div>
   </main>
 </div>
@@ -153,7 +167,17 @@ _PAGE = """<!doctype html>
     var show = p.type === 'password';
     p.type = show ? 'text' : 'password';
     b.setAttribute('aria-pressed', show ? 'true' : 'false');
-    b.firstChild.nodeValue = show ? 'Hide' : 'Show';
+    b.firstChild.nodeValue = show ? b.dataset.hide : b.dataset.show;
+  }});
+}})();
+(function () {{
+  var s = document.getElementById('lang-switch');
+  if (!s) return;
+  s.addEventListener('click', function () {{
+    var lang = s.dataset.lang;
+    try {{ localStorage.setItem('lang', lang); }} catch (e) {{}}
+    document.cookie = '{cookie}=' + lang + '; path=/; max-age=31536000; samesite=lax';
+    window.location.reload();
   }});
 }})();
 </script>
@@ -162,19 +186,68 @@ _PAGE = """<!doctype html>
 """
 
 
+def request_lang(request: Request) -> str:
+    """The saved language (cookie), else the browser's Accept-Language."""
+    saved = request.cookies.get(LANG_COOKIE, "")
+    if saved in LANGS:
+        return saved
+    return lang_from_accept_language(request.headers.get("accept-language"))
+
+
+_LOGIN_KEYS = (
+    "title",
+    "visual_title",
+    "visual_body",
+    "visual_foot",
+    "welcome",
+    "lead",
+    "email",
+    "password",
+    "show",
+    "hide",
+    "sr_password",
+    "submit",
+    "help",
+)
+_TILE_KEYS = (
+    "tile_image",
+    "tile_image_sub",
+    "tile_video",
+    "tile_music",
+    "tile_speech",
+    "tile_speech_sub",
+)
+
+
 def render_login_page(
     *,
     csrf: str,
     next_path: str,
     email: str = "",
     error: str = "",
+    lang: str = "en",
 ) -> str:
     """Return the sign-in page HTML. Every dynamic value is escaped."""
     has_error = bool(error)
+    lang = lang if lang in LANGS else "en"
+    other = other_lang(lang)
+
+    def esc(key: str) -> str:
+        return html.escape(tl(lang, key), quote=True)
+
+    strings = {f"s_{k}": esc(f"login.{k}") for k in _LOGIN_KEYS}
+    tiles = _TILES.format(**{k: esc(f"login.{k}") for k in _TILE_KEYS})
     return _PAGE.format(
         font_css=html.escape(FONT_CSS, quote=True),
         brand_mark=BRAND_MARK,
-        tiles=_TILES,
+        tiles=tiles,
+        lang=lang,
+        dir="rtl" if is_rtl(lang) else "ltr",
+        other_lang=other,
+        s_other_name=esc(f"lang.name.{other}"),
+        s_switch=esc("lang.switch"),
+        cookie=LANG_COOKIE,
+        **strings,
         csrf=html.escape(csrf, quote=True),
         next=html.escape(next_path, quote=True),
         email=html.escape(email, quote=True),
@@ -201,10 +274,17 @@ def _login_response(
     error: str = "",
     status_code: int = 200,
 ) -> HTMLResponse:
-    """Render the form with a fresh CSRF token (cookie + hidden field)."""
+    """Render the form with a fresh CSRF token (cookie + hidden field).
+
+    `error` is an i18n key (login.err_*) or plain text.
+    """
     token = sa.new_csrf_token()
+    lang = request_lang(request)
+    message = tl(lang, error) if error.startswith("login.") else error
     response = HTMLResponse(
-        render_login_page(csrf=token, next_path=next_path, email=email, error=error),
+        render_login_page(
+            csrf=token, next_path=next_path, email=email, error=message, lang=lang
+        ),
         status_code=status_code,
     )
     response.set_cookie(
@@ -267,7 +347,7 @@ async def login_submit(request: Request):
             request,
             next_path=next_path,
             email=email,
-            error="This page expired. Please sign in again.",
+            error="login.err_expired",
             status_code=400,
         )
 
@@ -278,7 +358,7 @@ async def login_submit(request: Request):
             request,
             next_path=next_path,
             email=email,
-            error="Too many tries. Wait 5 minutes, then try again.",
+            error="login.err_too_many",
             status_code=429,
         )
 
@@ -291,7 +371,7 @@ async def login_submit(request: Request):
             request,
             next_path=next_path,
             email=email,
-            error=sa.GENERIC_LOGIN_ERROR,
+            error="login.err_generic",
             status_code=401,
         )
 

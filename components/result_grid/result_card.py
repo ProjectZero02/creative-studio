@@ -13,9 +13,34 @@
 # limitations under the License.
 """Python API for <gm-result-card> and a simple results grid wrapper."""
 
+import json
 import typing
 
 import mesop as me
+
+from common.i18n import current_lang, plural, tl, tx
+
+_CARD_KEYS = (
+    "download",
+    "open",
+    "reuse",
+    "video",
+    "extend",
+    "edit",
+    "edit_video",
+    "upscale",
+    "actions",
+    "play",
+    "open_item",
+    "generated",
+)
+
+
+def card_labels(lang: str) -> str:
+    """Action names and screen-reader text for the card, as JSON."""
+    return json.dumps(
+        {k: tl(lang, f"card.{k}") for k in _CARD_KEYS}, ensure_ascii=False
+    )
 
 
 def card_action(e: me.WebEvent) -> tuple[str, str]:
@@ -36,6 +61,7 @@ def result_card(
     selected: bool = False,
     on_action: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     key: str | None = None,
+    labels: str | None = None,
 ):
     """One generated item. `actions` is a comma list of:
     open, download, reuse, edit, video (image to video), extend (video),
@@ -52,6 +78,7 @@ def result_card(
             "aspect": aspect,
             "actions": actions,
             "selected": selected,
+            "labels": labels if labels is not None else card_labels(current_lang()),
         },
         events={"actionEvent": on_action},
     )
@@ -63,10 +90,10 @@ def empty_results(icon: str, title: str, body: str = ""):
     with me.box(classes="gm-empty"):
         with me.box(classes="gm-empty-icon"):
             me.icon(icon)
-        me.text(title, style=me.Style(font_size=16, font_weight=500))
+        me.text(tx(title), style=me.Style(font_size=16, font_weight=500))
         if body:
             me.text(
-                body,
+                tx(body),
                 style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
             )
 
@@ -77,10 +104,10 @@ def result_grid(*, title: str = "Recent", count: int = 0, wide: bool = False):
     with me.box(classes="gm-results"):
         with me.box(classes="gm-results-head"):
             with me.box(classes="gm-title gm-title-section"):
-                me.markdown("## " + title)
+                me.markdown("## " + tx(title))
             if count:
                 me.text(
-                    f"{count} item{'s' if count != 1 else ''} this session",
+                    plural("results.count", count),
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),

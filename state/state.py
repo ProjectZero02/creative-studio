@@ -17,6 +17,7 @@ from urllib.parse import unquote
 import mesop as me
 from flask import request
 
+from common.i18n import LANG_COOKIE, LANGS, lang_from_accept_language
 from common.identity import (
     ANONYMOUS_USER_EMAIL,
     INTERNAL_SESSION_ID_ENVIRON,
@@ -35,6 +36,12 @@ class AppState:
     # True once the user picked light/dark (toggle or a saved choice). Until
     # then the app follows the system setting (see common/ui_theme.py).
     theme_chosen: bool = False
+    # Interface language ("en" or "ar", see common/i18n.py). Saved like the
+    # theme (localStorage via components/lang_manager, plus a cookie so the
+    # first render and the /login page already use it). Until the user picks,
+    # it follows the browser language.
+    lang: str = "en"
+    lang_chosen: bool = False
     user_email: str = "anonymous@google.com"
     session_id: str = ""
     current_page: str = ""
@@ -67,6 +74,15 @@ class AppState:
         self.user_name = unquote(
             request.environ.get(INTERNAL_VERIFIED_NAME_ENVIRON, "")
         )
+        # Display preference only (never used for authorization).
+        saved = request.cookies.get(LANG_COOKIE, "")
+        if saved in LANGS:
+            self.lang = saved
+            self.lang_chosen = True
+        else:
+            self.lang = lang_from_accept_language(
+                request.headers.get("Accept-Language", "")
+            )
 
 
 def theme_toggle_button():
