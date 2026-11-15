@@ -57,4 +57,9 @@ Phase 2 needs a GCP project to test against real Vertex AI. The code can be buil
 
 | Page | Before | After |
 |---|---|---|
-| /home | 3 errors, 2 warnings; 390 px rendered blank | |
+| /home | 3 errors, 2 warnings; 390 px rendered blank | 0 errors; left: no `<main>` landmark (Mesop can't set roles), lab LCP |
+| /veo | 3 errors | 0 errors; left: small tap targets and labels on phones (composer redesign in progress) |
+| /lyria | 0 errors, 4 warnings; cards squeezed side by side at 390 | 0 errors, 3 warnings; cards stack, full width on phones |
+| /library_v2 | 0 errors, 2 warnings; filters ran off-screen at 390 | 0 errors, 2 warnings; filters wrap, empty state with next step |
+
+All pages: on phones (≤600 px) the nav rail is replaced by a floating menu button.
