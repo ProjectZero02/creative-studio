@@ -89,6 +89,18 @@ The application is designed to be deployed using Terraform and Cloud Run. You ha
 
 For detailed, step-by-step instructions on setting up your environment, configuring custom domains, and managing Identity Aware Proxy (IAP), please see the [Deployment Guide on our Documentation Hub](https://googlecloudplatform.github.io/genmedia-creative-studio/core/installation/deploy/).
 
+### App sign-in (optional)
+
+Instead of IAP, the studio can show its own sign-in page with admin and user roles. Set `AUTH_MODE=session`, a random `SESSION_SECRET` (32+ characters) and, for the first admin, `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`. Users live in the Firestore collection `studio_users`. Admins add people, change roles, disable accounts and reset passwords at `/admin/users` (from the avatar menu at the top right). On Cloud Run, keep both secrets in Secret Manager:
+
+```bash
+gcloud run services update genmedia-studio \
+  --update-env-vars AUTH_MODE=session,BOOTSTRAP_ADMIN_EMAIL=you@example.com \
+  --update-secrets SESSION_SECRET=session-secret:latest,BOOTSTRAP_ADMIN_PASSWORD=bootstrap-admin-password:latest
+```
+
+See [environment_variables.md](environment_variables.md) for every setting.
+
 ## Experiments & MCP Tools
 
 The `experiments/` folder contains a variety of stand-alone applications, new workflows, and Model Context Protocol (MCP) servers that showcase cutting-edge capabilities with generative AI. This includes combined workflows for video generation, advanced prompting techniques, image recontextualization, and audio exploration.
