@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Upstream project (GenMedia Creative Studio)
+    url: https://github.com/GoogleCloudPlatform/genmedia-creative-studio/issues
+    about: Bugs in upstream features or the experiments/ folder belong upstream.
+  - name: Deploy guide
+    url: https://github.com/ProjectZero02/genmedia-studio/blob/main/deploy/quickstart/README.md
+    about: Setup questions are often answered here.
