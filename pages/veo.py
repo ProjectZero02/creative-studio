@@ -272,11 +272,16 @@ def veo_content(app_state: me.state):
         with me.box(style=me.Style(display="flex", flex_direction="column", gap=20)):
             # --- TOP ROW ---
             # A nested container with a row direction
-            with me.box(style=me.Style(display="flex", flex_direction="row", gap=10)):
+            with me.box(
+                style=me.Style(
+                    display="flex", flex_direction="row", flex_wrap="wrap", gap=16
+                )
+            ):
                 # Left column of the top row
                 with me.box(
                     style=me.Style(
-                        flex_basis="max(480px, calc(60% - 48px))",
+                        flex="1 1 480px",
+                        min_width=0,
                         display="flex",
                         flex_direction="column",
                         gap=10,

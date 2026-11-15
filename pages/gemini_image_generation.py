@@ -241,11 +241,17 @@ def gemini_image_gen_page_content():
             on_info_click=open_info_dialog,
         )
 
-        with me.box(style=me.Style(display="flex", flex_direction="row", gap=16)):
+        with me.box(
+            style=me.Style(
+                display="flex", flex_direction="row", flex_wrap="wrap", gap=16
+            )
+        ):
             # Left column (controls)
             with me.box(
                 style=me.Style(
-                    width=400,
+                    flex="0 1 400px",
+                    min_width=0,
+                    box_sizing="border-box",
                     background=me.theme_var("surface-container-lowest"),
                     padding=me.Padding.all(16),
                     border_radius=12,
@@ -338,7 +344,10 @@ def gemini_image_gen_page_content():
                 )
 
                 with me.box(
-                    style=me.Style(display="flex", flex_direction="row", gap=16),
+                    classes="gm-controls",
+                    style=me.Style(
+                        display="flex", flex_direction="row", flex_wrap="wrap", gap=16
+                    ),
                 ):
                     me.select(
                         label="Aspect Ratio",
@@ -355,7 +364,7 @@ def gemini_image_gen_page_content():
                         ],
                         on_selection_change=on_aspect_ratio_change,
                         value=str(state.aspect_ratio),
-                        style=me.Style(flex_grow=1),
+                        style=me.Style(flex="1 1 140px"),
                     )
 
                     if model_config and model_config.supported_image_sizes:
@@ -367,7 +376,7 @@ def gemini_image_gen_page_content():
                             ],
                             on_selection_change=on_image_size_change,
                             value=str(state.image_size),
-                            style=me.Style(flex_grow=1, width="65%"),
+                            style=me.Style(flex="1 1 140px"),
                         )
 
                 me.box(style=me.Style(height=16))
@@ -431,8 +440,11 @@ def gemini_image_gen_page_content():
                             on_click=generate_images,
                             type="raised",
                         )
-                        with me.content_button(on_click=on_clear_click, type="icon"):
-                            me.icon("delete_sweep")
+                        with me.tooltip(message="Clear results"):
+                            with me.content_button(on_click=on_clear_click, type="icon"):
+                                me.icon("delete_sweep")
+                                with me.box(classes="gm-sr-only"):
+                                    me.text("Clear results")
 
                     if state.generation_complete and state.generation_time > 0:
                         me.text(

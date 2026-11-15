@@ -24,7 +24,6 @@ export class BananaButton extends LitElement {
       align-items: center;
       gap: 8px;
       font-family: var(--md-sys-typescale-body-medium-font-family-name, sans-serif);
-      cursor: pointer;
     }
 
     .button-container {
@@ -38,6 +37,13 @@ export class BananaButton extends LitElement {
       align-items: center;
       justify-content: center;
       transition: all 0.2s ease-in-out;
+      padding: 0;
+      cursor: pointer;
+      font: inherit;
+    }
+    .button-container:focus-visible {
+      outline: 2px solid var(--md-sys-color-primary, #1a5fd8);
+      outline-offset: 2px;
     }
 
     .button-container:hover {
@@ -49,6 +55,14 @@ export class BananaButton extends LitElement {
       border-color: var(--md-sys-color-primary, #6750a4);
     }
 
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
     .icon {
       width: 40px;
       height: 40px;
@@ -84,13 +98,12 @@ export class BananaButton extends LitElement {
   `;
 
   _handleClick() {
-    console.log("Banana button clicked! Model:", this.modelName, "Event:", this.modelSelected);
-    this.dispatchEvent(new MesopEvent(this.modelSelected, { value: this.modelName }));
+        this.dispatchEvent(new MesopEvent(this.modelSelected, { value: this.modelName }));
   }
 
   render() {
     return html`
-      <div class="button-container" @click=${this._handleClick}>
+      <button type="button" class="button-container" aria-pressed=${this.selected ? "true" : "false"} @click=${this._handleClick}>
         <svg class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
           <path d="M746.666667 234.666667c21.333333 0 149.333333-21.333333 149.333333 170.666666S618.666667 938.666667 234.666667 938.666667c-42.666667 0-85.333333-21.333333-85.333334-21.333334l-21.333333-64s21.333333-85.333333 149.333333-149.333333 218.944-117.632 273.344-172.010667C593.344 489.344 661.333333 405.333333 661.333333 341.333333c0-41.770667 42.666667-85.333333 42.666667-85.333333" fill="#FFE082" />
           <path d="M170.666667 874.666667s149.333333-42.666667 277.333333-106.666667 405.333333-256 320-533.333333c0 0 128-21.333333 128 170.666666S618.666667 938.666667 234.666667 938.666667c-42.666667 0-85.333333-21.333333-85.333334-21.333334l21.333334-42.666666z" fill="#FFCA28" />
@@ -100,7 +113,8 @@ export class BananaButton extends LitElement {
           <path d="M746.666667 85.333333c-64 0-106.666667 42.666667-106.666667 42.666667h64l42.666667-42.666667z" fill="#827717" />
         </svg>
         ${this.badge ? html`<div class="badge">${this.badge}</div>` : ''}
-      </div>
+        <span class="sr-only">${this.label || this.modelName}</span>
+      </button>
       ${this.label ? html`<div class="label">${this.label}</div>` : ''}
     `;
   }

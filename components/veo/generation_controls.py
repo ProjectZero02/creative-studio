@@ -60,7 +60,17 @@ def generation_controls(
         if override.supported_aspect_ratios:
             supported_aspect_ratios = override.supported_aspect_ratios
 
-    with me.box(style=me.Style(display="flex", flex_direction="row", gap=10)):
+    with me.box(
+        classes="gm-controls",
+        style=me.Style(
+            display="flex",
+            flex_direction="row",
+            flex_wrap="wrap",
+            align_items="flex-start",
+            column_gap=12,
+            row_gap=4,
+        ),
+    ):
         # Model selection
         me.select(
             label="Model",
@@ -73,22 +83,30 @@ def generation_controls(
             on_selection_change=on_selection_change_veo_model,
         )
 
-        me.input(
-            label="Seed (0 for random)",
-            value=str(state.veo_seed),
-            on_blur=on_blur_veo_seed,
-            type="number",
-        )
-        me.text(
-            "A seed is applied to influence generation, but exact "
-            "reproducibility is not guaranteed on Veo 3.x while prompt "
-            "enhancement is required.",
-            style=me.Style(font_size="12px", color="gray"),
-        )
+        with me.box(
+            style=me.Style(display="flex", flex_direction="column", width=220)
+        ):
+            me.input(
+                label="Seed (0 for random)",
+                value=str(state.veo_seed),
+                on_blur=on_blur_veo_seed,
+                type="number",
+                style=me.Style(width="100%"),
+            )
+            me.text(
+                "Steers the result. Veo 3.x can't repeat a result exactly "
+                "while prompt enhancement is on.",
+                style=me.Style(
+                    font_size="12px",
+                    line_height="1.4",
+                    color=me.theme_var("on-surface-variant"),
+                    margin=me.Margin(top=-12, bottom=8),
+                ),
+            )
 
         # Number of videos
         me.select(
-            label="count",
+            label="Videos",
             appearance="outline",
             options=[
                 me.SelectOption(label=str(i), value=str(i))
@@ -163,7 +181,7 @@ def generation_controls(
 
         # Person generation
         me.select(
-            label="Person Generation",
+            label="People in video",
             appearance="outline",
             options=[
                 me.SelectOption(label="Allow (All ages)", value="Allow (All ages)"),
