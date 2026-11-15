@@ -24,6 +24,7 @@ import mesop as me
 
 from common.analytics import log_ui_click, track_click
 from common.error_handling import AsyncVeoPollingFailedError, GenerationError
+from common.i18n import t
 from common.metadata import (
     MediaItem,
     add_media_item_to_firestore,
@@ -340,7 +341,7 @@ def veo_content(app_state: me.state):
             if state.result_display_urls and not state.is_loading:
                 with me.box(classes="gm-latest"):
                     with me.box(classes="gm-title gm-title-section"):
-                        me.markdown("## Latest")
+                        me.markdown("## " + t("results.latest"))
                     video_display(
                         on_thumbnail_click=on_thumbnail_click,
                         on_click_extend=on_click_extend_video,
@@ -391,13 +392,13 @@ def veo_content(app_state: me.state):
 
     with dialog(is_open=state.show_error_dialog):  # pylint: disable=E1129:not-context-manager
         me.text(
-            "Generation Error",
+            t("dialog.error_title"),
             type="headline-6",
             style=me.Style(color=me.theme_var("error")),
         )
         me.text(state.error_message, style=me.Style(margin=me.Margin(top=16)))
         with dialog_actions():  # pylint: disable=E1129:not-context-manager
-            me.button("Close", on_click=on_close_error_dialog, type="flat")
+            me.button(t("dialog.close"), on_click=on_close_error_dialog, type="flat")
 
 
 _VEO_PLACEHOLDERS = {

@@ -54,6 +54,7 @@ class GmGenerationProgress extends LitElement {
     aspect: { type: String }, // "16:9"
     count: { type: Number },
     mediaLabel: { type: String }, // "image" | "video"
+    labels: { type: String }, // JSON text from Python (common/i18n.py); English fallback
     retryEvent: { type: String },
     dismissEvent: { type: String },
     _now: { state: true },
@@ -72,6 +73,7 @@ class GmGenerationProgress extends LitElement {
     this.aspect = '1:1';
     this.count = 1;
     this.mediaLabel = 'image';
+    this.labels = '';
     this.retryEvent = '';
     this.dismissEvent = '';
     this._t0 = Date.now();
@@ -136,7 +138,16 @@ class GmGenerationProgress extends LitElement {
     if (name) this.dispatchEvent(new MesopEvent(name, {}));
   }
 
+  get _l() {
+    try {
+      return JSON.parse(this.labels || '{}') || {};
+    } catch (_) {
+      return {};
+    }
+  }
+
   render() {
+    const L = this._l;
     const list = this._list;
     const running = this.status === 'running';
     const failed = this.status === 'error';
@@ -145,12 +156,12 @@ class GmGenerationProgress extends LitElement {
     const pct = Math.round(this._fraction(list) * 100);
     const stageName = list[Math.min(this.current, list.length - 1)] || '';
     const heading = this.heading || (failed
-      ? `Couldn't create your ${this.mediaLabel}`
-      : running ? `Creating your ${this.mediaLabel}` : 'Done');
+      ? (L.failed || `Couldn't create your ${this.mediaLabel}`)
+      : running ? (L.creating || `Creating your ${this.mediaLabel}`) : (L.done || 'Done'));
     const tiles = Math.max(1, Math.min(4, this.count || 1));
 
     return html`
-      <section class="card ${this.status}" aria-label="Generation progress">
+      <section class="card ${this.status}" aria-label=${L.aria || 'Generation progress'}>
         <div class="top">
           <div class="state-icon" aria-hidden="true">
             ${running ? html`<span class="spinner"></span>` : failed ? icon(P.error, 22) : icon(P.check, 22)}
@@ -158,18 +169,18 @@ class GmGenerationProgress extends LitElement {
           <div class="titles">
             <h2>${heading}</h2>
             <p class="sub" aria-live="polite">
-              ${failed ? html`Your prompt and settings are kept.` : html`${stageName}${running ? '…' : ''}`}
+              ${failed ? (L.kept || 'Your prompt and settings are kept.') : html`${stageName}${running ? '…' : ''}`}
             </p>
           </div>
-          <div class="time" aria-label="Elapsed time">
+          <div class="time" aria-label=${L.elapsed || 'Elapsed time'}>
             <span class="elapsed">${fmt(elapsed)}</span>
             ${this.typicalSeconds > 0 && !failed
-              ? html`<span class="typical">usually ~${fmt(this.typicalSeconds)}</span>`
+              ? html`<span class="typical">${(L.usually || 'usually ~{t}').replace('{t}', fmt(this.typicalSeconds))}</span>`
               : nothing}
           </div>
         </div>
 
-        <div class="bar" role="progressbar" aria-label="Estimated progress"
+        <div class="bar" role="progressbar" aria-label=${L.estimated || 'Estimated progress'}
              aria-valuemin="0" aria-valuemax="100" aria-valuenow=${pct}>
           <span style="width:${pct}%"></span>
         </div>
@@ -183,17 +194,17 @@ class GmGenerationProgress extends LitElement {
                 ${st === 'done' ? icon(P.check, 14) : st === 'failed' ? icon(P.error, 14) : html`${i + 1}`}
               </span>
               <span class="label">${s}</span>
-              <span class="gm-sr">${st === 'done' ? '(done)' : st === 'now' ? '(in progress)' : st === 'failed' ? '(failed)' : ''}</span>
+              <span class="gm-sr">${st === 'done' ? (L.st_done || '(done)') : st === 'now' ? (L.st_now || '(in progress)') : st === 'failed' ? (L.st_failed || '(failed)') : ''}</span>
             </li>`;
           })}
         </ol>
 
         ${failed
           ? html`<div class="error" role="alert">
-              <p>${this.message || 'Something went wrong on our side.'}</p>
+              <p>${this.message || L.generic_error || 'Something went wrong on our side.'}</p>
               <div class="actions">
-                ${this.retryEvent ? html`<button class="btn primary" type="button" @click=${() => this._emit(this.retryEvent)}>${icon(P.retry, 18)}Try again</button>` : nothing}
-                ${this.dismissEvent ? html`<button class="btn" type="button" @click=${() => this._emit(this.dismissEvent)}>Dismiss</button>` : nothing}
+                ${this.retryEvent ? html`<button class="btn primary" type="button" @click=${() => this._emit(this.retryEvent)}>${icon(P.retry, 18)}${L.retry || 'Try again'}</button>` : nothing}
+                ${this.dismissEvent ? html`<button class="btn" type="button" @click=${() => this._emit(this.dismissEvent)}>${L.dismiss || 'Dismiss'}</button>` : nothing}
               </div>
             </div>`
           : nothing}
@@ -230,7 +241,7 @@ class GmGenerationProgress extends LitElement {
     .state-icon svg { fill: currentColor; }
     .spinner {
       width: 18px; height: 18px; border-radius: 50%;
-      border: 2.5px solid currentColor; border-right-color: transparent;
+      border: 2.5px solid currentColor; border-inline-end-color: transparent;
       animation: spin 0.9s linear infinite;
     }
     .titles { flex: 1; min-width: 0; }

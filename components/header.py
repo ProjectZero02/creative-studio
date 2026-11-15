@@ -20,6 +20,7 @@ import typing
 
 import mesop as me
 
+from common.i18n import route_key, t, tr
 from components.pill import pill
 from components.svg_icon.svg_icon import svg_icon
 
@@ -44,6 +45,37 @@ def nav_descriptions() -> dict[str, str]:
         for p in pages
         if p.get("display") and p.get("description") and p.get("display") != "Home"
     }
+
+
+@functools.lru_cache(maxsize=1)
+def nav_title_keys() -> dict[str, str]:
+    """Page title (lowercase English) -> route key used by nav.* / page.* strings."""
+    try:
+        with open(_NAV_FILE, encoding="utf-8") as f:
+            pages = json.load(f).get("pages", [])
+    except (OSError, ValueError):
+        pages = []
+    keys = {
+        p["display"].lower(): route_key(p["route"])
+        for p in pages
+        if p.get("display") and p.get("route")
+    }
+    keys.setdefault("users", "admin_users")
+    return keys
+
+
+def localized_title_and_purpose(
+    title: str, purpose: str | None, *, from_nav: bool
+) -> tuple[str, str | None]:
+    """The page title and purpose in the current language (English as given)."""
+    slug = nav_title_keys().get(title.lower())
+    if not slug:
+        return title, purpose
+    local_title = tr(f"nav.{slug}", title)
+    if not purpose:
+        return local_title, purpose
+    key = f"nav.{slug}.desc" if from_nav else f"page.{slug}.purpose"
+    return local_title, tr(key, purpose)
 
 
 def _md_escape(text: str) -> str:
@@ -83,6 +115,10 @@ def header(
         if description is not None
         else nav_descriptions().get(title.lower())
     )
+    title, purpose = localized_title_and_purpose(
+        title, purpose, from_nav=description is None
+    )
+    about = t("header.about")
 
     if centered:
         with me.box(classes="gm-header gm-header-hero"):
@@ -97,11 +133,11 @@ def header(
                 with me.box(classes="gm-hero-info"):
                     with (
                         me.content_button(type="icon", on_click=on_info_click),
-                        me.tooltip(message="About this page"),
+                        me.tooltip(message=about),
                     ):
                         me.icon(icon="info_outline")
                         with me.box(classes="gm-sr-only"):
-                            me.text("About this page")
+                            me.text(about)
         return
 
     with me.box(
@@ -160,8 +196,8 @@ def header(
         if show_info_button and on_info_click:
             with (
                 me.content_button(type="icon", on_click=on_info_click),
-                me.tooltip(message="About this page"),
+                me.tooltip(message=about),
             ):
                 me.icon(icon="info_outline")
                 with me.box(classes="gm-sr-only"):
-                    me.text("About this page")
+                    me.text(about)

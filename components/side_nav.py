@@ -17,6 +17,7 @@ from typing import Optional
 
 import mesop as me
 
+from common.i18n import current_lang, is_rtl, route_key, t, tr
 from components.styles import SIDENAV_MAX_WIDTH, SIDENAV_MIN_WIDTH
 from components.svg_icon.svg_icon import svg_icon
 from config.default import Default, get_welcome_page_config
@@ -29,6 +30,12 @@ GROUP_LABELS = {
     "workflows": "Industry demos",
     "studio": "Your work",
 }
+
+
+def _tooltip_side() -> str:
+    """Tooltips open away from the nav: right in LTR, left in RTL."""
+    return "left" if is_rtl(current_lang()) else "right"
+
 
 # Page names (as passed to page_scaffold) that differ from their nav route.
 _PAGE_ALIASES = {
@@ -152,7 +159,7 @@ def sidenav(current_page: Optional[str]):
                     style=me.Style(width=48, height=48, padding=me.Padding.all(12)),
                 ):
                     me.icon(icon="menu_open" if opened else "menu")
-                    sr_only("Close menu" if opened else "Open menu")
+                    sr_only(t("nav.close_menu") if opened else t("nav.open_menu"))
                 if opened:
                     with me.content_button(
                         on_click=on_click_title,
@@ -164,12 +171,16 @@ def sidenav(current_page: Optional[str]):
                                 style=me.Style(font_size=16, font_weight=600, color=me.theme_var("on-surface"), white_space="nowrap"),
                             )
                             me.text(
-                                "on Vertex AI",
+                                t("brand.sub"),
                                 style=me.Style(font_size=11, color=me.theme_var("on-surface-variant"), white_space="nowrap"),
                             )
 
             for group, items in sections:
-                label = GROUP_LABELS.get(group, "")
+                label = (
+                    tr(f"nav.group.{group}", GROUP_LABELS[group])
+                    if group in GROUP_LABELS
+                    else ""
+                )
                 if label:
                     if opened:
                         me.text(
@@ -180,7 +191,7 @@ def sidenav(current_page: Optional[str]):
                                 letter_spacing="0.06em",
                                 text_transform="uppercase",
                                 color=me.theme_var("on-surface-variant"),
-                                padding=me.Padding(left=12, top=14, bottom=6),
+                                padding=me.Padding(left=12, right=12, top=14, bottom=6),
                                 white_space="nowrap",
                             ),
                         )
@@ -215,7 +226,7 @@ def _nav_item(page: dict, current: Optional[str], minimized: bool):
     menu_item(
         item_id=f"{page.get('id', '')}_{page.get('display', '').lower().replace(' ', '_')}",
         icon=page.get("icon", "circle"),
-        text=page.get("display", ""),
+        text=tr(f"nav.{route_key(page.get('route'))}", page.get("display", "")),
         route=page.get("route"),
         minimized=minimized,
         active=is_active(page.get("route"), current),
@@ -251,7 +262,7 @@ def menu_item(
     button_key = route if is_clickable else f"item_{item_id}"
 
     if minimized:
-        with me.tooltip(message=text, position="right"):
+        with me.tooltip(message=text, position=_tooltip_side()):
             with me.content_button(
                 key=button_key,
                 on_click=navigate_to if is_clickable else None,
@@ -274,7 +285,7 @@ def menu_item(
                 me.text(
                     text,
                     style=me.Style(
-                        text_align="left",
+                        text_align="start",
                         font_size=14,
                         white_space="nowrap",
                         overflow="hidden",
@@ -298,10 +309,10 @@ def toggle_theme(e: me.ClickEvent):  # pylint: disable=unused-argument
 def theme_toggle_icon(key: int, icon: str, text: str, min: bool = True):  # pylint: disable=redefined-builtin,unused-argument
     """Light/dark switch."""
     is_dark = me.theme_brightness() == "dark"
-    label = "Switch to light mode" if is_dark else "Switch to dark mode"
+    label = t("nav.to_light") if is_dark else t("nav.to_dark")
     icon_name = "light_mode" if is_dark else "dark_mode"
     if min:
-        with me.tooltip(message=label, position="right"):
+        with me.tooltip(message=label, position=_tooltip_side()):
             with me.content_button(
                 key=str(key),
                 on_click=toggle_theme,
@@ -317,7 +328,10 @@ def theme_toggle_icon(key: int, icon: str, text: str, min: bool = True):  # pyli
         ):
             with me.box(style=me.Style(display="flex", align_items="center", gap=12, width="100%")):
                 _render_icon(icon_name)
-                me.text("Light mode" if is_dark else "Dark mode", style=me.Style(font_size=14, white_space="nowrap"))
+                me.text(
+                    t("nav.light_mode") if is_dark else t("nav.dark_mode"),
+                    style=me.Style(font_size=14, white_space="nowrap"),
+                )
 
 
 MENU_BOTTOM = me.Style(

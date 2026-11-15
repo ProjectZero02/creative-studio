@@ -62,6 +62,7 @@ class GmResultCard extends LitElement {
     aspect: { type: String },
     actions: { type: String }, // comma list of action ids
     selected: { type: Boolean },
+    labels: { type: String }, // JSON from Python (common/i18n.py), English fallback
     actionEvent: { type: String },
   };
 
@@ -74,7 +75,20 @@ class GmResultCard extends LitElement {
     this.aspect = '1:1';
     this.actions = 'open,download,reuse';
     this.selected = false;
+    this.labels = '';
     this.actionEvent = '';
+  }
+
+  get _l() {
+    try {
+      return JSON.parse(this.labels || '{}') || {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  _t(key) {
+    return this._l[key] || LABELS[key] || key;
   }
 
   _ratio() {
@@ -101,13 +115,13 @@ class GmResultCard extends LitElement {
   _actionButtons(list) {
     return list.filter((a) => a !== 'open').map((a) => a === 'download'
       ? html`<a class="act" href=${this.mediaUrl} download target="_blank" rel="noopener"
-           aria-label=${LABELS[a]} title=${LABELS[a]}>${icon(P[a])}</a>`
-      : html`<button class="act" type="button" aria-label=${LABELS[a] || a} title=${LABELS[a] || a}
+           aria-label=${this._t(a)} title=${this._t(a)}>${icon(P[a])}</a>`
+      : html`<button class="act" type="button" aria-label=${this._t(a)} title=${this._t(a)}
            @click=${() => this._act(a)}>${icon(P[a] || P.open)}</button>`);
   }
 
   _renderAudio(list) {
-    const name = this.prompt ? this.prompt.slice(0, 80) : 'Generated audio';
+    const name = this.prompt ? this.prompt.slice(0, 80) : this._t('generated');
     return html`
       <figure class="card audio ${this.selected ? 'selected' : ''}">
         <div class="audio-head">
@@ -117,8 +131,8 @@ class GmResultCard extends LitElement {
             ${this.meta ? html`<span class="meta">${this.meta}</span>` : nothing}
           </figcaption>
         </div>
-        <audio controls preload="metadata" src=${this.mediaUrl} aria-label="Play: ${name}"></audio>
-        <div class="bar inline" role="toolbar" aria-label="Actions">${this._actionButtons(list)}</div>
+        <audio controls preload="metadata" src=${this.mediaUrl} aria-label=${this._t('play').replace('{name}', name)}></audio>
+        <div class="bar inline" role="toolbar" aria-label=${this._t('actions')}>${this._actionButtons(list)}</div>
       </figure>
     `;
   }
@@ -126,23 +140,23 @@ class GmResultCard extends LitElement {
   render() {
     const list = (this.actions || '').split(',').map((a) => a.trim()).filter(Boolean);
     if (this.kind === 'audio') return this._renderAudio(list);
-    const name = this.prompt ? this.prompt.slice(0, 80) : `Generated ${this.kind}`;
+    const name = this.prompt ? this.prompt.slice(0, 80) : this._t('generated');
     return html`
       <figure class="card ${this.selected ? 'selected' : ''}"
         @pointerenter=${() => this._hover(true)} @pointerleave=${() => this._hover(false)}>
         <button class="media" type="button" style="aspect-ratio:${this._ratio()}"
-          aria-label="Open ${this.kind}: ${name}" @click=${() => this._act('open')}
+          aria-label=${this._t('open_item').replace('{name}', name)} @click=${() => this._act('open')}
           @focus=${() => this._hover(true)} @blur=${() => this._hover(false)}>
           ${this.kind === 'video'
             ? html`<video src=${this.mediaUrl} muted loop playsinline preload="metadata"></video>
                    <span class="badge" aria-hidden="true">${icon(P.play)}</span>`
             : html`<img src=${this.mediaUrl} alt="" loading="lazy" decoding="async" />`}
         </button>
-        <div class="bar" role="toolbar" aria-label="Actions">
+        <div class="bar" role="toolbar" aria-label=${this._t('actions')}>
           ${list.filter((a) => a !== 'open').map((a) => a === 'download'
             ? html`<a class="act" href=${this.mediaUrl} download target="_blank" rel="noopener"
-                 aria-label=${LABELS[a]} title=${LABELS[a]}>${icon(P[a])}</a>`
-            : html`<button class="act" type="button" aria-label=${LABELS[a] || a} title=${LABELS[a] || a}
+                 aria-label=${this._t(a)} title=${this._t(a)}>${icon(P[a])}</a>`
+            : html`<button class="act" type="button" aria-label=${this._t(a)} title=${this._t(a)}
                  @click=${() => this._act(a)}>${icon(P[a] || P.open)}</button>`)}
         </div>
         ${this.prompt || this.meta
@@ -176,12 +190,12 @@ class GmResultCard extends LitElement {
     .media:focus-visible { outline: 2px solid var(--gm-focus, #1a5fd8); outline-offset: -2px; }
     .media img, .media video { display: block; width: 100%; height: 100%; object-fit: cover; }
     .badge {
-      position: absolute; left: 10px; bottom: 10px; width: 30px; height: 30px; border-radius: 50%;
+      position: absolute; inset-inline-start: 10px; bottom: 10px; width: 30px; height: 30px; border-radius: 50%;
       display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); color: #fff;
     }
     .badge svg { fill: currentColor; width: 18px; height: 18px; }
     .bar {
-      position: absolute; top: 10px; right: 10px; display: flex; gap: 6px;
+      position: absolute; top: 10px; inset-inline-end: 10px; display: flex; gap: 6px;
       opacity: 0; transform: translateY(-4px);
       transition: opacity 160ms cubic-bezier(0.2, 0, 0, 1), transform 160ms cubic-bezier(0.2, 0, 0, 1);
     }

@@ -34,6 +34,8 @@ import typing
 
 import mesop as me
 
+from common.i18n import current_lang, t, tl, tx_lang
+
 PROGRESS_FIELDS = (
     "progress_stages",
     "progress_stage",
@@ -88,20 +90,44 @@ def progress_clear(state: ProgressFields) -> None:
 
 def friendly_error(ex: Exception | str) -> str:
     """A short, plain error line. The full detail stays in the server log."""
-    text = str(ex).strip() or "Unknown error."
+    text = str(ex).strip() or t("error.unknown")
     lowered = text.lower()
     if "credentials" in lowered or "default credentials" in lowered:
-        return (
-            "The studio couldn't sign in to Google Cloud. "
-            "Check the service account or run `gcloud auth application-default login`."
-        )
+        return t("error.credentials")
     if "quota" in lowered or "429" in lowered or "resource exhausted" in lowered:
-        return "The model is busy (quota reached). Wait a minute and try again."
+        return t("error.quota")
     if "safety" in lowered or "blocked" in lowered:
-        return "The request was blocked by safety filters. Try rewording the prompt."
+        return t("error.safety")
     if len(text) > 280:
         text = text[:277] + "…"
     return text
+
+
+_PROGRESS_KEYS = (
+    "creating",
+    "failed",
+    "done",
+    "kept",
+    "usually",
+    "generic_error",
+    "retry",
+    "dismiss",
+    "st_done",
+    "st_now",
+    "st_failed",
+    "aria",
+    "elapsed",
+    "estimated",
+)
+
+
+def progress_labels(lang: str, media_label: str) -> str:
+    """The card's text in `lang`, as JSON. {media} is already filled in."""
+    media = tl(lang, f"media.{media_label}", default=media_label)
+    return json.dumps(
+        {k: tl(lang, f"progress.{k}", media=media, t="{t}") for k in _PROGRESS_KEYS},
+        ensure_ascii=False,
+    )
 
 
 @me.web_component(path="./generation_progress.js")
@@ -121,6 +147,7 @@ def generation_progress_card(
     on_retry: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     on_dismiss: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     key: str | None = None,
+    labels: str = "",
 ):
     """Low-level wrapper for <gm-generation-progress>."""
     return me.insert_web_component(
@@ -138,6 +165,7 @@ def generation_progress_card(
             "aspect": aspect,
             "count": count,
             "mediaLabel": media_label,
+            "labels": labels,
         },
         events={"retryEvent": on_retry, "dismissEvent": on_dismiss},
     )
@@ -161,16 +189,18 @@ def generation_progress(
     """
     if state.progress_status not in ("running", "error"):
         return
+    lang = current_lang()
     with me.box(classes="gm-progress-slot"):
         generation_progress_card(
             key="gm_generation_progress",
-            stages=list(state.progress_stages),
+            stages=[tx_lang(lang, s) for s in state.progress_stages],
             current=state.progress_stage,
             status=state.progress_status,
             run_id=state.progress_run_id,
             typical_seconds=typical_seconds,
             work_stage=work_stage,
-            message=state.progress_error,
+            message=tx_lang(lang, state.progress_error),
+            labels=progress_labels(lang, media_label),
             aspect=aspect,
             count=count,
             media_label=media_label,
