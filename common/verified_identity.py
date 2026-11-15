@@ -50,9 +50,14 @@ IAP_ISSUER = "https://cloud.google.com/iap"
 
 IDENTITY_SOURCE_IAP = "iap"
 IDENTITY_SOURCE_LOCAL = "local-dev"
+IDENTITY_SOURCE_SESSION = "session"
 
 AUTH_MODE_IAP = "iap"
 AUTH_MODE_LOCAL = "local"
+# Opt-in app login (email + password, signed session cookie). Only selected by an
+# explicit ``AUTH_MODE=session`` env var; iap/local resolution is unchanged
+# when it is not set. See common/session_auth.py.
+AUTH_MODE_SESSION = "session"
 
 # Environment markers that indicate we are running on a managed serving platform
 # (Cloud Run sets K_SERVICE; GKE sets KUBERNETES_SERVICE_HOST). If either is
@@ -73,6 +78,9 @@ class VerifiedIdentity:
     email: str
     subject: str | None
     source: str
+    # Only set in session mode (from the users store, re-read per request).
+    role: str | None = None
+    name: str | None = None
 
 
 class IdentityConfigError(Exception):
@@ -85,7 +93,7 @@ class IdentityConfigError(Exception):
     """
 
 
-def resolve_auth_mode(app_env: str | None) -> str:
+def resolve_auth_mode(app_env: str | None, explicit: str | None = None) -> str:
     """Derive the identity source mode from ``APP_ENV``.
 
     Local envs (``""``, ``dev``, ``development``, ``local``, ``test``) use a
@@ -93,13 +101,22 @@ def resolve_auth_mode(app_env: str | None) -> str:
     intrinsic to running in a deployed env — it is not a separately toggleable
     switch — which makes the incoherent "reject-absent but trust-spoofed" state
     unexpressible.
+
+    The one exception is an explicit ``AUTH_MODE=session`` (passed as
+    ``explicit``), which turns on the app's own sign-in in any env. Any other
+    explicit value is ignored, so iap/local keep deriving from ``APP_ENV``.
     """
+    if (explicit or "").strip().lower() == AUTH_MODE_SESSION:
+        return AUTH_MODE_SESSION
     return AUTH_MODE_LOCAL if (app_env or "") in LOCAL_APP_ENVS else AUTH_MODE_IAP
 
 
 def auth_mode() -> str:
     """Return the effective ``AUTH_MODE`` resolved from the environment."""
-    return resolve_auth_mode(os.environ.get("APP_ENV", ""))
+    return resolve_auth_mode(
+        os.environ.get("APP_ENV", ""),
+        os.environ.get("AUTH_MODE"),
+    )
 
 
 def iap_jwt_audience() -> str:
@@ -124,8 +141,20 @@ def validate_identity_config() -> None:
       * the google-auth requests transport must be importable/usable — a missing
         transport is caught here (fail fast) rather than producing a silent
         per-request 401-storm at runtime.
-    In ``local`` mode this is a no-op.
+    In ``session`` mode a strong ``SESSION_SECRET`` is required unless the app
+    runs in a local env with no managed-platform marker. In ``local`` mode this
+    is a no-op.
     """
+    if auth_mode() == AUTH_MODE_SESSION:
+        # Imported lazily: session_auth imports this module.
+        from common.session_auth import validate_session_config
+
+        try:
+            validate_session_config()
+        except ValueError as exc:
+            raise IdentityConfigError(str(exc)) from exc
+        return
+
     if auth_mode() != AUTH_MODE_IAP:
         return
 
@@ -296,6 +325,11 @@ def get_verified_user_identity(
     This function does not decide policy — the caller (middleware) decides
     whether ``None`` on a protected path means 401.
     """
-    if auth_mode() == AUTH_MODE_LOCAL:
+    mode = auth_mode()
+    if mode == AUTH_MODE_LOCAL:
         return _local_identity()
+    if mode == AUTH_MODE_SESSION:
+        from common.session_auth import identity_from_headers
+
+        return identity_from_headers(headers)
     return _verified_iap_identity(headers)
