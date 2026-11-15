@@ -620,3 +620,12 @@ html body .gm-empty-icon {
   html body .gm-advanced { padding: 14px; }
   html body .gm-results-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 12px; }
 }
+
+/* Phones: dropdowns get a full 44px tap area. */
+@media (max-width: 600px) {
+  .mat-mdc-select {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
