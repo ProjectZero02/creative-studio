@@ -17,7 +17,7 @@ import datetime
 import inspect
 import os
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 try:
     import urllib3.contrib.pyopenssl
@@ -94,6 +94,7 @@ from common.http_security import (
     resolve_correlation_id,
     should_send_hsts,
 )
+from common import mock_generation
 from common.prompt_template_service import PromptTemplate
 from common.user_store import bootstrap_admin
 from common.utils import create_display_url, https_url_to_gcs_uri
@@ -104,6 +105,7 @@ from common.verified_identity import (
     validate_serving_environment,
 )
 from config import default as config
+from config.voice import LEGACY_ENGINE_FOR_ROUTE
 from models.video_processing import convert_mp4_to_gif
 from pages import about as about_page
 from pages import banana_studio as banana_studio_page
@@ -125,6 +127,7 @@ from pages import selfie as selfie_page
 from pages import starter_pack as starter_pack_page
 from pages import test_proxy_caching as test_proxy_caching_page
 from pages import veo
+from pages import voice as voice_page
 from pages import vto as vto_page
 from pages import welcome as welcome_page
 from pages.library_v2 import page as library_v2_page
@@ -620,6 +623,36 @@ app.mount(
 )
 
 app.include_router(veo_router.router)
+
+
+# Old speech pages now live on /voice. Full page loads (bookmarks, shared links)
+# get a redirect with the engine preselected; in-app navigation is handled by
+# the old routes themselves (pages/voice.py, legacy_on_load).
+def _legacy_voice_redirect(engine: str):
+    def redirect(request: Request) -> RedirectResponse:
+        query = urlencode({**dict(request.query_params), "engine": engine})
+        return RedirectResponse(url=f"/voice?{query}", status_code=307)
+
+    return redirect
+
+
+for _route, _engine in LEGACY_ENGINE_FOR_ROUTE.items():
+    app.add_api_route(
+        _route,
+        _legacy_voice_redirect(_engine),
+        methods=["GET"],
+        include_in_schema=False,
+    )
+
+# Mock generation (local/dev only): a short chime for the Voice and Music pages.
+if mock_generation.mock_enabled():
+
+    @app.get(mock_generation.MOCK_AUDIO_ROUTE, include_in_schema=False)
+    def mock_audio(n: int = 0) -> Response:
+        return Response(
+            content=mock_generation.placeholder_wav(index=n),
+            media_type="audio/wav",
+        )
 
 # Story Studio demo mode writes placeholder media to .local/story_media.
 # Real mode stores media in GCS and never mounts this.
