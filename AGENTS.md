@@ -220,3 +220,21 @@ bd close <id>         # Complete work
 - If push fails, resolve and retry until it succeeds
 - **SSH PASSPHRASE**: If a `git push` command hangs or fails asking for an SSH passphrase, ABORT the automated push attempt and explicitly instruct the user to execute the push manually.
 <!-- END BEADS INTEGRATION -->
+
+## Credentials and connections (Core)
+Everything this project needs to sign in or connect to comes from Core (https://core.tail3f1b1a.ts.net). Never ask the human for keys, tokens or logins, never build your own login flow for a service Core provides, and never print or commit secret values. The app itself only reads environment variables, so it also runs without Core (`dotenv.template` lists the names).
+- Need something? `core use <thing>`: `claude`, `codex`, `antigravity`, `github` (this repo, 1-hour tokens), `cloudflare`, `ai`, or any secret NAME (here: `gcp` for the demo GCP project). Test it right away under `core run`; if it doesn't work run `core use NAME --failed "what happened"`. Safe things are granted at once; paid things wait for the owner's yes.
+- See what this project has: `core list` (names and previews only).
+- Run with secrets as env vars: `core run -- <command>`. For tools that need a file: `core pull --out .env` (gitignored).
+- New app secret: `core gen NAME` or `core set NAME` (value on stdin). Something only the owner can create: `core ask NAME --reason "why"` and tell them in one line.
+- Core's reviewer (Warden) may refuse a request and say what to use instead: read `core messages` and follow it before asking again.
+- Deploy secrets: pipe, never paste, e.g. `core get NAME | gcloud secrets create NAME --data-file=-`.
+- AI in the app: this app uses Vertex AI through Google Cloud credentials (Application Default Credentials / the Cloud Run service account), never API keys in code.
+- GitHub: `core use github`, then `core git-setup` once. Missing permission (e.g. workflows): `core use github --permission workflows:write --reason "what GitHub said"`; don't change GitHub App or repo settings yourself.
+- Library: when this app gets a live link or changes status, run `core app set --url … --repo ProjectZero02/genmedia-studio --status live|building|idea|paused`.
+
+## This fork (ProjectZero02/genmedia-studio)
+- Public fork of `GoogleCloudPlatform/genmedia-creative-studio` (remote `upstream`), for client demos on Cloud Run. Keep the Apache-2.0 LICENSE and copyright headers.
+- Goal: nicer look and feel and faster pages without breaking upstream features, so upstream fixes can still be merged (`git fetch upstream && git merge upstream/main`). Prefer changes in shared places (theme layer, scaffold, nav, home) over editing every page.
+- UI work follows Website Maker (`ui_workflow` → `audit_page` → fix → re-audit). See PLAN.md.
+- Deploys: Cloud Run in the owner's GCP project only, through `deploy/quickstart/deploy.sh` (or upstream `deploy/scripts/deploy.sh`). Anything that costs money beyond scale-to-zero (min instances, GPUs) waits for the owner's yes. Branch to deploy from: `main`.
