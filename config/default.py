@@ -309,6 +309,30 @@ class Default:
         "gemini-nano-banana-2.1",
     )
 
+    # Story Studio (/story): idea -> scenario -> storyboard -> film.
+    # STORY_STUDIO_MOCK: "true"/"false" forces demo mode on/off. Empty means
+    # automatic: demo mode when APP_ENV is local and no GCP credentials exist
+    # (see services/story_service.is_mock_mode).
+    STORY_STUDIO_MOCK: str = os.environ.get("STORY_STUDIO_MOCK", "")
+    STORIES_COLLECTION_NAME: str = os.environ.get(
+        "STORIES_COLLECTION_NAME", "stories"
+    )
+    # Cost guardrails: every film is capped by these values.
+    STORY_MIN_SCENES: int = 3
+    STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 8))
+    STORY_MAX_FILM_SECONDS: int = int(os.environ.get("STORY_MAX_FILM_SECONDS", 64))
+    STORY_VIDEO_RESOLUTION: str = os.environ.get("STORY_VIDEO_RESOLUTION", "720p")
+    STORY_VEO_MODEL_VERSION: str = os.environ.get("STORY_VEO_MODEL_VERSION", "3.1-fast")
+    STORY_SCENARIO_MODEL_ID: str = os.environ.get(
+        "STORY_SCENARIO_MODEL_ID", os.environ.get("MODEL_ID", "gemini-3.5-flash")
+    )
+    STORY_TTS_MODEL: str = os.environ.get("STORY_TTS_MODEL", "gemini-2.5-flash-tts")
+    STORY_CROSSFADE_SECONDS: float = float(
+        os.environ.get("STORY_CROSSFADE_SECONDS", 0.5)
+    )
+    # Parallel model calls per film (storyboard frames, clips).
+    STORY_MAX_PARALLEL: int = int(os.environ.get("STORY_MAX_PARALLEL", 3))
+
     image_modifiers: list[str] = field(
         default_factory=lambda: [
             "aspect_ratio",

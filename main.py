@@ -73,6 +73,7 @@ import pages.brand_adherence
 import pages.character_sheet
 import pages.imagen_upscale
 import pages.shop_the_look
+import pages.story_studio
 import pages.storyboarder
 from app_factory import app
 from common.identity import (
@@ -139,6 +140,7 @@ from pages.test_vto_prompt_generator import page as test_vto_prompt_generator_pa
 from pages import admin_users as admin_users_page
 from routers import auth_router, veo_router
 from routers.auth_router import session_gate
+from services import story_service
 from state.state import AppState
 from workflows.retro_games import page as retro_games
 
@@ -618,6 +620,16 @@ app.mount(
 )
 
 app.include_router(veo_router.router)
+
+# Story Studio demo mode writes placeholder media to .local/story_media.
+# Real mode stores media in GCS and never mounts this.
+if story_service.is_mock_mode():
+    os.makedirs(story_service.LOCAL_MEDIA_DIR, exist_ok=True)
+    app.mount(
+        story_service.LOCAL_MEDIA_ROUTE,
+        StaticFiles(directory=story_service.LOCAL_MEDIA_DIR),
+        name="story-media",
+    )
 
 
 app.mount(

@@ -98,4 +98,5 @@ bin/
 .terraform.lock.hcl
 
 # Local users store for AUTH_MODE=session dev (common/user_store.py)
+# and Story Studio demo mode data (stories.json, generated media)
 .local/
