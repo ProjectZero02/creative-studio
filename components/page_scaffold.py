@@ -21,6 +21,7 @@ from components.styles import (
     PAGE_BACKGROUND_PADDING_STYLE,
     PAGE_BACKGROUND_STYLE,
 )
+from components.lang_manager.lang_manager import lang_manager, on_lang_load
 from components.theme_manager.theme_manager import theme_manager
 from components.user_menu.user_menu import user_menu_bar
 
@@ -44,6 +45,12 @@ def page_scaffold(page_name: str):
     theme_manager(
         theme=app_state.theme_mode if app_state.theme_chosen else "",
         on_theme_load=on_theme_load,
+    )
+    # Sets <html lang/dir> and saves the language (see common/i18n.py).
+    lang_manager(
+        current=app_state.lang,
+        chosen=app_state.lang_chosen,
+        on_lang_load=on_lang_load,
     )
 
     sidenav("")
