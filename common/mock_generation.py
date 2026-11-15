@@ -15,14 +15,19 @@
 
 Turn on with GENMEDIA_MOCK_GENERATION=true. It only works when APP_ENV is
 "local" or "dev", so it can never switch on in a deployed studio. The fake
-results are placeholder pictures and a public sample clip; nothing is saved.
+results are placeholder pictures, a public sample clip and a short chime
+(served at MOCK_AUDIO_ROUTE); nothing is saved.
 A prompt containing the word "fail" raises an error, to show the error state.
 """
 
 import base64
 import html
+import io
+import math
 import os
+import struct
 import time
+import wave
 
 _SAMPLE_VIDEO = (
     "https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/"
@@ -92,3 +97,34 @@ def mock_uri(kind: str, index: int = 0) -> str:
 def is_mock_uri(uri: str) -> bool:
     """True for URIs made by the mock helpers (fake paths or inline data)."""
     return (uri or "").startswith(("mock://", "data:"))
+
+
+# Fake audio is served by main.py at this route (only while mock mode is on),
+# because the page's media-src policy blocks data: URLs.
+MOCK_AUDIO_ROUTE = "/mock-media/tone.wav"
+
+
+def placeholder_wav(index: int = 0, seconds: float = 2.0) -> bytes:
+    """A short, soft two-note chime as WAV bytes (16 kHz mono)."""
+    rate = 16000
+    base = (330.0, 392.0, 440.0, 523.3)[index % 4]
+    length = max(0.2, min(seconds, 10.0))
+    frames = bytearray()
+    for i in range(int(rate * length)):
+        t = i / rate
+        freq = base if t < length / 2 else base * 1.25
+        # Fade in and out so it doesn't click.
+        env = min(1.0, t * 20, (length - t) * 8)
+        frames += struct.pack("<h", int(9000 * env * math.sin(2 * math.pi * freq * t)))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+def sample_audio(index: int = 0) -> str:
+    """URL of a fake audio result (served by main.py in mock mode)."""
+    return f"{MOCK_AUDIO_ROUTE}?n={index % 4}&t={time.time_ns()}"

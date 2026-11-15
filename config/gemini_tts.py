@@ -14,13 +14,31 @@
 
 """Consolidated configuration for Gemini TTS models, voices, and languages."""
 
+# "api" says how a model is called:
+#   "cloud_tts"        Cloud Text-to-Speech synthesize_speech (model_name in
+#                      VoiceSelectionParams, style in SynthesisInput.prompt).
+#   "generate_content" Gemini GenerateContent with an AUDIO response modality
+#                      and speech_config (Gemini 3.8 Flash TTS; its model card
+#                      lists only GenerateContent).
+# "multi_speaker" marks models that can voice a two-person dialogue.
 GEMINI_TTS_MODELS = {
+    "gemini-3.8-flash-tts": {
+        "id": "gemini-3.8-flash-tts",
+        "label": "Gemini 3.8 Flash TTS",
+        "description": "Newest Gemini speech model: 30 voices, 132 languages, dialogue.",
+        "tags": ["TTS", "Gemini 3.8 Flash", "GA"],
+        "version": "3.8-flash",
+        "api": "generate_content",
+        "multi_speaker": True,
+    },
     "gemini-3.1-flash-tts-preview": {
         "id": "gemini-3.1-flash-tts-preview",
         "label": "Gemini 3.1 Flash TTS Preview",
         "description": "New Gemini 3.1 Flash Text-to-Speech preview model (Global).",
         "tags": ["TTS", "Gemini 3.1 Flash"],
         "version": "3.1-flash-preview",
+        "api": "cloud_tts",
+        "multi_speaker": False,
     },
     "gemini-2.5-flash-tts": {
         "id": "gemini-2.5-flash-tts",
@@ -28,6 +46,8 @@ GEMINI_TTS_MODELS = {
         "description": "Fast, high-quality text-to-speech model.",
         "tags": ["TTS", "Gemini 2.5 Flash"],
         "version": "2.5-flash",
+        "api": "cloud_tts",
+        "multi_speaker": True,
     },
     "gemini-2.5-pro-tts": {
         "id": "gemini-2.5-pro-tts",
@@ -35,6 +55,8 @@ GEMINI_TTS_MODELS = {
         "description": "Highest-quality text-to-speech model.",
         "tags": ["TTS", "Gemini 2.5 Pro"],
         "version": "2.5-pro",
+        "api": "cloud_tts",
+        "multi_speaker": True,
     },
     "gemini-2.5-flash-lite-preview-tts": {
         "id": "gemini-2.5-flash-lite-preview-tts",
@@ -42,10 +64,24 @@ GEMINI_TTS_MODELS = {
         "description": "Lightweight, low-latency text-to-speech model.",
         "tags": ["TTS", "Gemini 2.5 Flash Lite"],
         "version": "2.5-flash-lite",
+        "api": "cloud_tts",
+        "multi_speaker": False,
     },
 }
 
 GEMINI_TTS_MODEL_NAMES = list(GEMINI_TTS_MODELS.keys())
+
+DEFAULT_GEMINI_TTS_MODEL = "gemini-3.8-flash-tts"
+
+
+def gemini_tts_api(model_name: str) -> str:
+    """How to call a model: "generate_content" or "cloud_tts" (the default)."""
+    return GEMINI_TTS_MODELS.get(model_name, {}).get("api", "cloud_tts")
+
+
+def supports_multi_speaker(model_name: str) -> bool:
+    """True when the model can voice a two-speaker dialogue."""
+    return bool(GEMINI_TTS_MODELS.get(model_name, {}).get("multi_speaker"))
 
 GEMINI_TTS_VOICES = [
     "Achernar", "Achird", "Algenib", "Algieba", "Alnilam", "Aoede", "Autonoe",

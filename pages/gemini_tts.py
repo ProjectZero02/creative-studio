@@ -32,6 +32,7 @@ from components.page_scaffold import page_frame, page_scaffold
 from components.pill import pill
 from components.snackbar import snackbar
 from config.gemini_tts import (
+    DEFAULT_GEMINI_TTS_MODEL,
     GEMINI_TTS_LANGUAGES,
     GEMINI_TTS_MODEL_NAMES,
     GEMINI_TTS_MODELS,
@@ -40,6 +41,7 @@ from config.gemini_tts import (
 from models.audio_analysis import analyze_audio_file
 from models.gemini import evaluate_tts_audio
 from models.gemini_tts import synthesize_speech
+from pages.voice import legacy_on_load, voice_content
 from state.state import AppState
 
 # Load about content from JSON
@@ -95,14 +97,18 @@ class GeminiTtsState:
 
 @me.page(
     path="/gemini-tts",
-    title="Gemini TTS",
+    title="Voice - GenMedia Creative Studio",
+    on_load=legacy_on_load(DEFAULT_GEMINI_TTS_MODEL),
+    stylesheets=["/ui/audio-studio.css"],
 )
 def page():
-    """Renders the Gemini TTS page."""
-    state = me.state(GeminiTtsState)
+    """Old route: shows the Voice page (main.py redirects full loads to /voice).
 
+    `gemini_tts_page_content` below is no longer routed; it is kept so
+    upstream changes to it still merge.
+    """
     with page_scaffold(page_name="gemini-tts"):  # pylint: disable=E1129:not-context-manager
-        gemini_tts_page_content()
+        voice_content()
 
 
 def gemini_tts_page_content():

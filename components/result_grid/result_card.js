@@ -21,6 +21,8 @@
  * keyboard focus (always on touch screens): download, open, reuse prompt,
  * and per-type actions such as "Make a video" (image) or "Extend" (video).
  * Videos load metadata only and play muted on hover.
+ * kind="audio" draws a compact card with a native player and an always-visible
+ * action row (no thumbnail, nothing to open).
  */
 import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
 
@@ -33,6 +35,7 @@ const P = {
   edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
   play: 'M8 5v14l11-7z',
   upscale: 'M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2zM8 12l2.5 3 3.5-4.5 4.5 6H6z',
+  wave: 'M7 18h2V6H7v12zm4 4h2V2h-2v20zm-8-8h2v-4H3v4zm12 4h2V6h-2v12zm4-8v4h2v-4h-2z',
 };
 P.edit_video = P.edit;
 
@@ -53,7 +56,7 @@ const icon = (d) =>
 class GmResultCard extends LitElement {
   static properties = {
     mediaUrl: { type: String },
-    kind: { type: String }, // "image" | "video"
+    kind: { type: String }, // "image" | "video" | "audio"
     prompt: { type: String },
     meta: { type: String },
     aspect: { type: String },
@@ -95,8 +98,34 @@ class GmResultCard extends LitElement {
     }
   }
 
+  _actionButtons(list) {
+    return list.filter((a) => a !== 'open').map((a) => a === 'download'
+      ? html`<a class="act" href=${this.mediaUrl} download target="_blank" rel="noopener"
+           aria-label=${LABELS[a]} title=${LABELS[a]}>${icon(P[a])}</a>`
+      : html`<button class="act" type="button" aria-label=${LABELS[a] || a} title=${LABELS[a] || a}
+           @click=${() => this._act(a)}>${icon(P[a] || P.open)}</button>`);
+  }
+
+  _renderAudio(list) {
+    const name = this.prompt ? this.prompt.slice(0, 80) : 'Generated audio';
+    return html`
+      <figure class="card audio ${this.selected ? 'selected' : ''}">
+        <div class="audio-head">
+          <span class="audio-icon" aria-hidden="true">${icon(P.wave)}</span>
+          <figcaption>
+            ${this.prompt ? html`<span class="prompt">${this.prompt}</span>` : nothing}
+            ${this.meta ? html`<span class="meta">${this.meta}</span>` : nothing}
+          </figcaption>
+        </div>
+        <audio controls preload="metadata" src=${this.mediaUrl} aria-label="Play: ${name}"></audio>
+        <div class="bar inline" role="toolbar" aria-label="Actions">${this._actionButtons(list)}</div>
+      </figure>
+    `;
+  }
+
   render() {
     const list = (this.actions || '').split(',').map((a) => a.trim()).filter(Boolean);
+    if (this.kind === 'audio') return this._renderAudio(list);
     const name = this.prompt ? this.prompt.slice(0, 80) : `Generated ${this.kind}`;
     return html`
       <figure class="card ${this.selected ? 'selected' : ''}"
@@ -176,6 +205,24 @@ class GmResultCard extends LitElement {
     }
     .meta { font-size: 12px; color: var(--sys-on-surface-variant, #4b515d); }
     @keyframes enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .card.audio { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+    .card.audio:hover { transform: none; }
+    .audio-head { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+    .audio-head figcaption { padding: 0; min-width: 0; }
+    .audio-icon {
+      flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+      display: grid; place-items: center;
+      background: var(--sys-primary-container, #dbe6ff); color: var(--sys-on-primary-container, #0b2a66);
+    }
+    .audio-icon svg { fill: currentColor; }
+    .card.audio audio { width: 100%; height: 40px; }
+    .bar.inline { position: static; opacity: 1; transform: none; justify-content: flex-end; }
+    .bar.inline .act {
+      background: var(--sys-surface-container-high, #e6e9ee); color: var(--sys-on-surface, #15171c);
+      backdrop-filter: none;
+    }
+    .bar.inline .act:hover { background: var(--sys-surface-container-highest, #dde1e7); }
+    .bar.inline .act:focus-visible { outline: 2px solid var(--gm-focus, #1a5fd8); box-shadow: none; }
     @media (max-width: 600px) { .act { width: 44px; height: 44px; } }
     @media (prefers-reduced-motion: reduce) {
       .card, .bar { transition: none; animation: none; }

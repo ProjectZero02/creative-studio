@@ -33,7 +33,9 @@ from config.chirp_3hd import (
     CHIRP3_HD_LANGUAGES,
     CHIRP3_HD_ENCODINGS,
 )
+from config.voice import CHIRP_ENGINE
 from models.chirp_3hd import synthesize_chirp_speech
+from pages.voice import legacy_on_load, voice_content
 from state.state import AppState
 
 # Load about content from JSON
@@ -68,10 +70,18 @@ class Chirp3hdState:
 
 @me.page(
     path="/chirp-3hd",
-    title="Chirp3 HD TTS",
+    title="Voice - GenMedia Creative Studio",
+    on_load=legacy_on_load(CHIRP_ENGINE),
+    stylesheets=["/ui/audio-studio.css"],
 )
 def page():
-    """Renders the Chirp3 HD TTS page."""
+    """Old route: shows the Voice page with Chirp 3 HD selected (main.py redirects full loads)."""
+    with page_scaffold(page_name="chirp_3hd"):  # pylint: disable=E1129
+        voice_content()
+
+
+def legacy_page():
+    """The original Chirp3 HD page (no longer routed; kept for upstream merges)."""
     state = me.state(Chirp3hdState)
 
     with page_scaffold(page_name="chirp_3hd"):  # pylint: disable=E1129

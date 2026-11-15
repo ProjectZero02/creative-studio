@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Lyria mesop ui page"""
+"""Music page (/lyria): Lyria with the studio hero and composer layout."""
 
 import datetime  # Required for timestamp
 import json
@@ -20,13 +20,24 @@ import time
 import mesop as me
 
 from common.metadata import MediaItem, add_media_item_to_firestore  # Updated import
+from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common.utils import create_display_url
+from components.composer.chip_menu import change_value, chip_menu, chip_options
+from components.composer.composer import composer, composer_attachment
 from components.content_credentials.content_credentials import (
     content_credentials_viewer,
 )
 from components.dialog import dialog, dialog_actions
+from components.generation_progress.generation_progress import (
+    friendly_error,
+    generation_progress,
+    progress_clear,
+    progress_done,
+    progress_fail,
+    progress_start,
+    progress_step,
+)
 from components.header import header
-from components.image_thumbnail import image_thumbnail
 from components.library.events import LibrarySelectionChangeEvent
 from components.library.library_chooser_button import library_chooser_button
 from components.lyria.audio_critic import audio_critic
@@ -34,6 +45,12 @@ from components.lyria.technical_metrics import technical_metrics
 from components.page_scaffold import (
     page_frame,
     page_scaffold,
+)
+from components.result_grid.result_card import (
+    card_action,
+    empty_results,
+    result_card,
+    result_grid,
 )
 from config.default import ABOUT_PAGE_CONTENT, Default
 from config.lyria_models import LYRIA_MODELS, get_lyria_model_config
@@ -47,7 +64,11 @@ from state.state import AppState
 cfg = Default()
 
 
-@me.page(path="/lyria", title="Lyria - GenMedia Creative Studio")
+@me.page(
+    path="/lyria",
+    title="Music - GenMedia Creative Studio",
+    stylesheets=["/ui/audio-studio.css"],
+)
 def lyria_page():
     """Main Page."""
     state = me.state(AppState)
@@ -55,31 +76,19 @@ def lyria_page():
         lyria_content(state)
 
 
-# Original box style
-_BOX_STYLE = me.Style(
-    background=me.theme_var("background"),
-    border_radius=12,
-    box_shadow=("0 3px 1px -2px #0003, 0 2px 2px #00000024, 0 1px 5px #0000001f"),
-    padding=me.Padding(top=16, left=16, right=16, bottom=16),
-    display="flex",
-    flex_direction="column",
-)
+PURPOSE = "Compose music and songs from a description, with optional lyrics."
+
+# Model chip order: newest first.
+_MODEL_ORDER = ["3-pro-preview", "3-clip-preview", "2"]
 
 
-# Combined style for the reference images display box
-_REFERENCE_IMAGES_BOX_STYLE = me.Style(
-    background=me.theme_var("background"),
-    border_radius=12,
-    box_shadow=("0 3px 1px -2px #0003, 0 2px 2px #00000024, 0 1px 5px #0000001f"),
-    padding=me.Padding(top=16, left=16, right=16, bottom=16),
-    display="flex",
-    flex_direction="column",
-    margin=me.Margin(top=16, bottom=16),
-)
+def _ordered_models():
+    rank = {v: i for i, v in enumerate(_MODEL_ORDER)}
+    return sorted(LYRIA_MODELS, key=lambda m: rank.get(m.version_id, len(rank)))
 
 
 def lyria_content(app_state: me.state):
-    """Lyria Mesop Page"""
+    """Music page: hero, composer with chips, progress, tracks."""
     pagestate = me.state(PageState)
 
     if pagestate.info_dialog_open:
@@ -101,232 +110,99 @@ def lyria_content(app_state: me.state):
             with dialog_actions():  # pylint: disable=not-context-manager
                 me.button("Close", on_click=close_info_dialog, type="flat")
 
+    model_config = get_lyria_model_config(pagestate.selected_model_id)
+    supports_lyrics = bool(model_config and model_config.supports_lyrics)
+    supports_images = bool(model_config and model_config.supports_images)
+
     with page_frame():  # pylint: disable=not-context-manager
         header(
-            "Lyria",
+            "Music",
             "music_note",
             show_info_button=True,
             on_info_click=open_info_dialog,
+            description=PURPOSE,
+            centered=True,
         )
+        with me.box(classes="gm-studio gm-music"):
+            with composer(
+                value=pagestate.music_prompt_placeholder,
+                placeholder="Describe the music: genre, mood, instruments, tempo…",
+                on_blur=on_blur_lyria_prompt,
+                on_submit=on_music_prompt_enter,
+                on_click_send=on_click_lyria,
+                on_enhance=on_click_enhance_music_prompt,
+                enhance_label="Rewrite prompt with Gemini",
+                enhancing=pagestate.is_rewriting,
+                busy=pagestate.is_loading or pagestate.is_analyzing,
+                send_label="Generate music",
+                textarea_key=f"music_prompt_{pagestate.music_prompt_textarea_key}",
+                render_top=_render_music_references if supports_images else None,
+                on_clear=clear_music,
+                clear_label="Clear prompt, lyrics and results",
+            ):
+                _music_chips(pagestate, model_config)
 
-        # Model Selector
-        with me.box(style=me.Style(margin=me.Margin(bottom=16))):
-            me.select(
-                label="Model",
-                options=[
-                    me.SelectOption(label=m.display_name, value=m.version_id)
-                    for m in LYRIA_MODELS
-                ],
-                on_selection_change=on_lyria_model_change,
-                value=pagestate.selected_model_id,
-                style=me.Style(width=250),
+            if supports_lyrics and pagestate.show_lyrics:
+                _lyrics_panel(pagestate)
+
+            generation_progress(
+                state=pagestate,
+                typical_seconds=40,
+                work_stage=2,
+                aspect="8:1",
+                count=max(1, pagestate.sample_count),
+                media_label="music",
+                on_retry=on_music_progress_retry,
+                on_dismiss=on_music_progress_dismiss,
             )
 
-        model_config = get_lyria_model_config(pagestate.selected_model_id)
-
-        if model_config and model_config.max_samples > 1:
-            with me.box(style=me.Style(margin=me.Margin(bottom=16))):
-                me.select(
-                    label="Sample Count",
-                    options=[
-                        me.SelectOption(label=str(i), value=str(i))
-                        for i in range(1, model_config.max_samples + 1)
-                    ],
-                    on_selection_change=on_lyria_sample_count_change,
-                    value=str(pagestate.sample_count),
-                    style=me.Style(width=250),
+            has_latest = bool(pagestate.music_display_urls) and not pagestate.is_loading
+            if has_latest:
+                with result_grid(title="Latest", wide=True):
+                    for i, url in enumerate(pagestate.music_display_urls):
+                        result_card(
+                            key=f"music_latest_{i}_{url[-24:]}",
+                            src=url,
+                            kind="audio",
+                            prompt=pagestate.music_prompt_input,
+                            meta=_track_meta(pagestate, i),
+                            actions="download,reuse",
+                            on_action=on_music_card_action,
+                        )
+                _latest_extras(pagestate)
+            elif not pagestate.is_loading and pagestate.progress_status != "error":
+                empty_results(
+                    "music_note",
+                    "Your music will show up here",
+                    "Describe a sound or a song, then press Enter.",
                 )
 
-        _FLEX_BOX_STYLE = me.Style(
-            background=me.theme_var("background"),
-            border_radius=12,
-            box_shadow=(
-                "0 3px 1px -2px #0003, 0 2px 2px #00000024, 0 1px 5px #0000001f"
-            ),
-            padding=me.Padding(top=16, left=16, right=16, bottom=16),
-            display="flex",
-            flex_direction="column",
-            flex="1 1 320px",
-            min_width=0,
-        )
-
-        if model_config and model_config.supports_lyrics:
-            with me.box(
-                style=me.Style(
-                    display="flex",
-                    flex_direction="row",
-                    flex_wrap="wrap",
-                    gap=16,
-                    width="100%",
-                ),
-            ):
-                with me.box(style=_FLEX_BOX_STYLE):
-                    me.text(
-                        "Prompt for music generation",
-                        style=me.Style(font_weight=500),
-                    )
-                    me.box(style=me.Style(height=16))
-                    subtle_lyria_input()
-                with me.box(style=_FLEX_BOX_STYLE):
-                    me.text("Lyrics (Optional)", style=me.Style(font_weight=500))
-                    me.box(style=me.Style(height=16))
-                    subtle_lyrics_input()
-        else:
-            with me.box(style=_BOX_STYLE):
-                me.text("Prompt for music generation", style=me.Style(font_weight=500))
-                me.box(style=me.Style(height=16))
-                subtle_lyria_input()
-
-        if model_config and model_config.supports_images:
-            with me.box(style=_REFERENCE_IMAGES_BOX_STYLE):
-                me.text("Reference Images", style=me.Style(font_weight=500))
-                me.box(style=me.Style(height=16))
-                with me.box(
-                    style=me.Style(
-                        display="flex",
-                        flex_direction="row",
-                        flex_wrap="wrap",
-                        gap=16,
-                        margin=me.Margin(bottom=16),
-                        align_items="center",
-                    ),
-                ):
-                    me.uploader(
-                        label="Upload Image(s)",
-                        accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                        on_upload=on_upload_lyria_image,
-                        multiple=True,
-                        type="flat",
-                    )
-                    library_chooser_button(
-                        on_library_select=on_library_select,
-                        button_label="Choose from Library",
-                    )
-                    if pagestate.uploaded_image_gcs_uris:
-                        me.button(
-                            "Clear All",
-                            on_click=on_clear_lyria_image,
-                            type="stroked",
+            older = pagestate.history_urls[
+                len(pagestate.music_display_urls) if has_latest else 0 :
+            ]
+            if older:
+                offset = len(pagestate.history_urls) - len(older)
+                with result_grid(title="Recent", count=len(older), wide=True):
+                    for j, url in enumerate(older):
+                        i = offset + j
+                        result_card(
+                            key=f"music_hist_{i}_{url[-24:]}",
+                            src=url,
+                            kind="audio",
+                            prompt=pagestate.history_prompts[i]
+                            if i < len(pagestate.history_prompts)
+                            else "",
+                            meta=pagestate.history_meta[i]
+                            if i < len(pagestate.history_meta)
+                            else "",
+                            actions="download,reuse",
+                            on_action=on_music_card_action,
                         )
 
-                if pagestate.uploaded_image_gcs_uris:
-                    with me.box(
-                        style=me.Style(
-                            display="flex",
-                            flex_wrap="wrap",
-                            gap=10,
-                            justify_content="flex-start",
-                        ),
-                    ):
-                        for i, uri in enumerate(pagestate.uploaded_image_display_urls):
-                            image_thumbnail(
-                                image_uri=uri,
-                                index=i,
-                                on_remove=on_remove_image,
-                                icon_size=18,
-                            )
-
-        me.box(style=me.Style(height=24))
-
-        # Primary Operation Loading Indicator (Lyria Generation or Rewriter)
-        if pagestate.is_loading:
-            with me.box(
-                style=me.Style(
-                    display="grid",
-                    justify_content="center",
-                    justify_items="center",
-                    padding=me.Padding.all(16),
-                ),
-            ):
-                me.progress_spinner()
-                me.text(
-                    pagestate.loading_operation_message,  # Display dynamic loading message
-                    style=me.Style(margin=me.Margin(top=8)),
-                )
-
-        # Audio Player - Show if URI exists AND primary loading is done
-        if (
-            pagestate.music_display_urls
-            and not pagestate.is_loading  # Check generic loading
-            and not pagestate.show_error_dialog
-        ):
-            with me.box(
-                style=me.Style(
-                    display="flex",
-                    flex_direction="column",
-                    gap=16,
-                    align_items="center",
-                    margin=me.Margin(bottom=16),
-                ),
-            ):
-                if len(pagestate.music_display_urls) > 1:
-                    with me.box(
-                        style=me.Style(
-                            display="flex",
-                            flex_direction="row",
-                            gap=16,
-                            align_items="center",
-                        ),
-                    ):
-                        me.select(
-                            label="Select Track",
-                            options=[
-                                me.SelectOption(label=f"Track {i+1}", value=str(i))
-                                for i in range(len(pagestate.music_display_urls))
-                            ],
-                            on_selection_change=on_track_selection_change,
-                            value=str(pagestate.selected_track_index),
-                            style=me.Style(width=250),
-                        )
-
-                current_audio_url = (
-                    pagestate.music_display_urls[pagestate.selected_track_index]
-                    if pagestate.selected_track_index
-                    < len(pagestate.music_display_urls)
-                    else pagestate.music_display_urls[0]
-                )
-                me.audio(src=current_audio_url)
-
-                if pagestate.c2pa_manifest_json:
-                    with me.box(style=me.Style(margin=me.Margin(top=16))):
-                        content_credentials_viewer(
-                            manifest=pagestate.c2pa_manifest_json,
-                        )
-
-                if pagestate.generated_text:
-                    with me.box(style=me.Style(margin=me.Margin(top=16), width="100%")):
-                        with me.expansion_panel(
-                            title="Generated Text Outputs",
-                            icon="notes",
-                        ):
-                            for text_output in pagestate.generated_text:
-                                me.markdown(text_output)
-                                me.divider()
-
-        # Gemini Analysis Loading Indicator - Show if analyzing AND primary loading is done
-        if pagestate.is_analyzing and not pagestate.is_loading:
-            with me.box(
-                style=me.Style(
-                    display="grid",
-                    justify_content="center",
-                    justify_items="center",
-                    padding=me.Padding.all(16),
-                ),
-            ):
-                me.progress_spinner()
-                me.text(
-                    "Analyzing audio with Gemini...",
-                    style=me.Style(margin=me.Margin(top=8)),
-                )
-
-        audio_critic()
-
-        technical_metrics()
-
-        # Error Dialog for Generation Errors (Lyria errors)
+        # Error dialog for prompt rewriting and lyrics writing.
         with dialog(is_open=pagestate.show_error_dialog):  # pylint: disable=not-context-manager
             me.text(
-                "Generation Error",
+                "Something went wrong",
                 type="headline-6",
                 style=me.Style(color=me.theme_var("error"), font_weight="bold"),
             )
@@ -335,151 +211,275 @@ def lyria_content(app_state: me.state):
                 me.button("Close", on_click=on_close_error_dialog, type="flat")
 
 
-@me.component
-def subtle_lyria_input():
-    """Lyria music description input component"""
-    pagestate = me.state(PageState)
-    icon_style = me.Style(
-        display="flex",
-        flex_direction="column",
-        gap=2,
-        font_size=10,
-        align_items="center",
-    )
-    with me.box(
-        style=me.Style(
-            border_radius=16,
-            padding=me.Padding.all(8),
-            background=me.theme_var("secondary-container"),
-            display="flex",
-            width="100%",
-        ),
-    ):
-        with me.box(style=me.Style(flex_grow=1)):
-            me.native_textarea(
-                autosize=True,
-                min_rows=8,
-                placeholder="enter a musical audio description",
-                style=me.Style(
-                    padding=me.Padding(top=16, left=16, right=16, bottom=16),
-                    background=me.theme_var("secondary-container"),
-                    outline="none",
-                    width="100%",
-                    max_height=300,
-                    overflow_y="auto",
-                    border=me.Border.all(me.BorderSide(style="none")),
-                    color=me.theme_var("foreground"),
-                    flex_grow=1,
-                ),
-                on_blur=on_blur_lyria_prompt,
-                key=str(pagestate.music_prompt_textarea_key),
-                value=pagestate.music_prompt_placeholder,
+def _track_meta(pagestate: PageState, index: int) -> str:
+    model_config = get_lyria_model_config(pagestate.selected_model_id)
+    name = model_config.display_name if model_config else pagestate.selected_model_id
+    if len(pagestate.music_display_urls) > 1:
+        return f"{name} · Track {index + 1}"
+    return name
+
+
+def _latest_extras(pagestate: PageState):
+    """Credentials, text outputs, analysis for the latest generation."""
+    with me.box(classes="gm-music-extras"):
+        if pagestate.timing:
+            me.text(
+                pagestate.timing,
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )
-        with me.box(
-            style=me.Style(
-                display="flex",
-                flex_direction="column",
-                gap=10,
-                padding=me.Padding(left=16, right=16, bottom=16),
-            ),
-        ):
-            with me.content_button(
-                type="icon",
-                on_click=on_click_lyria,
-                disabled=pagestate.is_loading or pagestate.is_analyzing,
+        if pagestate.c2pa_manifest_json:
+            content_credentials_viewer(manifest=pagestate.c2pa_manifest_json)
+        if pagestate.generated_text:
+            with me.expansion_panel(title="Generated text", icon="notes"):
+                for text_output in pagestate.generated_text:
+                    me.markdown(text_output)
+                    me.divider()
+        if pagestate.is_analyzing:
+            with me.box(
+                style=me.Style(display="flex", align_items="center", gap=10),
             ):
-                with me.box(style=icon_style):
-                    me.icon("music_note")
-                    me.text("Generate Audio")
-            me.box(style=me.Style(height=5))
-            with me.content_button(
-                type="icon",
-                on_click=on_click_lyria_rewriter,
-                disabled=pagestate.is_loading or pagestate.is_analyzing,
-            ):
-                with me.box(style=icon_style):
-                    me.icon("auto_awesome")
-                    me.text("Rewrite")
-            me.box(style=me.Style(height=5))
-            with me.content_button(
-                type="icon",
-                on_click=clear_music,
-                disabled=pagestate.is_loading or pagestate.is_analyzing,
-            ):
-                with me.box(style=icon_style):
-                    me.icon("clear")
-                    me.text("Clear")
+                me.progress_spinner(diameter=20, stroke_width=3)
+                me.text("Analyzing the track with Gemini…")
+        audio_critic()
+        technical_metrics()
 
 
-@me.component
-def subtle_lyrics_input():
-    """Lyria lyrics input component"""
+def _render_music_references():
+    """Reference images inside the composer (Lyria 3)."""
     pagestate = me.state(PageState)
-    icon_style = me.Style(
-        display="flex",
-        flex_direction="column",
-        gap=2,
-        font_size=10,
-        align_items="center",
-    )
-    with me.box(
-        style=me.Style(
-            border_radius=16,
-            padding=me.Padding.all(8),
-            background=me.theme_var("secondary-container"),
-            display="flex",
-            width="100%",
+    if not pagestate.uploaded_image_display_urls:
+        return
+    with me.box(classes="gm-attach-row"):
+        for i, uri in enumerate(pagestate.uploaded_image_display_urls):
+            composer_attachment(
+                src=uri,
+                label=f"reference image {i + 1}",
+                index=i,
+                on_remove=on_remove_image,
+            )
+
+
+def _music_chips(pagestate: PageState, model_config):
+    """Setting chips in the composer row."""
+    chip_menu(
+        key="music_chip_model",
+        label="Model",
+        icon="model",
+        value=pagestate.selected_model_id,
+        options=chip_options(
+            (
+                m.version_id,
+                m.display_name,
+                "Songs with lyrics" if m.supports_lyrics else "Instrumental clips",
+            )
+            for m in _ordered_models()
         ),
-    ):
-        with me.box(style=me.Style(flex_grow=1)):
+        on_change=on_chip_music_model,
+    )
+    if model_config and model_config.max_samples > 1:
+        chip_menu(
+            key="music_chip_count",
+            label="Number of tracks",
+            icon="count",
+            value=str(pagestate.sample_count),
+            options=chip_options(
+                (str(i), f"{i} track" + ("s" if i > 1 else ""))
+                for i in range(1, model_config.max_samples + 1)
+            ),
+            on_change=on_chip_music_count,
+        )
+    if model_config and model_config.supports_lyrics:
+        chip_menu(
+            key="music_chip_lyrics",
+            label="Lyrics: add words to sing (optional)",
+            icon="lyrics",
+            kind="toggle",
+            value="Lyrics",
+            checked=pagestate.show_lyrics,
+            on_change=on_chip_music_lyrics,
+        )
+    if model_config and model_config.supports_images:
+        busy = pagestate.is_loading or pagestate.is_analyzing
+        with me.box(classes="gm-composer-attach"):
+            with me.box(classes="gm-composer-btn"):
+                with (
+                    me.tooltip(message="Attach a reference image"),
+                    me.content_uploader(
+                        on_upload=on_upload_lyria_image,
+                        multiple=True,
+                        accepted_file_types=["image/jpeg", "image/png", "image/webp"],
+                        disabled=busy,
+                        type="icon",
+                        key="music_attach",
+                    ),
+                ):
+                    me.icon("add_photo_alternate")
+                    with me.box(classes="gm-sr-only"):
+                        me.text("Attach a reference image")
+            with me.box(classes="gm-composer-btn"):
+                library_chooser_button(
+                    on_library_select=on_library_select,
+                    button_type="icon",
+                    disabled=busy,
+                    key="music_library",
+                )
+
+
+def _lyrics_panel(pagestate: PageState):
+    """Optional lyrics, a second field under the prompt."""
+    with me.box(classes="gm-advanced gm-music-panel"):
+        with me.box(classes="gm-advanced-head"):
+            with me.box(classes="gm-title gm-title-section"):
+                me.markdown("## Lyrics (optional)")
+            with (
+                me.content_button(type="icon", on_click=on_close_lyrics),
+                me.tooltip(message="Hide lyrics"),
+            ):
+                me.icon("close")
+                with me.box(classes="gm-sr-only"):
+                    me.text("Hide lyrics")
+        with me.box(classes="gm-music-lyrics"):
             me.native_textarea(
-                autosize=True,
-                min_rows=8,
-                placeholder="Enter lyrics here...",
-                style=me.Style(
-                    padding=me.Padding(top=16, left=16, right=16, bottom=16),
-                    background=me.theme_var("secondary-container"),
-                    outline="none",
-                    width="100%",
-                    max_height=300,
-                    overflow_y="auto",
-                    border=me.Border.all(me.BorderSide(style="none")),
-                    color=me.theme_var("foreground"),
-                    flex_grow=1,
-                ),
-                on_blur=on_blur_lyria_lyrics,
+                key=f"music_lyrics_{pagestate.lyrics_key}",
                 value=pagestate.lyrics_placeholder,
+                placeholder="Write the words to sing, or leave this empty for music without words.",
+                style=me.Style(height=150),
+                on_blur=on_blur_lyria_lyrics,
             )
-        with me.box(
-            style=me.Style(
-                display="flex",
-                flex_direction="column",
-                gap=10,
-                padding=me.Padding(left=16, right=16, bottom=16),
-            ),
-        ):
-            with me.content_button(
-                type="icon",
-                on_click=on_click_lyria_lyrics_generate,
-                disabled=pagestate.is_generating_lyrics or pagestate.is_loading,
-            ):
-                with me.box(style=icon_style):
-                    me.icon("auto_awesome")
-                    me.text("Generate")
+        with me.box(classes="gm-music-actions"):
+            me.text(
+                "Gemini can draft lyrics from your music prompt.",
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+            )
+            if pagestate.is_generating_lyrics:
+                with me.box(style=me.Style(display="flex", align_items="center", gap=8)):
+                    me.progress_spinner(diameter=20, stroke_width=3)
+                    me.text("Writing lyrics…")
+            else:
+                with me.content_button(
+                    type="stroked",
+                    on_click=on_click_write_lyrics,
+                    disabled=pagestate.is_loading,
+                ):
+                    with me.box(
+                        style=me.Style(display="flex", align_items="center", gap=6),
+                    ):
+                        me.icon("auto_awesome")
+                        me.text("Write lyrics with Gemini")
 
 
-def on_lyria_model_change(e: me.SelectSelectionChangeEvent):
+def on_chip_music_model(e: me.WebEvent):
+    """Model chip."""
+    value = change_value(e)
+    if value:
+        _apply_lyria_model(value)
+    yield
+
+
+def on_chip_music_count(e: me.WebEvent):
+    """Number-of-tracks chip."""
+    me.state(PageState).sample_count = int(change_value(e) or 1)
+    yield
+
+
+def on_chip_music_lyrics(e: me.WebEvent):
+    """Show or hide the lyrics field."""
+    me.state(PageState).show_lyrics = change_value(e) == "true"
+    yield
+
+
+def on_close_lyrics(e: me.ClickEvent):  # pylint: disable=unused-argument
+    """Hide the lyrics field (keeps what was written)."""
+    me.state(PageState).show_lyrics = False
+    yield
+
+
+def on_music_prompt_enter(e: me.TextareaShortcutEvent):
+    """Enter in the prompt box: store the prompt and generate."""
     state = me.state(PageState)
-    state.selected_model_id = e.value
-    # Reset lyrics and images if switching to a model that doesn't support them
-    model_config = get_lyria_model_config(e.value)
+    if state.is_loading or state.is_analyzing:
+        yield
+        return
+    state.music_prompt_input = e.value
+    state.music_prompt_placeholder = e.value
+    state.original_user_prompt = e.value
+    yield from on_click_lyria(e)
+
+
+def on_click_enhance_music_prompt(e: me.ClickEvent):
+    """Rewrite the prompt with Gemini, with a spinner on the button."""
+    state = me.state(PageState)
+    state.is_rewriting = True
+    yield
+    try:
+        yield from on_click_lyria_rewriter(e)
+        state.music_prompt_textarea_key += 1
+    finally:
+        state.is_rewriting = False
+        yield
+
+
+def on_click_write_lyrics(e: me.ClickEvent):
+    """Draft lyrics with Gemini, then refresh the lyrics field."""
+    yield from on_click_lyria_lyrics_generate(e)
+    me.state(PageState).lyrics_key += 1
+    yield
+
+
+def on_music_progress_retry(e: me.WebEvent):
+    """'Try again' on the progress card."""
+    yield from on_click_lyria(e)
+
+
+def on_music_progress_dismiss(e: me.WebEvent):  # pylint: disable=unused-argument
+    """Hide the progress card after an error."""
+    progress_clear(me.state(PageState))
+    yield
+
+
+def on_music_card_action(e: me.WebEvent):
+    """Actions from a track card."""
+    state = me.state(PageState)
+    action, src = card_action(e)
+    if action == "reuse" and src in state.history_urls:
+        i = state.history_urls.index(src)
+        if i < len(state.history_prompts):
+            prompt = state.history_prompts[i]
+            state.music_prompt_input = prompt
+            state.music_prompt_placeholder = prompt
+            state.original_user_prompt = prompt
+            state.music_prompt_textarea_key += 1
+    yield
+
+
+def _remember_tracks(state: PageState, prompt: str):
+    """Put the new tracks at the front of the Recent list."""
+    for i in reversed(range(len(state.music_display_urls))):
+        state.history_urls.insert(0, state.music_display_urls[i])
+        state.history_prompts.insert(0, prompt)
+        state.history_meta.insert(0, _track_meta(state, i))
+
+
+def _apply_lyria_model(value: str):
+    """Switch model; drop lyrics and images the new model can't use."""
+    state = me.state(PageState)
+    state.selected_model_id = value
+    model_config = get_lyria_model_config(value)
     if model_config and not model_config.supports_lyrics:
         state.lyrics_input = ""
         state.lyrics_placeholder = ""
+        state.show_lyrics = False
+        state.lyrics_key += 1
     if model_config and not model_config.supports_images:
         state.uploaded_image_gcs_uris = []
-    state.uploaded_image_mime_types = []
-    state.uploaded_image_display_urls = []
+        state.uploaded_image_mime_types = []
+        state.uploaded_image_display_urls = []
+    if model_config and state.sample_count > model_config.max_samples:
+        state.sample_count = model_config.max_samples
+
+
+def on_lyria_model_change(e: me.SelectSelectionChangeEvent):
+    _apply_lyria_model(e.value)
 
 
 def on_blur_lyria_lyrics(e: me.InputBlurEvent):
@@ -605,9 +605,15 @@ def on_click_lyria(e: me.ClickEvent):
     app_state = me.state(AppState)
     state = me.state(PageState)
     prompt_for_api = state.music_prompt_input
-    if not prompt_for_api:
-        state.error_message = "Music prompt cannot be empty."
-        state.show_error_dialog = True
+    if state.is_loading or state.is_analyzing:
+        yield
+        return
+    progress_start(
+        state,
+        ["Preparing", "Sending to Lyria", "Composing", "Saving to library", "Done"],
+    )
+    if not prompt_for_api.strip():
+        progress_fail(state, "Describe the music first, then press Enter.")
         yield
         return
 
@@ -620,7 +626,16 @@ def on_click_lyria(e: me.ClickEvent):
     state.error_message = ""
     state.audio_analysis_result_json = None
     state.analysis_error_message = ""
+    state.has_audio_metrics = False
+    state.c2pa_manifest_json = ""
+    state.timing = ""
     yield
+    progress_step(state, 1)
+    yield
+
+    if mock_enabled():
+        yield from _mock_music_job(state, prompt_for_api)
+        return
 
     print(
         f"Let's make music with: {prompt_for_api} (Model: {state.selected_model_id}, Samples: {state.sample_count}, Images: {len(state.uploaded_image_gcs_uris)})",
@@ -634,6 +649,8 @@ def on_click_lyria(e: me.ClickEvent):
     gcs_uri_for_analysis_and_metadata = ""
     analysis_dict_for_metadata = None
 
+    progress_step(state, 2)
+    yield
     try:
         destination_blob_paths, c2pa_data, text_outputs = generate_music_with_lyria(
             prompt=prompt_for_api,
@@ -662,13 +679,19 @@ def on_click_lyria(e: me.ClickEvent):
             destination_blob_paths[0] if destination_blob_paths else ""
         )
 
+        state.generated_text = list(text_outputs or [])
+        state.selected_track_index = 0
+
         print(f"Music generated: {state.music_display_urls}")
         generated_successfully = True
+        progress_step(state, 3)
+        _remember_tracks(state, prompt_for_api)
+        progress_done(state)
     except Exception as err:
         print(f"Error during music generation: {err}")
         state.error_message = str(err)
         lyria_error_message_for_metadata = str(err)
-        state.show_error_dialog = True
+        progress_fail(state, friendly_error(err))
     finally:
         state.is_loading = False
         state.loading_operation_message = ""  # Clear message
@@ -768,8 +791,44 @@ def on_click_lyria(e: me.ClickEvent):
         print(f"CRITICAL: Failed to store metadata: {meta_err}")
 
 
+def _mock_music_job(state: PageState, prompt: str):
+    """Dev-only: walk the stages with fake waits and a placeholder chime."""
+    start = time.time()
+    try:
+        time.sleep(0.6)
+        progress_step(state, 2)
+        yield
+        fake_wait(2.0, prompt)
+        progress_step(state, 3)
+        yield
+        time.sleep(0.4)
+        state.music_gcs_uris = []
+        state.music_display_urls = [
+            sample_audio(len(state.history_urls) + i)
+            for i in range(max(1, state.sample_count))
+        ]
+        state.generated_text = []
+        state.timing = f"Generation time: {round(time.time() - start)} seconds (mock)"
+        _remember_tracks(state, prompt)
+        progress_done(state)
+    except Exception as err:  # pylint: disable=broad-except
+        progress_fail(state, friendly_error(err))
+    finally:
+        state.is_loading = False
+        state.loading_operation_message = ""
+        yield
+
+
 def clear_music(e: me.ClickEvent):
     state = me.state(PageState)
+    state.lyrics_input = ""
+    state.lyrics_placeholder = ""
+    state.lyrics_key += 1
+    state.history_urls = []
+    state.history_prompts = []
+    state.history_meta = []
+    state.c2pa_manifest_json = ""
+    progress_clear(state)
     state.music_prompt_input = ""
     state.music_prompt_placeholder = ""
     state.original_user_prompt = ""

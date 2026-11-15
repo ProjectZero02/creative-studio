@@ -36,7 +36,22 @@ class PageState:
     
     lyrics_input: str = ""
     lyrics_placeholder: str = ""
-    
+    lyrics_key: int = 0
+    show_lyrics: bool = False
+    is_rewriting: bool = False
+
+    # Tracks made this session, newest first (Music page "Recent").
+    history_urls: list[str] = field(default_factory=list)
+    history_prompts: list[str] = field(default_factory=list)
+    history_meta: list[str] = field(default_factory=list)
+
+    # components/generation_progress fields
+    progress_stages: list[str] = field(default_factory=list)
+    progress_stage: int = 0
+    progress_status: str = ""
+    progress_run_id: str = ""
+    progress_error: str = ""
+
     uploaded_image_gcs_uris: list[str] = field(default_factory=list)
     uploaded_image_mime_types: list[str] = field(default_factory=list)
     uploaded_image_display_urls: list[str] = field(default_factory=list)
