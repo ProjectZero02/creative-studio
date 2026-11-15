@@ -116,8 +116,8 @@ The project uses Starlight (Astro) in `docs-site/` as its primary documentation 
     *   `README.md` ↔ `docs-site/src/content/docs/core/index.md` (Primary landing page and featureset list)
     *   `CHANGELOG.md` ↔ `docs-site/src/content/docs/core/changelog.md` (Core application release history)
     *   `environment_variables.md` ↔ `docs-site/src/content/docs/core/installation/environment_variables.md`
-    *   `FAQ.md` ↔ `docs-site/src/content/docs/core/FAQ.md`
-    *   `developers_guide.md` ↔ `docs-site/src/content/docs/core/developers_guide.md`
+    *   `docs/FAQ.md` ↔ `docs-site/src/content/docs/core/FAQ.md`
+    *   `docs/developers_guide.md` ↔ `docs-site/src/content/docs/core/developers_guide.md`
 *   **Feature Hierarchy & Usage:** When adding a new model, workflow, or capability, ensure it is added to the featureset list in both `README.md` / `core/index.md` and detailed under the appropriate section in `docs-site/src/content/docs/core/usage.md` (or dedicated architecture pages under `docs-site/src/content/docs/core/`).
 *   **Frontmatter & Sidebar:** Every markdown file within `docs-site/src/content/docs/` MUST have YAML frontmatter with a `title` attribute. If you add a new page or section, update `docs-site/astro.config.mjs` to include the new `slug` in the sidebar configuration.
 *   **Relative Paths & Local Preview:** Use correct paths based on the file's location in `docs-site/`. Run `npm run dev` inside `docs-site/` to preview changes locally (restart the dev server to clear the Vite cache if frontmatter schemas or assets change).
