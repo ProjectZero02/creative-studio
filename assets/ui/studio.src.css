@@ -389,6 +389,7 @@ html body .gm-title p { margin: 0; }
   }
   html body .gm-content:not(.gm-nav-open),
   html body .gm-content.gm-nav-open { margin-left: 0; }
-  html body .gm-content:not(.gm-nav-open) .gm-page { padding-top: 56px; }
+  /* The avatar row (.gm-topbar) shares the line with the floating menu button. */
+  html body .gm-topbar { padding-left: 64px !important; padding-right: 16px !important; }
   html body .mat-drawer:not(:has(.gm-nav-collapsed)) { box-shadow: 0 8px 32px rgb(0 0 0 / 0.28) !important; }
 }
