@@ -69,17 +69,40 @@ def header(
     on_info_click: typing.Callable[..., None] | None = None,
     current_status: str = None,
     description: str | None = None,
+    centered: bool = False,
 ):
     """Render the page header.
 
     `description` defaults to the page's line in config/navigation.json, so
     every page says what it is for without per-page edits. Pass "" to hide it.
+    `centered` renders the studio hero (icon above a centred title), used by
+    the composer pages (Image Studio, Video Studio).
     """
     purpose = (
         description
         if description is not None
         else nav_descriptions().get(title.lower())
     )
+
+    if centered:
+        with me.box(classes="gm-header gm-header-hero"):
+            with me.box(classes="gm-hero-icon"):
+                _render_icon(icon)
+            with me.box(classes="gm-title gm-title-studio"):
+                me.markdown("# " + _md_escape(title))
+            if purpose:
+                with me.box(classes="gm-hero-purpose"):
+                    me.text(purpose)
+            if show_info_button and on_info_click:
+                with me.box(classes="gm-hero-info"):
+                    with (
+                        me.content_button(type="icon", on_click=on_info_click),
+                        me.tooltip(message="About this page"),
+                    ):
+                        me.icon(icon="info_outline")
+                        with me.box(classes="gm-sr-only"):
+                            me.text("About this page")
+        return
 
     with me.box(
         classes="gm-header",
