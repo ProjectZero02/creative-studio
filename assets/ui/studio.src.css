@@ -374,3 +374,237 @@ html body .gm-title p { margin: 0; }
 @media (max-width: 760px) {
   html body .gm-title-page h1 { font-size: 22px; }
 }
+
+/* ---------- Studio pages (Image Studio, Video Studio): composer layout ---------- */
+/* Hero: icon above a centred title and one-line purpose. */
+html body .gm-header-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  margin: 8px auto 24px;
+  max-width: 760px;
+  padding: 0 48px;
+}
+html body .gm-hero-icon {
+  width: 52px; height: 52px; border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--sys-primary-container);
+  color: var(--sys-on-primary-container);
+}
+html body .gm-hero-icon .mat-icon,
+html body .gm-hero-icon svg { width: 26px !important; height: 26px !important; font-size: 26px !important; }
+html body .gm-title-studio h1 { font-size: clamp(28px, 3vw, 38px); line-height: 1.15; letter-spacing: -0.025em; }
+html body .gm-hero-purpose { font-size: 16px; line-height: 1.5; color: var(--sys-on-surface-variant); max-width: 560px; }
+html body .gm-hero-info { position: absolute; top: 0; right: 0; }
+
+html body .gm-studio {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Composer card */
+html body .gm-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 18px 12px 22px;
+  border-radius: 24px;
+  border: 1px solid var(--gm-border);
+  background: var(--sys-surface-container-lowest);
+  box-shadow: var(--gm-card-shadow-hover);
+  transition: border-color var(--gm-fast) var(--gm-ease), box-shadow var(--gm-fast) var(--gm-ease);
+}
+html body .gm-composer:focus-within { border-color: color-mix(in srgb, var(--sys-primary) 55%, var(--gm-border)); }
+html body .gm-composer textarea { resize: none; }
+html body .gm-composer textarea::placeholder { color: var(--sys-on-surface-variant); opacity: 0.85; }
+/* Keyboard focus ring on the field itself, kept close to the text. */
+html body .gm-composer-field textarea:focus-visible {
+  outline: 2px solid var(--gm-focus) !important;
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+html body .gm-composer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+html body .gm-composer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+html body .gm-composer-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+html body .gm-composer-attach { display: flex; align-items: center; gap: 2px; }
+html body .gm-composer-btn .mat-mdc-icon-button,
+html body .gm-composer-btn .mdc-icon-button {
+  width: 40px !important; height: 40px !important; padding: 8px !important;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--sys-on-surface-variant);
+}
+html body .gm-composer-btn .mat-mdc-icon-button:hover:not(:disabled) { background: var(--gm-hover); color: var(--sys-on-surface); }
+html body .gm-composer-send .mat-mdc-icon-button,
+html body .gm-composer-send .mdc-icon-button {
+  width: 44px !important; height: 44px !important;
+  background: var(--sys-primary) !important;
+  color: var(--sys-on-primary) !important;
+}
+html body .gm-composer-send .mat-mdc-icon-button:hover { background: color-mix(in srgb, var(--sys-primary) 88%, var(--sys-on-primary)) !important; }
+html body .gm-composer-wait {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--sys-primary-container);
+}
+html body .gm-composer-hint { font-size: 12px; color: var(--sys-on-surface-variant); padding: 0 2px; }
+html body .gm-composer.gm-busy { box-shadow: var(--gm-card-shadow); }
+
+/* Reference images inside the composer */
+html body .gm-attach-row { display: flex; flex-wrap: wrap; gap: 10px; padding-bottom: 4px; }
+html body .gm-attach {
+  position: relative; width: 64px; height: 64px; border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--gm-border);
+}
+html body .gm-attach img { width: 100%; height: 100%; object-fit: cover; border-radius: 0 !important; display: block; }
+html body .gm-attach-remove { position: absolute; top: 2px; right: 2px; }
+html body .gm-attach-remove .mat-mdc-icon-button {
+  width: 24px !important; height: 24px !important; padding: 2px !important;
+  background: rgba(18, 20, 24, 0.7) !important; color: #fff !important;
+}
+html body .gm-attach-remove .mat-icon { font-size: 18px; width: 18px; height: 18px; }
+html body .gm-veo-refs { padding-bottom: 6px; }
+html body .gm-veo-refs > * { flex-wrap: wrap; }
+html body .gm-ref-slot { background: var(--sys-surface-container-low); }
+
+/* Omni banner (upstream component): the flex box is a styled component-renderer. */
+html body .gm-omni-slot component-renderer[style*="align-items"] { margin: 0 !important; }
+html body .gm-omni-slot component-renderer[style*="align-items"] > component-renderer:nth-of-type(2) { flex: 1 1 0; min-width: 0; }
+
+/* Segmented control (Veo modes) */
+html body .gm-segmented { display: flex; justify-content: center; }
+html body .gm-segmented .mat-button-toggle-group {
+  border-radius: 999px !important;
+  border: 1px solid var(--gm-border) !important;
+  background: var(--sys-surface-container-low);
+  padding: 3px;
+  gap: 2px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+html body .gm-segmented .mat-button-toggle {
+  border: none !important;
+  border-radius: 999px !important;
+  background: transparent;
+  color: var(--sys-on-surface-variant);
+  transition: background-color var(--gm-fast) var(--gm-ease), color var(--gm-fast) var(--gm-ease);
+}
+html body .gm-segmented .mat-button-toggle + .mat-button-toggle { border-left: none !important; }
+html body .gm-segmented .mat-button-toggle-checked {
+  background: var(--sys-surface-container-lowest) !important;
+  color: var(--sys-on-surface) !important;
+  box-shadow: var(--gm-card-shadow);
+}
+html body .gm-segmented .mat-button-toggle-label-content {
+  line-height: 38px !important; padding: 0 16px !important; font-size: 14px; font-weight: 500; white-space: nowrap;
+}
+
+/* Advanced settings panel */
+html body .gm-advanced {
+  padding: 16px 20px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--gm-border);
+  background: var(--sys-surface-container-lowest);
+  animation: gm-fade-up var(--gm-med) var(--gm-ease);
+}
+html body .gm-advanced-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+html body .gm-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  column-gap: 16px;
+  align-items: start;
+}
+html body .gm-advanced-grid > :first-child { grid-column: 1 / -1; }
+
+/* Results */
+html body .gm-latest { display: flex; flex-direction: column; gap: 14px; }
+html body .gm-latest-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (min-width: 1100px) {
+  html body .gm-latest-split { grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); }
+}
+html body .gm-latest-media { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+html body .gm-latest-meta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center; }
+html body .gm-zoom { cursor: zoom-in; }
+html body .gm-next {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid var(--gm-border);
+  background: var(--sys-surface-container-lowest);
+}
+html body .gm-next-actions, html body .gm-preset-row { display: flex; flex-wrap: wrap; gap: 8px; }
+html body .gm-btn-row { display: flex; align-items: center; gap: 8px; }
+html body .gm-results { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+html body .gm-results-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+html body .gm-results-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  align-items: start;
+}
+html body .gm-empty {
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px;
+  padding: 40px 24px;
+  border-radius: 20px;
+  border: 1px dashed var(--sys-outline-variant);
+  color: var(--sys-on-surface);
+}
+html body .gm-empty-icon {
+  width: 48px; height: 48px; border-radius: 14px; margin-bottom: 6px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--sys-surface-container-high); color: var(--sys-on-surface-variant);
+}
+
+@media (max-width: 600px) {
+  html body .gm-header-hero { padding: 0 44px; margin-bottom: 18px; }
+  html body .gm-hero-purpose { font-size: 15px; }
+  html body .gm-composer { padding: 14px 12px 10px 14px; border-radius: 20px; }
+  html body .gm-composer-tools { flex-basis: 100%; }
+  html body .gm-composer-btn .mat-mdc-icon-button,
+  html body .gm-composer-btn .mdc-icon-button,
+  html body .gm-hero-info .mat-mdc-icon-button { width: 44px !important; height: 44px !important; padding: 10px !important; }
+  html body .gm-composer-hint { display: none; }
+  /* Four modes do not fit one row on a phone: a 2 x 2 grid with 44px rows. */
+  html body .gm-segmented .mat-button-toggle-group {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+    border-radius: 22px !important;
+    overflow: visible;
+  }
+  html body .gm-segmented .mat-button-toggle-button { min-height: 44px; }
+  html body .gm-segmented .mat-button-toggle-label-content {
+    line-height: 44px !important; padding: 0 8px !important; font-size: 14px;
+  }
+  html body .gm-omni-slot component-renderer[style*="align-items"] { flex-wrap: wrap; }
+  html body .gm-omni-slot component-renderer[style*="align-items"] > component-renderer:nth-of-type(2) { flex-basis: calc(100% - 40px); }
+  html body .gm-omni-slot component-renderer[style*="align-items"] > component-renderer:last-child { margin-left: 36px; }
+  html body .gm-omni-slot button { min-height: 44px; }
+  html body .gm-advanced { padding: 14px; }
+  html body .gm-results-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 12px; }
+}
