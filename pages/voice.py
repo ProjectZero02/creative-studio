@@ -30,6 +30,7 @@ from common import storage
 from common.analytics import get_logger
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
+from common.prompt_prefill import prefill_prompt
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
@@ -79,10 +80,14 @@ PURPOSE = "Turn a script into natural speech in 130+ languages."
 
 
 def on_voice_load(e: me.LoadEvent):  # pylint: disable=unused-argument
-    """Preselect the engine from ?engine= (old /gemini-tts and /chirp-3hd links)."""
+    """Preselect ?engine= (old /gemini-tts and /chirp-3hd links); prefill ?prompt=."""
+    state = me.state(VoiceState)
     engine = me.query_params.get("engine", "")
     if engine and is_known_engine(engine):
-        _set_engine(me.state(VoiceState), engine)
+        _set_engine(state, engine)
+    # The sample scripts count as empty; the user's own script never does.
+    if prefill_prompt(state, "text", empty_values=(DEFAULT_SCRIPT, DEFAULT_DIALOGUE)):
+        state.text_key += 1  # redraw the script box with the idea
     yield
 
 

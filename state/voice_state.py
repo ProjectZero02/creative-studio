@@ -37,6 +37,7 @@ class VoiceState:
     engine: str = DEFAULT_VOICE_ENGINE
     text: str = DEFAULT_SCRIPT
     text_key: int = 0
+    prompt_prefill_seen: str = ""  # last ?prompt= applied on load
     voice: str = DEFAULT_VOICE
     language: str = DEFAULT_LANGUAGE
     style: str = DEFAULT_STYLE

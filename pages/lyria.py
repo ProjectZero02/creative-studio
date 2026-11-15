@@ -21,6 +21,7 @@ import mesop as me
 
 from common.metadata import MediaItem, add_media_item_to_firestore  # Updated import
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
+from common.prompt_prefill import prefill_prompt
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer, composer_attachment
@@ -64,10 +65,21 @@ from state.state import AppState
 cfg = Default()
 
 
+def on_lyria_load(e: me.LoadEvent):  # pylint: disable=unused-argument
+    """Prefill the music prompt from ?prompt= (sent by the home page)."""
+    state = me.state(PageState)
+    if prefill_prompt(state, "music_prompt_input"):
+        # The composer shows music_prompt_placeholder; keep both in step.
+        state.music_prompt_placeholder = state.music_prompt_input
+        state.music_prompt_textarea_key += 1  # redraw the prompt box
+    yield
+
+
 @me.page(
     path="/lyria",
     title="Music - GenMedia Creative Studio",
     stylesheets=["/ui/audio-studio.css"],
+    on_load=on_lyria_load,
 )
 def lyria_page():
     """Main Page."""

@@ -24,6 +24,7 @@ from common.metadata import (
     MediaItem,
     add_media_item_to_firestore,
 )
+from common.prompt_prefill import prefill_prompt
 from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
 from common.utils import create_display_url, https_url_to_gcs_uri
@@ -141,6 +142,7 @@ class PageState:
 
     info_dialog_open: bool = False
     initial_load_complete: bool = False
+    prompt_prefill_seen: str = ""  # last ?prompt= applied on load
 
 
 on_aspect_ratio_change = get_on_aspect_ratio_change(PageState)
@@ -1388,6 +1390,7 @@ def on_load(e: me.LoadEvent):
             state.uploaded_image_gcs_uris.append(image_uri)
         state.initial_load_complete = True
 
+    prefill_prompt(state, "prompt")
     yield
 
 
