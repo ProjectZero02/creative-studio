@@ -171,6 +171,11 @@ def on_error_filter_change(e: me.ButtonToggleChangeEvent):
     yield from _load_media(pagestate, is_filter_change=True)
 
 
+def on_empty_create_click(e: me.ClickEvent):
+    """Empty library: go make something."""
+    me.navigate("/nano-banana")
+
+
 @me.page(
     path="/library_v2",
     title="GenMedia Creative Studio - Library",
@@ -193,6 +198,7 @@ def library_content():
             style=me.Style(
                 display="flex",
                 flex_direction="row",
+                flex_wrap="wrap",
                 gap=10,
                 margin=me.Margin(bottom=20),
             ),
@@ -255,9 +261,27 @@ def library_content():
 
             if not media_items and not pagestate.is_loading:
                 with me.box(
-                    style=me.Style(padding=me.Padding.all(20), text_align="center"),
+                    style=me.Style(
+                        grid_column="1 / -1",
+                        display="flex",
+                        flex_direction="column",
+                        align_items="center",
+                        gap=8,
+                        padding=me.Padding.symmetric(vertical=48, horizontal=20),
+                        text_align="center",
+                        border=me.Border.all(
+                            me.BorderSide(width=1, style="dashed", color="var(--gm-border)"),
+                        ),
+                        border_radius=16,
+                    ),
                 ):
-                    me.text("No media items found for the selected filters.")
+                    me.icon("photo_library", style=me.Style(font_size=36, width=36, height=36, color=me.theme_var("primary")))
+                    me.text("Nothing here yet", style=me.Style(font_size=18, font_weight=600))
+                    me.text(
+                        "Images, videos and audio you create appear here. Try another filter, or make something new.",
+                        style=me.Style(color=me.theme_var("on-surface-variant"), max_width=420),
+                    )
+                    me.button("Create an image", type="flat", on_click=on_empty_create_click)
             else:
                 # Sign the whole page's display URLs in parallel (cached); a
                 # no-op when the media proxy is in use.

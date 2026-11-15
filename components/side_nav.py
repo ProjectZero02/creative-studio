@@ -125,7 +125,7 @@ def sidenav(current_page: Optional[str]):
         ),
     ):
         with me.box(
-            classes="gm-nav",
+            classes="gm-nav" if opened else "gm-nav gm-nav-collapsed",
             style=me.Style(
                 display="flex",
                 flex_direction="column",

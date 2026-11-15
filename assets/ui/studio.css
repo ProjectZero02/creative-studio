@@ -416,3 +416,21 @@ html body .gm-title p { margin: 0; }
 @media (max-width: 760px) {
   html body .gm-title-page h1 { font-size: 22px; }
 }
+
+/* Phones: no rail. The menu button floats top-left; the page gets the full width. */
+@media (max-width: 600px) {
+  html body .mat-drawer:has(.gm-nav-collapsed) {
+    width: 64px !important; height: 64px !important;
+    background: transparent !important; border: 0 !important; overflow: visible;
+  }
+  html body .gm-nav-collapsed { padding: 8px !important; overflow: visible !important; background: transparent; }
+  html body .gm-nav-collapsed > :not(:first-child) { display: none !important; }
+  html body .gm-nav-collapsed > :first-child .mdc-icon-button,
+  html body .gm-nav-collapsed > :first-child button {
+    background: var(--sys-surface-container-high); border-radius: 50%;
+  }
+  html body .gm-content:not(.gm-nav-open),
+  html body .gm-content.gm-nav-open { margin-left: 0; }
+  html body .gm-content:not(.gm-nav-open) .gm-page { padding-top: 56px; }
+  html body .mat-drawer:not(:has(.gm-nav-collapsed)) { box-shadow: 0 8px 32px rgb(0 0 0 / 0.28) !important; }
+}

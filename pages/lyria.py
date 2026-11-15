@@ -146,7 +146,8 @@ def lyria_content(app_state: me.state):
             padding=me.Padding(top=16, left=16, right=16, bottom=16),
             display="flex",
             flex_direction="column",
-            flex=1,
+            flex="1 1 320px",
+            min_width=0,
         )
 
         if model_config and model_config.supports_lyrics:
@@ -154,6 +155,7 @@ def lyria_content(app_state: me.state):
                 style=me.Style(
                     display="flex",
                     flex_direction="row",
+                    flex_wrap="wrap",
                     gap=16,
                     width="100%",
                 ),
@@ -183,6 +185,7 @@ def lyria_content(app_state: me.state):
                     style=me.Style(
                         display="flex",
                         flex_direction="row",
+                        flex_wrap="wrap",
                         gap=16,
                         margin=me.Margin(bottom=16),
                         align_items="center",
