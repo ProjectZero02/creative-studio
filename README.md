@@ -76,16 +76,7 @@ Add `--dry-run` to preview every command. Full guide: [`deploy/quickstart/README
 
 ## How it works
 
-```mermaid
-flowchart LR
-  U[Browser] --> R
-  subgraph R[Cloud Run]
-    F[FastAPI: sign-in, media] --> M[Mesop UI]
-  end
-  M --> V[Vertex AI]
-  M --> S[(Cloud Storage)]
-  M --> D[(Firestore)]
-```
+A Python app: a [Mesop](https://mesop-dev.github.io/mesop/) UI on FastAPI, running as one Cloud Run service. Models are called through **Vertex AI** with Google Cloud credentials (no API keys), media is saved to **Cloud Storage**, and the library, users and stories live in **Firestore**.
 
 | Folder | What's in it |
 |---|---|
