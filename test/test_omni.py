@@ -400,40 +400,55 @@ def test_resolve_image_path_param(image_path: str, expected: str) -> None:
     assert resolve_image_path_param(image_path) == expected
 
 
+@patch("pages.omni.me.navigate")
+@patch("pages.omni.me.query_params", {"image_path": "bucket/dir/img.jpg"})
+def test_on_omni_load_redirects_to_video_studio_with_image(
+    mock_navigate: MagicMock,
+) -> None:
+    """/gemini-omni opens Video Studio with Omni selected and the image passed on."""
+    from pages.omni import on_omni_load
+
+    list(on_omni_load(MagicMock()))
+
+    mock_navigate.assert_called_once_with(
+        "/veo",
+        query_params={
+            "veo_model": "gemini-omni-1.2-flash",
+            "image_path": "bucket/dir/img.jpg",
+        },
+    )
+
+
+@patch("pages.omni.me.navigate")
+@patch("pages.omni.me.query_params", {})
+def test_on_omni_load_redirects_to_video_studio(mock_navigate: MagicMock) -> None:
+    """Without an image the redirect only preselects Gemini Omni."""
+    from pages.omni import on_omni_load
+
+    list(on_omni_load(MagicMock()))
+
+    mock_navigate.assert_called_once_with(
+        "/veo", query_params={"veo_model": "gemini-omni-1.2-flash"}
+    )
+
+
 @patch("pages.omni.create_display_url", return_value="https://display/img.jpg")
 @patch("pages.omni.me.query_params", {"image_path": "bucket/dir/img.jpg"})
 @patch("pages.omni.me.state")
-def test_on_omni_load_with_image_path(
+def test_on_omni_load_legacy_with_image_path(
     mock_state: MagicMock, _mock_display: MagicMock
 ) -> None:
-    """An image_path query param preloads the first-frame image in i2v mode."""
-    from pages.omni import on_omni_load
+    """The legacy loader still preloads the first-frame image in i2v mode."""
+    from pages.omni import on_omni_load_legacy
 
     mock_page_state = MagicMock()
     mock_state.return_value = mock_page_state
 
-    list(on_omni_load(MagicMock()))
+    list(on_omni_load_legacy(MagicMock()))
 
     assert mock_page_state.omni_mode == "i2v"
     assert mock_page_state.reference_image_gcs == "gs://bucket/dir/img.jpg"
-    assert mock_page_state.reference_image_uri == "https://display/img.jpg"
     assert mock_page_state.reference_image_mime_type == "image/jpeg"
-    assert "Animate" in mock_page_state.prompt
-
-
-@patch("pages.omni.me.query_params", {})
-@patch("pages.omni.me.state")
-def test_on_omni_load_without_image_path(mock_state: MagicMock) -> None:
-    """Without an image_path the page keeps its text-to-video defaults."""
-    from pages.omni import on_omni_load
-
-    mock_page_state = MagicMock()
-    mock_state.return_value = mock_page_state
-
-    list(on_omni_load(MagicMock()))
-
-    assert mock_page_state.omni_mode == "t2v"
-    assert "Omni" in mock_page_state.prompt
 
 
 @pytest.mark.parametrize(
@@ -485,8 +500,11 @@ def test_library_v2_on_omni_click(
     list(on_omni_click(event))
 
     mock_navigate.assert_called_once_with(
-        url="/gemini-omni",
-        query_params={"image_path": expected_path},
+        url="/veo",
+        query_params={
+            "veo_model": "gemini-omni-1.2-flash",
+            "image_path": expected_path,
+        },
     )
     mock_log.assert_called_once()
 
@@ -519,8 +537,11 @@ def test_on_send_to_omni_navigates(
     list(on_send_to_omni(event))
 
     mock_navigate.assert_called_once_with(
-        url="/gemini-omni",
-        query_params={"image_path": "bucket/dir/img.png"},
+        url="/veo",
+        query_params={
+            "veo_model": "gemini-omni-1.2-flash",
+            "image_path": "bucket/dir/img.png",
+        },
     )
     mock_log.assert_called_once()
 

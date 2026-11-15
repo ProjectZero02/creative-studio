@@ -39,6 +39,8 @@ from config.omni_models import (
     get_omni_model_config,
     modes_for_model,
 )
+from config.video_studio_models import VIDEO_STUDIO_PATH
+from config.video_studio_models import omni_link_params as video_studio_redirect_params
 from models.omni import find_missing_required_media, generate_omni_video
 from models.requests import APIReferenceImage, OmniVideoGenerationRequest
 from state.omni_state import PageState
@@ -61,8 +63,22 @@ def resolve_image_path_param(image_path: str) -> str:
     return f"gs://{image_path}"
 
 
+
+
 def on_omni_load(_e: me.LoadEvent) -> Generator[None]:
-    """Handle initial page load config for Gemini Omni.
+    """Send /gemini-omni visitors to Video Studio, which now hosts Gemini Omni.
+
+    The route stays so old links and bookmarks keep working.
+    """
+    me.navigate(
+        VIDEO_STUDIO_PATH,
+        query_params=video_studio_redirect_params(me.query_params.get("image_path")),
+    )
+    yield
+
+
+def on_omni_load_legacy(_e: me.LoadEvent) -> Generator[None]:
+    """Handle initial page load config for the legacy Gemini Omni workspace.
 
     If an `image_path` query parameter is present (e.g. from the "Omni" button
     on the Nano Banana page), preload it as the first-frame image in i2v mode.
@@ -93,7 +109,15 @@ def on_omni_load(_e: me.LoadEvent) -> Generator[None]:
     on_load=on_omni_load,
 )
 def omni_page() -> None:
-    """Render the main Gemini Omni workspace page."""
+    """Redirect stub: Gemini Omni now lives in Video Studio (/veo)."""
+    with page_scaffold(page_name="gemini-omni"):
+        with page_frame():
+            me.text("Opening Video Studio…", type="body-1")
+            me.link(text="Go to Video Studio", url=VIDEO_STUDIO_PATH)
+
+
+def legacy_omni_workspace() -> None:
+    """Render the legacy Gemini Omni workspace (kept for upstream merges)."""
     app_state = me.state(AppState)
     state = me.state(PageState)
 

@@ -469,9 +469,12 @@ def on_omni_click(e: me.WebEvent) -> Generator[None]:
     # gs:// and pass the bare path, the same convention as the Veo button.
     gcs_uri = https_url_to_gcs_uri(e.value["url"])
     if gcs_uri:
+        # Gemini Omni lives in Video Studio.
+        from config.video_studio_models import VIDEO_STUDIO_PATH, omni_link_params
+
         me.navigate(
-            url="/gemini-omni",
-            query_params={"image_path": gcs_uri.replace("gs://", "", 1)},
+            url=VIDEO_STUDIO_PATH,
+            query_params=omni_link_params(gcs_uri.replace("gs://", "", 1)),
         )
     yield
 

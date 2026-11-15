@@ -1,0 +1,59 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Video Studio (/veo) extras on top of studio.css: Gemini Omni's longer mode
+   list and the input-video slot for edit, extend and upscale. */
+
+/* Seven Omni modes: wrap onto a second row instead of scrolling out of view. */
+html body .gm-segmented-many .mat-button-toggle-group {
+  flex-wrap: wrap;
+  justify-content: center;
+  overflow: visible;
+  border-radius: 24px !important;
+}
+html body .gm-segmented-many .mat-button-toggle-label-content {
+  padding: 0 14px !important;
+}
+
+/* Input video slot (Omni edit / extend / upscale) */
+html body .gm-video-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+html body .gm-video-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+html body .gm-video-input video {
+  max-width: 100%;
+  background: #000;
+}
+
+@media (max-width: 600px) {
+  /* Two columns of 44px rows; the odd last mode spans the full width. */
+  html body .gm-segmented-many .mat-button-toggle-group {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+  html body .gm-segmented-many .mat-button-toggle:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+  html body .gm-video-input-row button { min-height: 44px; }
+}

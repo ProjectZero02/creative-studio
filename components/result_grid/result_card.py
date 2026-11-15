@@ -38,7 +38,8 @@ def result_card(
     key: str | None = None,
 ):
     """One generated item. `actions` is a comma list of:
-    open, download, reuse, edit, video (image to video), extend (video).
+    open, download, reuse, edit, video (image to video), extend (video),
+    edit_video and upscale (video, Gemini Omni).
     """
     return me.insert_web_component(
         key=key,

@@ -19,9 +19,11 @@ from collections.abc import Generator
 import mesop as me
 
 from common.analytics import log_ui_click
+from config.video_studio_models import VIDEO_STUDIO_PATH, omni_link_params
 from state.state import AppState
 
-OMNI_PAGE_PATH = "/gemini-omni"
+# Gemini Omni lives in Video Studio (/gemini-omni redirects there).
+OMNI_PAGE_PATH = VIDEO_STUDIO_PATH
 
 
 def on_send_to_omni(e: me.ClickEvent) -> Generator[None]:
@@ -38,7 +40,7 @@ def on_send_to_omni(e: me.ClickEvent) -> Generator[None]:
         gcs_path = gcs_uri.replace("gs://", "")
         me.navigate(
             url=OMNI_PAGE_PATH,
-            query_params={"image_path": gcs_path},
+            query_params=omni_link_params(gcs_path),
         )
     yield
 

@@ -595,6 +595,17 @@ def home() -> RedirectResponse:
     return RedirectResponse(url="/home")
 
 
+@app.get("/gemini-omni", include_in_schema=False)
+def gemini_omni_redirect(image_path: str | None = None) -> RedirectResponse:
+    """Old Gemini Omni links open Video Studio, which now hosts Omni."""
+    from urllib.parse import urlencode
+
+    from config.video_studio_models import VIDEO_STUDIO_PATH, omni_link_params
+
+    query = urlencode(omni_link_params(image_path))
+    return RedirectResponse(url=f"{VIDEO_STUDIO_PATH}?{query}")
+
+
 # Studio theme stylesheet (see common/ui_theme.py).
 app.mount(
     "/ui",
