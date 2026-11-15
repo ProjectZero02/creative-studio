@@ -42,7 +42,12 @@ GLOBAL_STYLESHEETS = [FONT_CSS, THEME_CSS_PATH]
 # Feature sheets every page loads too. Mesop only applies a page's own
 # stylesheets on a full page load, not after in-app navigation, so styles that
 # a page needs when reached from the side nav must be listed here.
-SHARED_STYLESHEETS = ["/ui/demos.css"]  # industry demos (components/demo_flow)
+SHARED_STYLESHEETS = [
+    "/ui/demos.css",  # industry demos (components/demo_flow)
+    "/ui/story.css",  # Story Studio
+    "/ui/video_studio.css",  # Video Studio
+    "/ui/audio-studio.css",  # Voice and Music
+]
 
 _original_page = me.page
 

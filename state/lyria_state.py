@@ -27,6 +27,7 @@ class PageState:
     music_prompt_placeholder: str = ""
     original_user_prompt: str = ""
     music_prompt_textarea_key: int = 0
+    prompt_prefill_seen: str = ""  # last ?prompt= applied on load
     music_gcs_uris: list[str] = field(default_factory=list)
     music_display_urls: list[str] = field(default_factory=list)
     selected_track_index: int = 0

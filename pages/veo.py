@@ -37,6 +37,7 @@ from common.utils import (
 )
 from common.veo_utils import start_async_veo_job
 from common.mock_generation import fake_wait, mock_enabled, sample_video
+from common.prompt_prefill import prefill_prompt
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
 from components.dialog import dialog, dialog_actions
@@ -99,6 +100,9 @@ config = Default()
 veo_model = VeoModelSetup.init()
 
 
+_I2V_DEFAULT_PROMPT = "Animate this image with subtle motion."
+
+
 def on_veo_load(e: me.LoadEvent):
     """Handles page load events, including query parameters for deep linking."""
     state = me.state(PageState)
@@ -120,11 +124,14 @@ def on_veo_load(e: me.LoadEvent):
         # Switch to the Image-to-Video tab
         state.veo_mode = "i2v"
         # Provide a default prompt for a better user experience
-        state.veo_prompt_input = "Animate this image with subtle motion."
+        state.veo_prompt_input = _I2V_DEFAULT_PROMPT
         _update_state_for_new_model(veo_model_param or "3.1-fast")
     elif veo_model_param:
         _update_state_for_new_model(veo_model_param)
 
+    # ?prompt= from the home page wins over the image default, never over the
+    # user's own text.
+    prefill_prompt(state, "veo_prompt_input", empty_values=(_I2V_DEFAULT_PROMPT,))
     yield
 
 

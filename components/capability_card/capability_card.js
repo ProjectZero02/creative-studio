@@ -40,6 +40,7 @@ class CapabilityCard extends LitElement {
     iconFamily: { type: String },
     mode: { type: String },
     videoUrl: { type: String },
+    poster: { type: String }, // local still frame, shown at once (fast first paint)
     videoObjectPosition: { type: String },
     size: { type: String }, // "media" (video on top) or "compact" (icon tile)
     clickEvent: { type: String },
@@ -55,6 +56,7 @@ class CapabilityCard extends LitElement {
     this.iconFamily = '';
     this.mode = '';
     this.videoUrl = '';
+    this.poster = '';
     this.videoObjectPosition = 'center';
     this.size = 'media';
     this.clickEvent = '';
@@ -116,6 +118,7 @@ class CapabilityCard extends LitElement {
     :host {
       display: block;
       min-width: 0;
+      height: 100%;
       font-family: var(--gm-font, 'Google Sans', system-ui, sans-serif);
     }
     a {
@@ -125,19 +128,33 @@ class CapabilityCard extends LitElement {
       box-sizing: border-box;
       text-decoration: none;
       color: var(--sys-on-surface, #15171c);
-      background: var(--sys-surface-container-lowest, #fff);
-      border: 1px solid var(--gm-border, #e1e4ea);
-      border-radius: 16px;
+      /* Glass on the home page (--gm-glass-* set on .gm-home), solid elsewhere. */
+      background: var(--gm-glass-solid, var(--sys-surface-container-lowest, #fff));
+      border: 1px solid var(--gm-glass-border, var(--gm-border, #e1e4ea));
+      border-radius: 20px;
       overflow: hidden;
-      box-shadow: var(--gm-card-shadow, none);
+      box-shadow: var(--gm-glass-highlight, inset 0 0 0 transparent),
+        var(--gm-glass-shadow, var(--gm-card-shadow, 0 0 0 transparent));
       transition: transform 200ms cubic-bezier(0.2, 0, 0, 1),
         box-shadow 200ms cubic-bezier(0.2, 0, 0, 1),
         border-color 200ms cubic-bezier(0.2, 0, 0, 1);
     }
+    @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      @media (prefers-reduced-transparency: no-preference) {
+        a {
+          background: var(--gm-glass-fill, var(--sys-surface-container-lowest, #fff));
+          -webkit-backdrop-filter: var(--gm-glass-blur, none);
+          backdrop-filter: var(--gm-glass-blur, none);
+        }
+      }
+    }
+    @media (prefers-contrast: more) {
+      a { border-width: 2px; border-color: var(--sys-outline, #6b7280); }
+    }
     a:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--gm-card-shadow-hover, 0 8px 24px rgba(0, 0, 0, 0.12));
-      border-color: var(--sys-outline-variant, #d6dae1);
+      transform: translateY(-3px);
+      box-shadow: var(--gm-glass-highlight, inset 0 0 0 transparent),
+        var(--gm-card-shadow-hover, 0 14px 40px rgba(20, 20, 60, 0.18));
     }
     a:focus-visible {
       outline: 2px solid var(--gm-focus, #1a5fd8);
@@ -146,9 +163,11 @@ class CapabilityCard extends LitElement {
     .media {
       position: relative;
       aspect-ratio: 16 / 10;
+      flex-shrink: 0;
       background: var(--sys-surface-container-high, #e6e9ee);
       overflow: hidden;
     }
+    .poster,
     video {
       position: absolute;
       inset: 0;
@@ -157,9 +176,11 @@ class CapabilityCard extends LitElement {
       object-fit: cover;
       transition: transform 400ms cubic-bezier(0.2, 0, 0, 1);
     }
-    a:hover video {
+    a:hover video,
+    a:hover .poster {
       transform: scale(1.03);
     }
+    .poster { transition: transform 400ms cubic-bezier(0.2, 0, 0, 1); }
     .mode {
       position: absolute;
       left: 10px;
@@ -211,6 +232,14 @@ class CapabilityCard extends LitElement {
       overflow: hidden;
     }
 
+    /* Featured (bento big tile): the video fills the extra height. */
+    a.featured .media {
+      aspect-ratio: 2 / 1;
+    }
+    a.featured .title { font-size: 19px; }
+    a.featured .desc { font-size: 14.5px; }
+    a.featured .mode { font-size: 12px; padding: 4px 11px; }
+
     /* Compact: icon tile + text, for workflows without a preview video. */
     a.compact {
       flex-direction: row;
@@ -252,7 +281,7 @@ class CapabilityCard extends LitElement {
     const iconClass = this.iconFamily === 'Google Symbols' ? 'icon google-symbols' : 'icon';
     return html`
       <a
-        class=${compact ? 'compact' : 'media-card'}
+        class=${compact ? 'compact' : this.size === 'featured' ? 'media-card featured' : 'media-card'}
         href=${this.route}
         @click=${this._onClick}
         @mouseenter=${this._play}
@@ -263,15 +292,27 @@ class CapabilityCard extends LitElement {
         ${compact
           ? html`<span class=${iconClass} aria-hidden="true">${this.icon}</span>`
           : html`<div class="media">
+              ${this.poster
+                ? html`<img
+                    class="poster"
+                    src=${this.poster}
+                    alt=""
+                    decoding="async"
+                    loading=${this.size === 'featured' ? 'eager' : 'lazy'}
+                    fetchpriority=${this.size === 'featured' ? 'high' : 'auto'}
+                    style="object-position:${this.videoObjectPosition || 'center'}"
+                  />`
+                : nothing}
               ${this._inView
                 ? html`<video
                     muted
                     loop
                     playsinline
-                    preload="metadata"
+                    preload=${this.poster ? 'none' : 'metadata'}
+                    poster=${this.poster || nothing}
                     aria-hidden="true"
                     style="object-position:${this.videoObjectPosition || 'center'}"
-                    src=${this.videoUrl + '#t=0.5'}
+                    src=${this.poster ? this.videoUrl : this.videoUrl + '#t=0.5'}
                   ></video>`
                 : nothing}
               ${this.mode ? html`<span class="mode">${this.mode}</span>` : nothing}

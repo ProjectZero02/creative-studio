@@ -671,3 +671,170 @@ html body .gm-empty-icon {
     align-items: center;
   }
 }
+
+/* ---------- Home: glass over soft colour (Apple-style materials) ---------- */
+/* Every page: the content column is centred, so wide monitors don't leave a
+   big empty band on the right. */
+html body .gm-frame { margin-inline: auto; width: 100%; }
+
+html body .gm-home {
+  /* Glass tokens, read by .gm-home children and the home web components. */
+  --gm-glass-fill: rgba(255, 255, 255, 0.55);
+  --gm-glass-solid: rgba(255, 255, 255, 0.95);
+  --gm-glass-border: rgba(255, 255, 255, 0.75);
+  --gm-glass-highlight: inset 0 1.5px 0 rgba(255, 255, 255, 0.85);
+  --gm-glass-shadow: 0 8px 32px rgba(20, 20, 60, 0.10);
+  --gm-card-shadow-hover: 0 18px 48px rgba(20, 20, 60, 0.18);
+  --gm-glass-well: rgba(15, 20, 40, 0.06);
+  --gm-glass-chip: #fff;
+  --gm-aurora-1: rgba(138, 180, 248, 0.55);
+  --gm-aurora-2: rgba(197, 138, 249, 0.42);
+  --gm-aurora-3: rgba(120, 217, 236, 0.45);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(40px, 3vw, 64px);
+  padding-bottom: 24px;
+}
+html body.dark-theme .gm-home {
+  --gm-glass-fill: rgba(30, 33, 48, 0.50);
+  --gm-glass-solid: rgba(24, 26, 38, 0.94);
+  --gm-glass-border: rgba(255, 255, 255, 0.12);
+  --gm-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --gm-glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --gm-card-shadow-hover: 0 20px 56px rgba(0, 0, 0, 0.55);
+  --gm-glass-well: rgba(255, 255, 255, 0.06);
+  --gm-glass-chip: rgba(255, 255, 255, 0.14);
+  --gm-aurora-1: rgba(26, 115, 232, 0.32);
+  --gm-aurora-2: rgba(147, 52, 230, 0.26);
+  --gm-aurora-3: rgba(18, 181, 203, 0.20);
+}
+
+/* Soft colour fields behind the page. Radial gradients (no filter blur) keep
+   it cheap; only transform animates, slowly. */
+html body .gm-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+html body .gm-aurora > * {
+  display: block;
+  position: absolute;
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 50%;
+  will-change: transform;
+}
+html body .gm-aurora-a {
+  top: -30vmax; left: -10vmax;
+  background: radial-gradient(closest-side, var(--gm-aurora-1), transparent);
+  animation: gm-drift-a 38s ease-in-out infinite alternate;
+}
+html body .gm-aurora-b {
+  top: -25vmax; right: -25vmax;
+  background: radial-gradient(closest-side, var(--gm-aurora-2), transparent);
+  animation: gm-drift-b 46s ease-in-out infinite alternate;
+}
+html body .gm-aurora-c {
+  bottom: -40vmax; left: 25vw;
+  background: radial-gradient(closest-side, var(--gm-aurora-3), transparent);
+  animation: gm-drift-c 52s ease-in-out infinite alternate;
+}
+@keyframes gm-drift-a { to { transform: translate(12vw, 8vh) scale(1.08); } }
+@keyframes gm-drift-b { to { transform: translate(-10vw, 12vh) scale(0.95); } }
+@keyframes gm-drift-c { to { transform: translate(-14vw, -10vh) scale(1.1); } }
+@media (prefers-reduced-motion: reduce) {
+  html body .gm-aurora > * { animation: none; }
+}
+html body .gm-home > :not(.gm-aurora) { position: relative; z-index: 1; }
+
+/* Hero: centred headline, one line of copy, the prompt box. */
+html body .gm-home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 18px;
+  padding: clamp(24px, 4vw, 72px) 0 0;
+}
+html body .gm-home-eyebrow {
+  display: inline-flex;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--sys-primary);
+  background: var(--gm-glass-solid);
+  border: 1px solid var(--gm-glass-border);
+  box-shadow: var(--gm-glass-highlight);
+}
+html body .gm-home-title h1 {
+  margin: 0;
+  max-width: 14em;
+  font-size: clamp(2.5rem, 1.3rem + 3.4vw, 5rem);
+  line-height: 1.04;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+  background: linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 38%, #1a5fd8 72%, #7b3fe4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+html body.dark-theme .gm-home-title h1 {
+  background-image: linear-gradient(100deg, #fff 0%, #fff 38%, #8ab4f8 72%, #c58af9 100%);
+}
+html body .gm-home-lede {
+  max-width: 36em;
+  font-size: clamp(16px, 0.85rem + 0.45vw, 20px);
+  line-height: 1.5;
+  color: var(--sys-on-surface-variant);
+  text-wrap: balance;
+}
+html body .gm-home-prompt { width: 100%; max-width: 880px; margin-top: 10px; }
+
+/* Sections */
+html body .gm-home-section { display: flex; flex-direction: column; gap: 18px; }
+html body .gm-home-section-head { display: flex; flex-direction: column; gap: 4px; }
+html body .gm-home .gm-title-section h2 { font-size: clamp(20px, 0.9rem + 0.6vw, 26px); letter-spacing: -0.02em; }
+html body .gm-home-blurb { font-size: 14.5px; color: var(--sys-on-surface-variant); }
+
+/* Create: bento. Video and film get the big tiles on the first row. */
+html body .gm-bento {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: clamp(14px, 1.2vw, 22px);
+}
+html body .gm-bento-big { grid-column: span 3; order: -1; }
+html body .gm-bento-cell { grid-column: span 2; }
+html body .gm-bento > * > component-renderer,
+html body .gm-demos > * > component-renderer { display: block; height: 100%; }
+
+/* Industry demos */
+html body .gm-demos {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(14px, 1.2vw, 22px);
+}
+
+@media (max-width: 1100px) {
+  html body .gm-bento-cell { grid-column: span 3; }
+  html body .gm-bento-cell:last-child { grid-column: span 6; }
+  html body .gm-demos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  html body .gm-bento { grid-template-columns: minmax(0, 1fr); }
+  html body .gm-bento-big,
+  html body .gm-bento-cell,
+  html body .gm-bento-cell:last-child { grid-column: auto; }
+  html body .gm-demos { grid-template-columns: minmax(0, 1fr); }
+  html body .gm-home-hero { padding-top: 8px; }
+}
+
+/* Very large monitors: let the content column grow a little. */
+@media (min-width: 2200px) {
+  html body .gm-frame { max-width: 1840px !important; }
+}

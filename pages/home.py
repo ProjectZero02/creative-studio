@@ -11,13 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Home: what the studio does, quick starts, then every capability by group."""
+"""Home: one prompt box that opens any studio, then every capability by group."""
 
+import os
 from collections import defaultdict
 
 import mesop as me
 
 from components.capability_card.capability_card import capability_card
+from components.home_prompt.home_prompt import home_prompt
 from components.page_scaffold import page_frame, page_scaffold
 from config.default import get_welcome_page_config
 from state.state import AppState
@@ -47,9 +49,78 @@ def handle_tile_click(e: me.WebEvent):
         me.navigate(route)
 
 
-def on_quick_start(e: me.ClickEvent):
-    if e.key:
-        me.navigate(e.key)
+# The hero prompt box: one mode per Create studio. The studio reads ?prompt=.
+PROMPT_MODES = [
+    {
+        "id": "image",
+        "route": "/nano-banana",
+        "label": "Image",
+        "icon": "image",
+        "placeholder": "Describe an image to create or edit",
+        "examples": [
+            "A perfume bottle on wet black stone, studio light",
+            "Our sneaker on a Tokyo street at night",
+        ],
+    },
+    {
+        "id": "video",
+        "route": "/veo",
+        "label": "Video",
+        "icon": "movie",
+        "placeholder": "Describe a shot: subject, action, camera",
+        "examples": [
+            "Slow dolly in on a barista pouring latte art",
+            "Drone shot over a desert road at sunrise",
+        ],
+    },
+    {
+        "id": "film",
+        "route": "/story",
+        "label": "Film",
+        "icon": "movie_filter",
+        "placeholder": "One idea for a short film, with music and voice",
+        "examples": [
+            "A 30-second ad for an electric bike in the city",
+            "A lighthouse keeper finds a message in a bottle",
+        ],
+    },
+    {
+        "id": "voice",
+        "route": "/voice",
+        "label": "Voice",
+        "icon": "record_voice_over",
+        "placeholder": "Type a script to turn into natural speech",
+        "examples": [
+            "Welcome to our store. Today only, everything is 20% off.",
+            "Thanks for calling. Your order is on its way.",
+        ],
+    },
+    {
+        "id": "music",
+        "route": "/lyria",
+        "label": "Music",
+        "icon": "music_note",
+        "placeholder": "Describe a track: mood, instruments, tempo",
+        "examples": [
+            "Warm lo-fi beat with soft piano, 80 bpm",
+            "Uplifting cinematic strings for a product launch",
+        ],
+    },
+]
+_MODE_ROUTES = {m["id"]: m["route"] for m in PROMPT_MODES}
+MAX_PROMPT_LEN = 2000
+
+
+def on_prompt_submit(e: me.WebEvent):
+    """Open the chosen studio, carrying the idea in ?prompt=."""
+    route = _MODE_ROUTES.get((e.value or {}).get("mode", ""))
+    if not route:
+        return
+    prompt = ((e.value or {}).get("prompt") or "").strip()[:MAX_PROMPT_LEN]
+    if prompt:
+        me.navigate(route, query_params={"prompt": prompt})
+    else:
+        me.navigate(route)
 
 
 # The library lives in the side menu, so the home page shows only these two.
@@ -69,12 +140,19 @@ CARD_BADGES = {
     "/lyria": "Lyria 3",
 }
 
-# Hero: one main action and two quiet links. Only enabled routes are shown.
-PRIMARY_START = ("Make a short film", "/story", "movie_filter")
-SECONDARY_STARTS = [
-    ("Create an image", "/nano-banana"),
-    ("Create a video", "/veo"),
-]
+_POSTER_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "ui", "posters")
+
+
+def poster_for(video_url: str) -> str:
+    """Local still frame for a preview video (assets/ui/posters/<name>.webp), if present."""
+    if not video_url:
+        return ""
+    name = os.path.splitext(os.path.basename(video_url.split("?")[0]))[0]
+    return f"/ui/posters/{name}.webp" if os.path.exists(os.path.join(_POSTER_DIR, f"{name}.webp")) else ""
+
+
+# Bento layout: video and film get the big tiles.
+FEATURED_ROUTES = {"/veo", "/story"}
 
 
 def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
@@ -87,111 +165,63 @@ def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
         if page_data.get("group") and page_data.get("align") != "bottom":
             grouped[page_data["group"]].append(page_data)
 
-    with me.box(style=me.Style(display="flex", flex_direction="column", gap=40)):
+    with me.box(classes="gm-home"):
+        # Soft colour behind the glass (decorative; frozen for reduced motion).
+        with me.box(classes="gm-aurora"):
+            me.box(classes="gm-aurora-a")
+            me.box(classes="gm-aurora-b")
+            me.box(classes="gm-aurora-c")
+
         _hero(enabled_routes)
 
         for group_name in GROUP_ORDER:
             items = grouped.get(group_name)
             if not items:
                 continue
-            title, blurb = SECTIONS.get(group_name, (group_name.title(), ""))
-            with me.box(style=me.Style(display="flex", flex_direction="column", gap=16)):
-                with me.box(style=me.Style(display="flex", flex_direction="column", gap=4)):
-                    with me.box(classes="gm-title gm-title-section"):
-                        me.markdown("## " + title)
-                    if blurb:
-                        me.text(
-                            blurb,
-                            style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
-                        )
-                media = group_name == "foundation"
-                with me.box(
-                    classes="gm-grid gm-grid-media" if media else "gm-grid gm-grid-compact",
-                    style=me.Style(
-                        display="grid",
-                        grid_template_columns=(
-                            "repeat(auto-fit, minmax(200px, 1fr))"
-                            if media
-                            else "repeat(auto-fill, minmax(280px, 1fr))"
-                        ),
-                        gap=16,
-                    ),
-                ):
-                    for page_data in items:
-                        capability_card(
-                            key=f"card-{page_data.get('route')}",
-                            label=page_data.get("display", ""),
-                            route=page_data.get("route", ""),
-                            description=page_data.get("description", ""),
-                            icon=page_data.get("icon", ""),
-                            icon_family=page_data.get("icon_family", ""),
-                            mode=CARD_BADGES.get(page_data.get("route", ""), "") if media else "",
-                            video_url=page_data.get("video_url", "") if media else "",
-                            video_object_position=page_data.get("video_object_position", "center"),
-                            size="media" if media else "compact",
-                            on_click=handle_tile_click,
-                        )
+            _section(group_name, items)
 
 
 def _hero(enabled_routes: set):
-    with me.box(
-        classes="gm-hero",
-        style=me.Style(
-            display="flex",
-            flex_direction="column",
-            gap=20,
-            padding=me.Padding(top=36, bottom=32, left=36, right=36),
-            border_radius=20,
-            background=me.theme_var("surface-container-lowest"),
-            border=me.Border.all(me.BorderSide(width=1, style="solid", color="var(--gm-border)")),
-        ),
-    ):
-        with me.box(style=me.Style(display="flex", flex_direction="column", gap=10, max_width=760)):
-            me.text(
-                "Google Cloud · Vertex AI",
-                style=me.Style(
-                    font_size=13,
-                    font_weight=600,
-                    letter_spacing="0.02em",
-                    color=me.theme_var("primary"),
-                ),
-            )
-            with me.box(classes="gm-title gm-title-hero"):
-                me.markdown("# Google's creative AI, in one studio")
-            me.text(
-                "Turn one idea into images, video, voice and music, or a finished short film. "
-                "Everything you make is saved to your library.",
-                style=me.Style(
-                    font_size=16,
-                    line_height="1.5",
-                    color=me.theme_var("on-surface-variant"),
-                ),
-            )
-        with me.box(
-            classes="gm-quick",
-            style=me.Style(display="flex", flex_wrap="wrap", align_items="center", gap=16),
-        ):
-            label, route, icon = PRIMARY_START
-            if route in enabled_routes:
-                with me.content_button(
-                    key=route,
-                    type="flat",
-                    color="primary",
-                    on_click=on_quick_start,
-                    style=me.Style(height=48, padding=me.Padding.symmetric(horizontal=22)),
-                ):
-                    with me.box(style=me.Style(display="flex", align_items="center", gap=8)):
-                        me.icon(icon, style=me.Style(font_size=20, width=20, height=20))
-                        me.text(label, style=me.Style(font_size=15, font_weight=600))
-            links = [(lbl, r) for lbl, r in SECONDARY_STARTS if r in enabled_routes]
-            if links:
-                with me.box(
-                    classes="gm-quick-links",
-                    style=me.Style(display="flex", align_items="center", gap=4, flex_wrap="wrap"),
-                ):
-                    me.text(
-                        "or",
-                        style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
+    modes = [m for m in PROMPT_MODES if m["route"] in enabled_routes]
+    with me.box(classes="gm-home-hero"):
+        with me.box(classes="gm-home-eyebrow"):
+            me.text("Google Cloud · Vertex AI")
+        with me.box(classes="gm-title gm-home-title"):
+            me.markdown("# Google's creative AI, in one studio")
+        with me.box(classes="gm-home-lede"):
+            me.text("Turn one idea into images, video, voice and music, or a finished short film.")
+        if modes:
+            with me.box(classes="gm-home-prompt"):
+                home_prompt(key="home-prompt", modes=modes, on_submit=on_prompt_submit)
+
+
+def _section(group_name: str, items: list[dict]):
+    title, blurb = SECTIONS.get(group_name, (group_name.title(), ""))
+    media = group_name == "foundation"
+    with me.box(classes="gm-home-section"):
+        with me.box(classes="gm-home-section-head"):
+            with me.box(classes="gm-title gm-title-section"):
+                me.markdown("## " + title)
+            if blurb:
+                with me.box(classes="gm-home-blurb"):
+                    me.text(blurb)
+        with me.box(classes="gm-bento" if media else "gm-demos"):
+            for page_data in items:
+                route = page_data.get("route", "")
+                featured = media and route in FEATURED_ROUTES
+                cell = "gm-bento-big" if featured else ("gm-bento-cell" if media else "gm-demo-cell")
+                with me.box(classes=cell):
+                    capability_card(
+                        key=f"card-{route}",
+                        label=page_data.get("display", ""),
+                        route=route,
+                        description=page_data.get("description", ""),
+                        icon=page_data.get("icon", ""),
+                        icon_family=page_data.get("icon_family", ""),
+                        mode=CARD_BADGES.get(route, "") if media else "",
+                        video_url=page_data.get("video_url", "") if media else "",
+                        poster=poster_for(page_data.get("video_url", "")) if media else "",
+                        video_object_position=page_data.get("video_object_position", "center"),
+                        size=("featured" if featured else "media") if media else "compact",
+                        on_click=handle_tile_click,
                     )
-                    for lbl, r in links:
-                        me.button(lbl, key=r, on_click=on_quick_start, style=me.Style(height=44))
