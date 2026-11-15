@@ -2,6 +2,9 @@
 
 > ###### _This is not an officially supported Google product. This project is not eligible for the [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security). This project is intended for demonstration purposes only. It is not intended for use in a production environment._
 
+> **GenMedia Studio (this fork).** A restyled, faster build for client demos, with sign-in, Story Studio and a one-command Cloud Run deploy. Deploy: [`deploy/quickstart/README.md`](deploy/quickstart/README.md). Plan and progress: [`PLAN.md`](PLAN.md).
+> Run locally with plain environment variables (`cp dotenv.template .env`, fill in `PROJECT_ID`), or let Core supply them: `core run -- uv run main.py`.
+
 ![GenMedia Creative Studio v.next](https://github.com/user-attachments/assets/da5ad223-aa6e-413c-b36e-5d63e5d5b758)
 
 ![GenMedia Creative Studio v.next](https://github.com/user-attachments/assets/61977f3c-dbb6-4002-b8c0-77d57aa03cce)
