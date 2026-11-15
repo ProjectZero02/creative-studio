@@ -62,6 +62,8 @@ class GeminiImageModelConfig:
     supports_person_generation_filter: bool = True
     supports_search: bool = False
     supports_thinking: bool = False
+    # Rough wall-clock time for one generation, shown as a hint while it runs.
+    typical_generation_seconds: int = 15
 
 
 # Single source of truth
@@ -70,6 +72,7 @@ GEMINI_IMAGE_MODELS: list[GeminiImageModelConfig] = [
         version_id="3.0-pro",
         model_name="gemini-3-pro-image",
         display_name="Gemini 3 Pro",
+        typical_generation_seconds=30,
         button_label="Pro",
         max_input_images=14,
         max_output_images=1,

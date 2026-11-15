@@ -93,3 +93,20 @@ class PageState:
     # Async Job Tracking
     current_job_id: str = ""
     job_status: str = ""
+
+    # Video Studio layout (composer, progress card, recent grid)
+    show_advanced: bool = False
+    is_enhancing: bool = False
+    lightbox_url: str = ""
+    # Step-by-step progress (components/generation_progress)
+    progress_stages: list[str] = field(default_factory=list)
+    progress_stage: int = 0
+    progress_status: str = ""
+    progress_run_id: str = ""
+    progress_error: str = ""
+    last_action: str = "generate"  # "generate" | "extend", for "Try again"
+    # Session history for the "Recent" grid (display URLs, newest first)
+    history_urls: list[str] = field(default_factory=list)
+    history_prompts: list[str] = field(default_factory=list)
+    history_meta: list[str] = field(default_factory=list)
+    history_aspects: list[str] = field(default_factory=list)

@@ -48,6 +48,8 @@ class VeoModelConfig:
     mode_overrides: Optional[Dict[str, ModeOverride]] = None
     supports_video_extension: bool = False
     supported_extension_durations: Optional[List[int]] = None
+    # Rough wall-clock time for one generation, shown as a hint while it runs.
+    typical_generation_seconds: int = 60
 
 
 # This list is the single source of truth for all VEO model configurations.
@@ -59,6 +61,7 @@ VEO_MODELS: List[VeoModelConfig] = [
         version_id="3.1-fast",
         model_name="veo-3.1-fast-generate-001",
         display_name="Veo 3.1 Fast",
+        typical_generation_seconds=50,
         supported_modes=["t2v", "i2v", "interpolation", "r2v"],
         supported_aspect_ratios=["16:9", "9:16"],
         resolutions=["720p", "1080p", "4k"],
@@ -86,6 +89,7 @@ VEO_MODELS: List[VeoModelConfig] = [
         version_id="3.1",
         model_name="veo-3.1-generate-001",
         display_name="Veo 3.1",
+        typical_generation_seconds=90,
         supported_modes=["t2v", "i2v", "interpolation", "r2v"],
         supported_aspect_ratios=["16:9", "9:16"],
         resolutions=["720p", "1080p", "4k"],
@@ -113,6 +117,7 @@ VEO_MODELS: List[VeoModelConfig] = [
         version_id="3.1-lite",
         model_name="veo-3.1-lite-generate-001",
         display_name="Veo 3.1 Lite",
+        typical_generation_seconds=45,
         supported_modes=["t2v", "i2v", "interpolation"],
         supported_aspect_ratios=["16:9", "9:16"],
         resolutions=["720p", "1080p"],

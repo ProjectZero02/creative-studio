@@ -155,6 +155,10 @@ def library_chooser_button(
             me.icon(icon_name)
             if button_label:
                 me.text(button_label)
+            else:
+                # Icon-only: give screen readers a name.
+                with me.box(classes="gm-sr-only"):
+                    me.text("Choose from library")
 
     dialog_style = me.Style(
         width="65vw",
