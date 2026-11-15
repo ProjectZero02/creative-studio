@@ -42,6 +42,7 @@ class StoryState:
     style: str = "photographic"
     camera: str = "auto"
     reference_uri: str = ""
+    prompt_prefill_seen: str = ""  # last ?prompt= applied on load
 
     # Background job being watched.
     job_id: str = ""

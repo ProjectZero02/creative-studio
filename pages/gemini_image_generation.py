@@ -22,6 +22,7 @@ import mesop as me
 from common.analytics import analytics_logger, log_ui_click
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, placeholder_image
+from common.prompt_prefill import prefill_prompt
 from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
 from common.utils import create_display_url, https_url_to_gcs_uri
@@ -154,6 +155,7 @@ class PageState:
 
     info_dialog_open: bool = False
     initial_load_complete: bool = False
+    prompt_prefill_seen: str = ""  # last ?prompt= applied on load
 
     # Image Studio layout (composer, progress card, recent grid)
     prompt_key: int = 0
@@ -1342,6 +1344,8 @@ def on_load(e: me.LoadEvent):
             state.uploaded_image_display_urls.append(
                 create_display_url(final_gcs_uri),
             )
+    if prefill_prompt(state, "prompt"):
+        state.prompt_key += 1  # redraw the composer with the idea
     yield
 
 

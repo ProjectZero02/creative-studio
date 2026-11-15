@@ -26,6 +26,7 @@ import json
 import mesop as me
 
 from common.analytics import get_logger
+from common.prompt_prefill import is_new_prompt_arrival, read_prompt_param
 from components.header import header
 from components.page_scaffold import page_frame, page_scaffold
 from components.story_studio.widgets import (
@@ -96,7 +97,28 @@ def on_load(e: me.LoadEvent):
             step = me.query_params.get("step", "")
             if step and can_enter(step, _story()):
                 s.step = step
+    _prefill_idea()
     yield
+
+
+def _prefill_idea() -> None:
+    """?prompt= (from the home page) opens Create with the idea filled in.
+
+    Runs once per arrival. It starts a new story only from the Stories list or
+    an empty idea, so an open story or a typed draft is never replaced. ?id=
+    wins: a link to an existing story ignores ?prompt=.
+    """
+    s = me.state(StoryState)
+    if me.query_params.get("id", ""):
+        return
+    prompt = read_prompt_param()
+    if not is_new_prompt_arrival(s, prompt):
+        return
+    if s.step != "stories" and (s.idea or "").strip():
+        return
+    if s.step == "stories" or s.story_id:
+        _start_new_story()
+    s.idea = prompt
 
 
 @me.page(
@@ -626,6 +648,11 @@ def story_card(r: dict) -> None:
 
 
 def on_new_story(e: me.ClickEvent):
+    _start_new_story()
+
+
+def _start_new_story() -> None:
+    """Clear the draft and open the Create step for a new story."""
     s = me.state(StoryState)
     _set_story(None)
     s.idea = ""

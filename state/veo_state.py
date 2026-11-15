@@ -27,6 +27,8 @@ class PageState:
     # Video Studio model: Gemini Omni by default, or a Veo version id.
     veo_model: str = DEFAULT_STUDIO_MODEL_ID
     veo_prompt_input: str = ""
+    # Last ?prompt= value applied on load (common/prompt_prefill.py).
+    prompt_prefill_seen: str = ""
     veo_prompt_placeholder: str = ""
     veo_prompt_textarea_key: int = 0
 
