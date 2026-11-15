@@ -43,19 +43,7 @@ def veo_modes(
     if not selected_config:
         return
 
-    # Dynamically create the buttons based on the supported modes for the selected model.
-    veo_mode_buttons = []
-    for mode in selected_config.supported_modes:
-        label = "first/last" if mode == "interpolation" else mode
-        veo_mode_buttons.append(me.ButtonToggleButton(label=label, value=mode))
-
-    me.button_toggle(
-        value=state.veo_mode,
-        buttons=veo_mode_buttons,
-        multiple=False,
-        hide_selection_indicator=True,
-        on_change=on_selection_change_veo_mode,
-    )
+    veo_mode_toggle()
     with me.box(
         style=me.Style(
             display="flex",
@@ -68,7 +56,67 @@ def veo_modes(
     ):
         if state.veo_mode == "t2v":
             me.image(src=None, style=me.Style(height=250))
-        elif state.veo_mode == "i2v":
+        else:
+            veo_reference_inputs(
+                on_upload_image=on_upload_image,
+                on_upload_last_image=on_upload_last_image,
+                on_library_select=on_library_select,
+                on_r2v_asset_add=on_r2v_asset_add,
+                on_r2v_asset_remove=on_r2v_asset_remove,
+                on_r2v_style_add=on_r2v_style_add,
+                on_r2v_style_remove=on_r2v_style_remove,
+                on_clear_first_image=on_clear_first_image,
+                on_clear_last_image=on_clear_last_image,
+            )
+
+
+# Plain-language names for the Veo modes (the values stay t2v/i2v/...).
+VEO_MODE_LABELS = {
+    "t2v": "Text",
+    "i2v": "Image",
+    "interpolation": "First + last frame",
+    "r2v": "References",
+}
+
+
+@me.component
+def veo_mode_toggle():
+    """Segmented control for the Veo modes the selected model supports."""
+    state = me.state(PageState)
+    selected_config = get_veo_model_config(state.veo_model)
+    if not selected_config:
+        return
+    with me.box(classes="gm-segmented"):
+        me.button_toggle(
+            value=state.veo_mode,
+            buttons=[
+                me.ButtonToggleButton(label=VEO_MODE_LABELS.get(mode, mode), value=mode)
+                for mode in selected_config.supported_modes
+            ],
+            multiple=False,
+            hide_selection_indicator=True,
+            on_change=on_selection_change_veo_mode,
+        )
+
+
+@me.component
+def veo_reference_inputs(
+    on_upload_image,
+    on_upload_last_image,
+    on_library_select,
+    on_r2v_asset_add,
+    on_r2v_asset_remove,
+    on_r2v_style_add,
+    on_r2v_style_remove,
+    on_clear_first_image,
+    on_clear_last_image,
+):
+    """Reference image slots for the current mode (nothing for t2v)."""
+    state = me.state(PageState)
+    if not get_veo_model_config(state.veo_model):
+        return
+    with me.box(classes="gm-veo-refs"):
+        if state.veo_mode == "i2v":
             _image_uploader(
                 last_image=False,
                 on_upload_image=on_upload_image,
@@ -127,7 +175,7 @@ def _r2v_uploader(
     with me.box(style=me.Style(display="flex", flex_direction="row", gap=15)):
         # --- Assets Section ---
         with me.box(style=me.Style(display="flex", flex_direction="column", gap=2)):
-            me.text("Asset references", style=me.Style(font_size="10pt"))
+            me.text("Subjects (up to 3)", style=me.Style(font_size="10pt"))
             with me.box(style=me.Style(display="flex", flex_direction="row", gap=5)):
                 for i in range(MAX_ASSET_IMAGES):
                     if i < len(state.r2v_reference_images):
@@ -174,6 +222,7 @@ def _r2v_uploader(
 def _uploader_placeholder(on_upload, on_library_select, key_prefix: str, disabled: bool):
     """A placeholder box with uploader and library chooser buttons."""
     with me.box(
+        classes="gm-ref-slot",
         style=me.Style(
             height=100,
             width=100,
@@ -184,22 +233,26 @@ def _uploader_placeholder(on_upload, on_library_select, key_prefix: str, disable
                     color=me.theme_var("outline"),
                 )
             ),
-            border_radius=8,
+            border_radius=12,
             display="flex",
-            flex_direction="column",
+            flex_direction="row",
             align_items="center",
             justify_content="center",
-            gap=8,
+            gap=4,
             opacity=0.5 if disabled else 1.0,
-        )
+        ),
     ):
-        me.uploader(
-            label="Upload Image",
-            on_upload=on_upload,
-            accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-            key=f"{key_prefix}_uploader",
-            disabled=disabled,
-        )
+        with me.tooltip(message="Upload an image"):
+            with me.content_uploader(
+                on_upload=on_upload,
+                accepted_file_types=["image/jpeg", "image/png", "image/webp"],
+                key=f"{key_prefix}_uploader",
+                disabled=disabled,
+                type="icon",
+            ):
+                me.icon("upload")
+                with me.box(classes="gm-sr-only"):
+                    me.text("Upload an image")
         with me.box(style=me.Style(pointer_events="none" if disabled else "auto")):
             library_chooser_button(
                 key=f"{key_prefix}_library_chooser",
@@ -241,7 +294,7 @@ def _image_uploader(
     with me.box(style=me.Style(display="flex", flex_direction="row", gap=15)):
         # First Frame
         with me.box(style=me.Style(display="flex", flex_direction="column", gap=2)):
-            me.text("First Frame", style=me.Style(font_size="10pt"))
+            me.text("First frame", style=me.Style(font_size="10pt"))
             if state.reference_image_uri:
                 image_thumbnail(
                     image_uri=state.reference_image_uri,
@@ -260,7 +313,7 @@ def _image_uploader(
         # Last Frame (for interpolation, also known as first/last frame)
         if last_image:
             with me.box(style=me.Style(display="flex", flex_direction="column", gap=2)):
-                me.text("Last Frame", style=me.Style(font_size="10pt"))
+                me.text("Last frame", style=me.Style(font_size="10pt"))
                 if state.last_reference_image_uri:
                     image_thumbnail(
                         image_uri=state.last_reference_image_uri,
