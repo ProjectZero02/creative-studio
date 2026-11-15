@@ -27,7 +27,8 @@
 #   4. a Firestore database and the indexes the library queries need
 #   5. sign-in secrets in Secret Manager (session mode only)
 #   6. Cloud Run: built from source, session affinity, CPU boost,
-#      a 60-minute timeout for long Veo jobs, and scale to zero.
+#      a 60-minute timeout for long Veo jobs, CPU kept on while an instance
+#      runs (Story Studio renders in the background), and scale to zero.
 #
 # Sign-in options (--auth):
 #   session (default)  the app's own sign-in page and user list. The URL is
@@ -195,6 +196,7 @@ say "6/6 Building and deploying to Cloud Run (takes 5-10 minutes)"
 DEPLOY=(gcloud run deploy "${SERVICE}" --source=. --region="${REGION}"
   --service-account="${SA_EMAIL}"
   --session-affinity --cpu-boost --timeout=3600
+  --no-cpu-throttling
   --cpu=2 --memory=4Gi --concurrency=40
   --min-instances="${MIN_INSTANCES}" --max-instances="${MAX_INSTANCES}"
   --set-env-vars="${ENV_VARS}" "${G[@]}")

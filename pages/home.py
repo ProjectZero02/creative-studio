@@ -65,6 +65,7 @@ SECTIONS = {
 QUICK_STARTS = [
     ("Generate an image", "/nano-banana", "image"),
     ("Create a video", "/veo", "movie"),
+    ("Make a short film", "/story", "movie_filter"),
     ("Make music", "/lyria", "music_note"),
     ("Open library", "/library_v2", "photo_library"),
 ]
