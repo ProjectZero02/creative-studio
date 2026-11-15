@@ -46,6 +46,15 @@ PROJECT_ID=
 # X-Goog-Authenticated-User-Email,X-Auth-Request-Email,X-Forwarded-Email,X-Email,X-Authenticated-User
 # AUTH_EMAIL_HEADERS=
 
+# [OPTIONAL] App sign-in instead of IAP (see environment_variables.md).
+# AUTH_MODE=session
+# SESSION_SECRET=            # 32+ random characters; required outside local
+# SESSION_TTL_HOURS=12
+# BOOTSTRAP_ADMIN_EMAIL=     # first admin, only if no admin exists yet
+# BOOTSTRAP_ADMIN_PASSWORD=
+# USER_STORE=                # firestore (default deployed) or file (default local)
+# USER_STORE_PATH=.local/users.json
+
 # ==============================================================================
 # 🧠 Gemini Models (Text & Multimodal)
 # ==============================================================================

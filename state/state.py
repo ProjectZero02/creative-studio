@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from urllib.parse import unquote
+
 import mesop as me
 from flask import request
 
@@ -19,6 +21,8 @@ from common.identity import (
     ANONYMOUS_USER_EMAIL,
     INTERNAL_SESSION_ID_ENVIRON,
     INTERNAL_VERIFIED_EMAIL_ENVIRON,
+    INTERNAL_VERIFIED_NAME_ENVIRON,
+    INTERNAL_VERIFIED_ROLE_ENVIRON,
 )
 
 
@@ -34,6 +38,8 @@ class AppState:
     user_email: str = "anonymous@google.com"
     session_id: str = ""
     current_page: str = ""
+    user_role: str = ""
+    user_name: str = ""
 
     def __init__(self):
         """Initializes the AppState from the middleware-verified identity.
@@ -54,6 +60,13 @@ class AppState:
             ANONYMOUS_USER_EMAIL,
         )
         self.session_id = request.environ.get(INTERNAL_SESSION_ID_ENVIRON, "")
+        # Session sign-in only (empty otherwise). Display use only: admin
+        # checks re-read the server-set header per request (see
+        # pages/admin_users.py), because Mesop state round-trips via the client.
+        self.user_role = request.environ.get(INTERNAL_VERIFIED_ROLE_ENVIRON, "")
+        self.user_name = unquote(
+            request.environ.get(INTERNAL_VERIFIED_NAME_ENVIRON, "")
+        )
 
 
 def theme_toggle_button():

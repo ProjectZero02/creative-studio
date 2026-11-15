@@ -96,3 +96,6 @@ bin/
 
 # local provider lock (platform-specific hashes); owner re-inits at their venue
 .terraform.lock.hcl
+
+# Local users store for AUTH_MODE=session dev (common/user_store.py)
+.local/

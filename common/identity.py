@@ -43,6 +43,11 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 # value from the middleware to ``AppState``.
 INTERNAL_VERIFIED_EMAIL_HEADER = "X-Internal-Verified-User-Email"
 INTERNAL_SESSION_ID_HEADER = "X-Internal-Session-Id"
+# Session auth mode only (common/session_auth.py): the caller's role and display
+# name from the users store, carried the same way (stripped, then set). The name
+# is percent-encoded because header values are latin-1.
+INTERNAL_VERIFIED_ROLE_HEADER = "X-Internal-Verified-User-Role"
+INTERNAL_VERIFIED_NAME_HEADER = "X-Internal-Verified-User-Name"
 
 
 def _wsgi_environ_key(header_name: str) -> str:
@@ -54,6 +59,8 @@ def _wsgi_environ_key(header_name: str) -> str:
 # the header names the middleware sets).
 INTERNAL_VERIFIED_EMAIL_ENVIRON = _wsgi_environ_key(INTERNAL_VERIFIED_EMAIL_HEADER)
 INTERNAL_SESSION_ID_ENVIRON = _wsgi_environ_key(INTERNAL_SESSION_ID_HEADER)
+INTERNAL_VERIFIED_ROLE_ENVIRON = _wsgi_environ_key(INTERNAL_VERIFIED_ROLE_HEADER)
+INTERNAL_VERIFIED_NAME_ENVIRON = _wsgi_environ_key(INTERNAL_VERIFIED_NAME_HEADER)
 
 
 def set_internal_scope_headers(scope: dict, values: dict[str, str]) -> None:

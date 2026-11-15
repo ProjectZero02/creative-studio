@@ -24,6 +24,20 @@ These variables define the fundamental operating context of the application.
 | **`REQUIRE_AUTHENTICATED_USER`** | `true` outside local/dev/test, otherwise `false` | Reject non-health requests that do not include a trusted upstream identity header. Set this to `true` behind Netskope NPA/oauth2-proxy or IAP. |
 | **`AUTH_EMAIL_HEADERS`** | IAP + oauth2-proxy/Netskope defaults | Comma-separated trusted request headers to inspect for the authenticated user email. Defaults: `X-Goog-Authenticated-User-Email`, `X-Auth-Request-Email`, `X-Forwarded-Email`, `X-Email`, `X-Authenticated-User`. |
 
+## 🔐 App sign-in (optional, `AUTH_MODE=session`)
+
+Turns on the studio's own sign-in page (`/login`), with admin and user roles and a Users page at `/admin/users` (open it from the avatar menu). Leave `AUTH_MODE` unset to keep IAP (deployed) or the local mock identity.
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| **`AUTH_MODE`** | *unset* | Set to `session` to use the app's sign-in. Any other value is ignored; IAP/local still come from `APP_ENV`. |
+| **`SESSION_SECRET`** | *None* (required outside local) | Random key that signs the session cookie, at least 32 characters. The app refuses to start without it outside local dev. Keep it in Secret Manager. Changing it signs everyone out. |
+| **`SESSION_TTL_HOURS`** | `12` | How long a sign-in lasts. |
+| **`BOOTSTRAP_ADMIN_EMAIL`** | *None* | Email of the first admin. Only used when there is no active admin yet. |
+| **`BOOTSTRAP_ADMIN_PASSWORD`** | *None* | That admin's first password (at least 10 characters). Keep it in Secret Manager and change it after the first sign-in. |
+| **`USER_STORE`** | `file` in local envs, else `firestore` | Where users are kept: Firestore collection `studio_users` (in `GENMEDIA_FIREBASE_DB`), or a JSON file for local dev. |
+| **`USER_STORE_PATH`** | `.local/users.json` | The JSON file for `USER_STORE=file` (gitignored). |
+
 ## 🧠 Gemini Models (Text & Multimodal)
 Controls which versions of the Gemini models are used for various tasks.
 

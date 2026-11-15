@@ -73,7 +73,7 @@ class Default:
     REQUIRE_AUTHENTICATED_USER: bool = require_authenticated_user(APP_ENV)
     # Identity source mode, derived from APP_ENV (not an operator boolean):
     # deployed envs verify the IAP assertion; local envs use a mock identity.
-    AUTH_MODE: str = resolve_auth_mode(APP_ENV)
+    AUTH_MODE: str = resolve_auth_mode(APP_ENV, os.environ.get("AUTH_MODE"))
     # Per-env IAP JWT audience (opaque, infra-owned). Required in iap mode; the
     # literal value is never hardcoded. Startup validation enforces its presence.
     IAP_JWT_AUDIENCE: str = os.environ.get("IAP_JWT_AUDIENCE", "")
