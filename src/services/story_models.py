@@ -147,6 +147,10 @@ class Scene:
     duration: int = 6
     frame_uri: str = ""
     clip_uri: str = ""
+    # clip_uri of the previous scene this clip was animated from (its last
+    # frame was the start frame). Empty when the clip started from its own
+    # storyboard frame. Lets the stitcher tell which joins really match.
+    continues_from: str = ""
 
 
 @dataclass
@@ -173,6 +177,10 @@ class Story:
     voice_on: bool = True
     voice_name: str = "Kore"
     continuity: bool = False
+    # With continuity on, join scenes that really continue each other with a
+    # straight cut instead of a crossfade (a crossfade there double-exposes the
+    # same moment twice). Has no effect when continuity is off.
+    seamless_joins: bool = True
     final_uri: str = ""
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
