@@ -57,5 +57,6 @@ variable "activate_apis" {
     "texttospeech.googleapis.com",
     "iamcredentials.googleapis.com",
     "logging.googleapis.com",
+    "speech.googleapis.com",
   ]
 }

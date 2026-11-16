@@ -13,6 +13,7 @@
 #   texttospeech.googleapis.com   Gemini TTS and Chirp 3 HD (google-cloud-texttospeech)
 #   iamcredentials.googleapis.com V4 signed media URLs via IAM signBlob
 #   logging.googleapis.com        Cloud Logging client used by the app
+#   speech.googleapis.com         Story Studio word timings to lip-sync the fixed voice
 # Enabling an already-enabled API is a no-op, so adding these is safe on
 # existing projects.
 #
@@ -42,3 +43,4 @@ cloudresourcemanager.googleapis.com
 texttospeech.googleapis.com
 iamcredentials.googleapis.com
 logging.googleapis.com
+speech.googleapis.com
