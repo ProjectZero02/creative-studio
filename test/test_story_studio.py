@@ -555,7 +555,7 @@ class _FastMock(story_service.MockStoryBackend):
     def generate_music(self, story, prompt, seconds):
         return "local://m.wav"
 
-    def generate_voiceover(self, story, index, text):
+    def generate_voiceover(self, story, index, text, style="narrator"):
         return f"local://v{index}.wav"
 
     def stitch(self, story, plan, music_uri, voice_uris):
@@ -786,7 +786,7 @@ def test_makes_alt_needs_voiceover():
 
 
 class _BilingualMock(_FastMock):
-    def generate_voiceover(self, story, index, text):
+    def generate_voiceover(self, story, index, text, style="narrator"):
         return f"local://{story.language}-v{index}.wav"
 
     def stitch(self, story, plan, music_uri, voice_uris):
@@ -985,8 +985,8 @@ def _spoken_story(local_store, **kw):
     )
 
 
-def test_spoken_scene_gets_no_voiceover(speech, local_store):
-    s = _spoken_story(local_store)
+def test_veo_voice_mode_gives_spoken_scene_no_voiceover(speech, local_store):
+    s = _spoken_story(local_store, same_voice=False)
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert [t.scene_index for t in job.tasks if t.kind == "voice"] == [1]
@@ -995,7 +995,7 @@ def test_spoken_scene_gets_no_voiceover(speech, local_store):
 
 
 def test_second_language_rerenders_only_spoken_clips(speech, local_store):
-    s = _spoken_story(local_store, second_on=True)
+    s = _spoken_story(local_store, second_on=True, same_voice=False)
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     arabic_clips = [c for c in speech.clips if c[0] == "Arabic"]
@@ -1013,7 +1013,7 @@ def test_second_language_rerenders_only_spoken_clips(speech, local_store):
 
 
 def test_second_language_without_voiceover_when_scenes_speak(speech, local_store):
-    s = _spoken_story(local_store, second_on=True, voice_on=False)
+    s = _spoken_story(local_store, second_on=True, voice_on=False, same_voice=False)
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert local_store.get(s.id, OWNER).final_alt_uri
@@ -1028,7 +1028,7 @@ def test_failed_spoken_alt_clip_skips_second_film(speech, local_store):
         return original(story, index, start)
 
     speech.generate_clip = flaky
-    s = _spoken_story(local_store, second_on=True)
+    s = _spoken_story(local_store, second_on=True, same_voice=False)
     job = _run(story_jobs.start_video(s.id, OWNER))
     kinds = {t.kind: t.status for t in job.tasks}
     assert kinds["stitch"] == "done" and kinds["stitch_alt"] == "skipped"
@@ -1060,7 +1060,13 @@ def test_arabic_clips_chain_from_each_other_with_continuity(local_store):
             Scene(narration="Two.", spoken=True, frame_uri="local://f1"),
         ]
         s = local_store.save(
-            Story(approved=True, continuity=True, second_on=True, scenes=scenes),
+            Story(
+                approved=True,
+                continuity=True,
+                second_on=True,
+                same_voice=False,
+                scenes=scenes,
+            ),
             OWNER,
         )
         job = _run(story_jobs.start_video(s.id, OWNER))
@@ -1080,3 +1086,186 @@ def test_arabic_clips_chain_from_each_other_with_continuity(local_store):
 def test_scenario_prompt_asks_for_the_speakers_gender():
     prompt = story_models.scenario_prompt(Story(speech_mode="on_camera"))
     assert "starts with their gender" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Same voice in every scene (dubbed on-camera lines)
+# ---------------------------------------------------------------------------
+
+
+def test_speech_span_finds_the_loud_part():
+    import numpy as np
+
+    rate = 16000
+    a = np.full(rate * 3, 0.002, dtype=np.float32)  # room tone
+    t = np.arange(rate) / rate
+    a[rate : 2 * rate] = 0.3 * np.sin(2 * np.pi * 180 * t)  # speech 1.0s-2.0s
+    start, end = story_service.speech_span(a, rate)
+    assert start == pytest.approx(1.0, abs=0.05)
+    assert end == pytest.approx(2.0, abs=0.05)
+    assert story_service.speech_span(np.zeros(rate, dtype=np.float32), rate) is None
+
+
+def test_dub_tempo_stays_natural():
+    assert story_service.dub_tempo(3.0, 3.0) == 1.0
+    assert story_service.dub_tempo(10.0, 3.0) == story_service.DUB_MAX_TEMPO
+    assert story_service.dub_tempo(1.0, 3.0) == story_service.DUB_MIN_TEMPO
+    assert story_service.dub_tempo(3.0, 0) == 1.0
+
+
+def test_fit_voice_changes_length_not_pitch(tmp_path):
+    import numpy as np
+
+    rate = 24000
+    t = np.arange(rate * 2) / rate
+    src = story_service._write_wav(
+        str(tmp_path / "v.wav"), 0.3 * np.sin(2 * np.pi * 200 * t), rate
+    )
+    out = story_service.fit_voice(src, str(tmp_path / "fast.wav"), 1.25)
+    fast = story_service.read_mono(out, 16000)
+    assert len(fast) / 16000 == pytest.approx(1.6, abs=0.08)
+    spectrum = np.abs(np.fft.rfft(fast))
+    peak_hz = np.argmax(spectrum) * 16000 / len(fast)
+    assert peak_hz == pytest.approx(200, abs=10)  # same pitch, only faster
+    assert story_service.fit_voice(src, str(tmp_path / "same.wav"), 1.0) == src
+
+
+def test_stitch_local_dubs_spoken_clip_with_fixed_voice(tmp_path):
+    """Veo's own voice (440 Hz) is replaced by the fixed voice (220 Hz),
+    placed where the person speaks in the clip."""
+    moviepy = pytest.importorskip("moviepy")
+    import numpy as np
+
+    def veo_speech(t):
+        t = np.asarray(t, dtype=float)
+        out = np.where((t > 0.4) & (t < 0.8), 0.3 * np.sin(2 * np.pi * 440 * t), 0.0)
+        return float(out) if out.ndim == 0 else out
+
+    paths = []
+    for i in range(2):
+        p = tmp_path / f"c{i}.mp4"
+        clip = moviepy.ColorClip((64, 36), color=(60 * i, 0, 0), duration=1.0)
+        if i == 1:
+            clip = clip.with_audio(
+                moviepy.AudioClip(veo_speech, duration=1.0, fps=22050)
+            )
+        clip.write_videofile(
+            str(p), fps=8, codec="libx264", audio_codec="aac", logger=None
+        )
+        paths.append(str(p))
+    rate = 24000
+    t = np.arange(int(rate * 0.4)) / rate
+    voice = story_service._write_wav(
+        str(tmp_path / "line.wav"), 0.3 * np.sin(2 * np.pi * 220 * t), rate
+    )
+    scenes = _clips([1, 1])
+    scenes[1].spoken, scenes[1].narration = True, "Hello"
+    plan = build_stitch_plan(scenes, crossfade=0.25, dub=True)
+    assert plan.segments[1].dub
+    out = story_service.stitch_local(
+        paths, plan, str(tmp_path / "film.mp4"), voice_paths=["", voice], fps=8
+    )
+    audio = story_service.read_mono(out, 16000)
+    window = audio[int(1.45 * 16000) : int(1.75 * 16000)]
+    spectrum = np.abs(np.fft.rfft(window))
+    peak_hz = np.argmax(spectrum) * 16000 / len(window)
+    assert peak_hz == pytest.approx(220, abs=25)  # the fixed voice, not Veo's
+    assert np.abs(audio[: int(0.9 * 16000)]).max() < 0.02  # silent first scene
+
+
+def test_tts_voice_follows_speaker_gender():
+    assert story_models.tts_voice_for("A female voice, 40s") == "Kore"
+    assert story_models.tts_voice_for("a male voice, mid-30s") == "Charon"
+    assert story_models.tts_voice_for("") == "Charon"
+
+
+def test_dubbed_story_keeps_main_clips_for_second_language():
+    sc = Scene(narration="a", narration_alt="b", spoken=True, clip_uri="main")
+    sc.clip_alt_uri, sc.clip_alt_key = "refilmed", sc.alt_clip_key()
+    assert story_models.alt_story(Story(scenes=[sc])).scenes[0].clip_uri == "main"
+    refilm = Story(scenes=[sc], same_voice=False)
+    assert story_models.alt_story(refilm).scenes[0].clip_uri == "refilmed"
+
+
+
+class _VoiceMock(_SpeechMock):
+    def generate_voiceover(self, story, index, text, style="narrator"):
+        self.voiced = getattr(self, "voiced", []) + [
+            (story.language, index, story.voice_name, style)
+        ]
+        return f"local://{story.language}-{story.voice_name}-v{index}.wav"
+
+    def stitch(self, story, plan, music_uri, voice_uris):
+        self.plans = getattr(self, "plans", []) + [plan]
+        return super().stitch(story, plan, music_uri, voice_uris)
+
+
+def test_same_voice_voices_spoken_lines_with_the_fixed_voice(local_store):
+    backend = _VoiceMock()
+    story_service.set_backend(backend)
+    try:
+        s = _spoken_story(local_store, speaker_tts_voice="Orus", voice_name="Kore")
+        job = _run(story_jobs.start_video(s.id, OWNER))
+        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+        # Spoken scene: the fixed presenter voice; narrated scene: the narrator.
+        assert ("English", 0, "Orus", "presenter") in backend.voiced
+        assert ("English", 1, "Kore", "narrator") in backend.voiced
+        assert backend.plans[0].segments[0].dub
+        assert not backend.plans[0].segments[1].dub
+        assert any("Orus voice" in t.label for t in job.tasks)
+    finally:
+        story_service.set_backend(None)
+
+
+def test_same_voice_dubs_second_language_over_the_same_clips(local_store):
+    backend = _VoiceMock()
+    story_service.set_backend(backend)
+    try:
+        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus")
+        job = _run(story_jobs.start_video(s.id, OWNER))
+        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+        assert "clip_alt" not in {t.kind for t in job.tasks}  # no re-filming
+        assert not [c for c in backend.clips if c[0] == "Arabic"]
+        assert ("Arabic", 0, "Orus", "presenter") in backend.voiced
+        english, arabic = backend.plans
+        assert [g.clip_uri for g in arabic.segments] == [
+            g.clip_uri for g in english.segments
+        ]
+        assert arabic.segments[0].dub
+        assert local_store.get(s.id, OWNER).final_alt_uri
+    finally:
+        story_service.set_backend(None)
+
+
+def test_same_voice_works_with_narrator_voiceover_off(local_store):
+    backend = _VoiceMock()
+    story_service.set_backend(backend)
+    try:
+        s = _spoken_story(local_store, voice_on=False)
+        job = _run(story_jobs.start_video(s.id, OWNER))
+        assert [t.scene_index for t in job.tasks if t.kind == "voice"] == [0]
+    finally:
+        story_service.set_backend(None)
+
+
+def test_scenario_picks_fixed_voice_from_speaker_gender(fast_backend, local_store):
+    s = local_store.save(
+        Story(idea="A woman presenting a new phone", scene_count=2, duration=4),
+        OWNER,
+    )
+
+    def female(story):
+        return json.dumps(
+            {
+                "title": "T",
+                "voice": "A female voice, 40s, warm",
+                "scenes": [
+                    {"narration": "Hi.", "spoken": True, "visual": "a"},
+                    {"narration": "Look.", "spoken": True, "visual": "b"},
+                ],
+            }
+        )
+
+    fast_backend.write_scenario = female
+    assert _run(story_jobs.start_scenario(s.id, OWNER)).status == "done"
+    assert local_store.get(s.id, OWNER).speaker_tts_voice == "Kore"
