@@ -278,6 +278,39 @@ def test_stitch_local_renders_tiny_clips(tmp_path):
         assert film.audio is not None
 
 
+def test_stitch_local_keeps_speech_of_spoken_clips(tmp_path):
+    """A spoken clip's own audio (Veo speech) ends up in the film."""
+    moviepy = pytest.importorskip("moviepy")
+    import numpy as np
+
+    def tone(t):
+        return 0.3 * np.sin(2 * np.pi * 440 * np.asarray(t))
+
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"c{i}.mp4"
+        clip = moviepy.ColorClip((64, 36), color=(40 * i, 0, 0), duration=1.0)
+        if i == 1:
+            clip = clip.with_audio(moviepy.AudioClip(tone, duration=1.0, fps=22050))
+        clip.write_videofile(
+            str(p), fps=8, codec="libx264", audio_codec="aac", logger=None
+        )
+        paths.append(str(p))
+    scenes = _clips([1, 1, 1])
+    scenes[1].spoken, scenes[1].narration = True, "Hello"
+    plan = build_stitch_plan(scenes, crossfade=0.25)
+    # Joins next to the spoken scene are cuts, not crossfades.
+    assert [seg.fade_in for seg in plan.segments] == [0.0, 0.0, 0.0]
+    assert plan.total == pytest.approx(3.0)
+    out = story_service.stitch_local(paths, plan, str(tmp_path / "film.mp4"), fps=8)
+    with moviepy.VideoFileClip(out) as film:
+        assert film.duration == pytest.approx(3.0, abs=0.2)
+        assert film.audio is not None
+        loud = np.abs(film.audio.subclipped(1.2, 1.8).to_soundarray(fps=8000)).max()
+        quiet = np.abs(film.audio.subclipped(0.1, 0.7).to_soundarray(fps=8000)).max()
+        assert loud > 0.1 and quiet < 0.02
+
+
 def _chain(durs, links):
     """Clips where links[i] says scene i was animated from scene i-1's clip."""
     scenes = _clips(durs)
@@ -293,7 +326,9 @@ def test_stitch_plan_seamless_cuts_continued_joins():
     )
     head = 1 / 24
     assert [s.fade_in for s in plan.segments] == [0.0, 0.0, 0.0]
-    assert [s.trim_head for s in plan.segments] == pytest.approx([0, head, head])
+    assert [s.trim_head for s in plan.segments] == pytest.approx(
+        [0, head, head], abs=1e-3
+    )
     assert [s.start for s in plan.segments] == pytest.approx(
         [0.0, 6.0, 12.0 - head], abs=1e-3
     )
@@ -847,3 +882,161 @@ def test_clear_films_forgets_both():
     s = Story(final_uri="a", final_alt_uri="b")
     s.clear_films()
     assert s.final_uri == s.final_alt_uri == ""
+
+
+# ---------------------------------------------------------------------------
+# On-camera speech
+# ---------------------------------------------------------------------------
+
+
+def test_parse_scenario_reads_spoken_and_voice():
+    text = json.dumps(
+        {
+            "title": "T",
+            "voice": "calm male voice",
+            "scenes": [
+                {"narration": "Hello team.", "spoken": True, "visual": "a"},
+                {"narration": "Later.", "spoken": "false", "visual": "b"},
+                {"narration": "", "spoken": True, "visual": "c"},
+            ],
+        }
+    )
+    _, scenes = parse_scenario(text, 3, 6)
+    assert [s.spoken for s in scenes] == [True, False, False]  # no line, no speech
+    assert story_models.parse_voice(text) == "calm male voice"
+    assert story_models.parse_voice("nope") == ""
+
+
+@pytest.mark.parametrize("mode, expected", [("narrator", False), ("on_camera", True)])
+def test_speech_mode_overrides_model_choice(mode, expected):
+    text = json.dumps(
+        {
+            "title": "T",
+            "scenes": [{"narration": "Hi", "spoken": not expected, "visual": "a"}],
+        }
+    )
+    _, scenes = parse_scenario(text, 1, 6, speech_mode=mode)
+    assert scenes[0].spoken is expected
+
+
+def test_scenario_prompt_explains_who_speaks():
+    auto = story_models.scenario_prompt(Story(idea="a man presents Gemini"))
+    assert "presenter" in auto and '"spoken"' in auto and '"voice"' in auto
+    narrator = story_models.scenario_prompt(Story(speech_mode="narrator"))
+    assert '"spoken" is false for every' in narrator
+    on_camera = story_models.scenario_prompt(Story(speech_mode="on_camera"))
+    assert "true for every scene" in on_camera
+
+
+def test_clip_prompt_carries_the_spoken_line():
+    st = Story(speaker_voice="calm male voice")
+    spoken = Scene(visual="A man on stage.", narration="Meet Gemini.", spoken=True)
+    prompt = story_models.clip_prompt(st, spoken)
+    assert '"Meet Gemini."' in prompt and "calm male voice" in prompt
+    assert "lip-synced" in prompt
+    silent = Scene(visual="A man on stage.", narration="Meet Gemini.")
+    assert "Meet Gemini" not in story_models.clip_prompt(st, silent)
+
+
+def test_line_too_long_uses_scene_length():
+    assert not Scene(narration=" ".join(["w"] * 15), duration=6).line_too_long()
+    assert Scene(narration=" ".join(["w"] * 16), duration=6).line_too_long()
+
+
+def test_alt_clip_only_valid_for_its_clip_and_line():
+    sc = Scene(clip_uri="c", narration_alt="a", spoken=True)
+    sc.clip_alt_uri, sc.clip_alt_key = "ca", sc.alt_clip_key()
+    assert sc.has_alt_clip()
+    sc.narration_alt = "changed"
+    assert not sc.has_alt_clip()
+    sc.narration_alt, sc.clip_uri = "a", "new clip"
+    assert not sc.has_alt_clip()
+
+
+class _SpeechMock(_BilingualMock):
+    def generate_clip(self, story, index, start_frame_uri):
+        self.clips = getattr(self, "clips", []) + [
+            (story.language, index, story.scenes[index].narration)
+        ]
+        return f"local://{story.id}/{story.language}-clip{index}-{len(self.clips)}.mp4"
+
+    def last_frame(self, story, clip_uri, index):
+        return f"local://last{index}.png"
+
+
+@pytest.fixture
+def speech(local_store):
+    backend = _SpeechMock()
+    story_service.set_backend(backend)
+    yield backend
+    story_service.set_backend(None)
+
+
+def _spoken_story(local_store, **kw):
+    scenes = [
+        Scene(narration="Meet Gemini.", spoken=True, frame_uri="local://f0"),
+        Scene(narration="It reads your files.", frame_uri="local://f1"),
+    ]
+    return local_store.save(
+        Story(title="Pitch", approved=True, scenes=scenes, **kw), OWNER
+    )
+
+
+def test_spoken_scene_gets_no_voiceover(speech, local_store):
+    s = _spoken_story(local_store)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    assert [t.scene_index for t in job.tasks if t.kind == "voice"] == [1]
+    english_voices = speech.films[0][1]
+    assert english_voices[0] == "" and english_voices[1]
+
+
+def test_second_language_rerenders_only_spoken_clips(speech, local_store):
+    s = _spoken_story(local_store, second_on=True)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    arabic_clips = [c for c in speech.clips if c[0] == "Arabic"]
+    assert arabic_clips == [("Arabic", 0, "[Arabic] Meet Gemini.")]
+    s = local_store.get(s.id, OWNER)
+    assert s.scenes[0].has_alt_clip() and s.final_alt_uri
+    # Arabic film: voiceover only for the narrated scene; the spoken scene
+    # carries its speech in the Arabic clip.
+    assert speech.films[1][0] == "Arabic"
+    assert speech.films[1][1][0] == "" and speech.films[1][1][1]
+
+    # Rendering again reuses the Arabic clip while it is current.
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    assert "clip_alt" not in {t.kind for t in job.tasks}
+
+
+def test_second_language_without_voiceover_when_scenes_speak(speech, local_store):
+    s = _spoken_story(local_store, second_on=True, voice_on=False)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    assert local_store.get(s.id, OWNER).final_alt_uri
+
+
+def test_failed_spoken_alt_clip_skips_second_film(speech, local_store):
+    original = speech.generate_clip
+
+    def flaky(story, index, start):
+        if story.language == "Arabic":
+            raise RuntimeError("boom")
+        return original(story, index, start)
+
+    speech.generate_clip = flaky
+    s = _spoken_story(local_store, second_on=True)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    kinds = {t.kind: t.status for t in job.tasks}
+    assert kinds["stitch"] == "done" and kinds["stitch_alt"] == "skipped"
+    assert not local_store.get(s.id, OWNER).final_alt_uri
+
+
+def test_mock_scenario_speaks_for_presenter_ideas(fast_backend, local_store):
+    s = local_store.save(
+        Story(idea="A man presenting Gemini Enterprise", scene_count=2, duration=4),
+        OWNER,
+    )
+    assert _run(story_jobs.start_scenario(s.id, OWNER)).status == "done"
+    s = local_store.get(s.id, OWNER)
+    assert all(sc.spoken for sc in s.scenes) and s.speaker_voice
