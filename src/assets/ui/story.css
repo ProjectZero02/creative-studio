@@ -294,5 +294,7 @@ html body.dark-theme .ss-root { --story-ring: #ffffff; }
   .ss-story, .ss-story:hover { transition: none; transform: none; }
 }
 
-/* Second-language (Arabic) narration and title read right to left. */
-.ss-rtl, .ss-rtl textarea { direction: rtl; text-align: right; }
+/* Second-language (Arabic) narration and title read right to left. Only the
+   text flips: mirroring the whole outlined field breaks its label notch. */
+.ss-rtl textarea { direction: rtl; text-align: right; }
+.ss-rtl-text { direction: rtl; text-align: right; }

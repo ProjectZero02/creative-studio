@@ -1835,7 +1835,7 @@ def video_step(story: Story) -> None:
 
 
 def _dir_class(language: str) -> str:
-    """Right-to-left text for Arabic (see .ss-rtl in assets/ui/story.css)."""
+    """Right-to-left textarea text for Arabic (.ss-rtl in assets/ui/story.css)."""
     return "ss-rtl" if language == "Arabic" else ""
 
 
@@ -1858,7 +1858,7 @@ def _alt_film(story: Story) -> None:
             style=me.Style(width="100%", height="100%"),
         )
     with me.box(classes="ss-player-meta"):
-        with me.box(classes=_dir_class(story.alt_language)):
+        with me.box(classes="ss-rtl-text" if story.alt_language == "Arabic" else ""):
             me.text(
                 story.title_alt or story.title or "Your film",
                 style=me.Style(font_size=16, font_weight=600),
