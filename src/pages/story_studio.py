@@ -980,7 +980,7 @@ def on_generate_scenario(e: me.ClickEvent):
         story.reference_uri = s.reference_uri
         story.scenes = []
         story.approved = False
-        story.final_uri = ""
+        story.clear_films()
         story.step = "scenario"
         story = get_store().save(story, owner)
         _set_story(story)
@@ -1114,7 +1114,7 @@ def _update_scene(
                 setattr(sc, field, value)
                 for c in clear:
                     setattr(sc, c, "")
-                story.final_uri = ""
+                story.clear_films()
 
     _edit(apply)
 
@@ -1129,7 +1129,21 @@ def on_title_blur(e: me.InputBlurEvent):
 
 
 def on_scene_narration(e: me.InputBlurEvent):
-    _update_scene(_scene_id_from_key(e.key), "narration", e.value.strip(), clear=())
+    _update_scene(
+        _scene_id_from_key(e.key), "narration", e.value.strip(), clear=("narration_alt",)
+    )
+
+
+def on_scene_narration_alt(e: me.InputBlurEvent):
+    scene_id, value = _scene_id_from_key(e.key), e.value.strip()
+
+    def apply(story: Story) -> None:
+        for sc in story.scenes:
+            if sc.id == scene_id and sc.narration_alt != value:
+                sc.narration_alt = value
+                story.final_alt_uri = ""
+
+    _edit(apply)
 
 
 def on_scene_visual(e: me.InputBlurEvent):
@@ -1333,7 +1347,8 @@ def on_to_editor(e: me.ClickEvent):
 
 
 def editor_step(story: Story) -> None:
-    busy = _job_active_for("video", "storyboard", "scene")
+    busy = _job_active_for("video", "storyboard", "scene", "translate")
+    alt = story.alt_language
     total = sum(sc.duration for sc in story.scenes)
     xf = Default().STORY_CROSSFADE_SECONDS
     seamless = story.continuity and story.seamless_joins
@@ -1423,6 +1438,19 @@ def editor_step(story: Story) -> None:
                             style=me.Style(width="100%"),
                             key=f"enar-{sc.id}",
                         )
+                        if story.makes_alt and sc.narration.strip():
+                            with me.box(classes=_dir_class(alt)):
+                                me.textarea(
+                                    label=f"Narration ({alt})",
+                                    value=sc.narration_alt,
+                                    placeholder="Translated when you render",
+                                    rows=2,
+                                    appearance="outline",
+                                    disabled=busy,
+                                    on_blur=on_scene_narration_alt,
+                                    style=me.Style(width="100%"),
+                                    key=f"anar-{sc.id}",
+                                )
                         me.textarea(
                             label="Video prompt",
                             value=sc.visual,
@@ -1472,6 +1500,32 @@ def editor_step(story: Story) -> None:
                     style=me.Style(width="100%"),
                     key="ss-voice",
                 )
+                me.slide_toggle(
+                    f"Also make an {alt} version",
+                    checked=story.second_on,
+                    disabled=busy,
+                    on_change=on_toggle_second,
+                    key="ss-second-on",
+                )
+                me.text(
+                    f"Same clips and music, with the narration translated and voiced "
+                    f"in {alt}. Check the {alt} lines under each scene before rendering.",
+                    style=me.Style(
+                        font_size=13, color=me.theme_var("on-surface-variant")
+                    ),
+                )
+                if story.second_on:
+                    me.button(
+                        "Translating…"
+                        if _job_active_for("translate")
+                        else f"Translate again into {alt}",
+                        type="stroked",
+                        disabled=busy,
+                        on_click=on_translate_again,
+                        style=me.Style(width="100%"),
+                        key="ss-translate",
+                    )
+                    progress_panel("Translating the narration", ("translate",))
             me.slide_toggle(
                 "Continuity: start each clip from the last frame of the one before",
                 checked=story.continuity,
@@ -1505,6 +1559,8 @@ def editor_step(story: Story) -> None:
                     else f"Film length ≈ {_fmt_secs(film_len)} with {xf:g}s crossfades"
                 )
                 me.text(f"Veo clips to render: {to_render} of {len(story.scenes)}")
+                if story.makes_alt:
+                    me.text(f"Films: {story.language} and {alt}")
             me.button(
                 "Rendering…" if _job_active_for("video") else "Render film",
                 type="flat",
@@ -1532,7 +1588,7 @@ def _move(scene_id: str, delta: int) -> None:
         j = i + delta
         if 0 <= j < len(story.scenes):
             story.scenes[i], story.scenes[j] = story.scenes[j], story.scenes[i]
-            story.final_uri = ""
+            story.clear_films()
             if story.continuity:
                 for sc in story.scenes[min(i, j) :]:
                     sc.clip_uri = ""
@@ -1555,7 +1611,7 @@ def on_remove_scene(e: me.ClickEvent):
         if len(story.scenes) > 1:
             story.scenes = [sc for sc in story.scenes if sc.id != scene_id]
             story.scene_count = len(story.scenes)
-            story.final_uri = ""
+            story.clear_films()
 
     _edit(apply)
 
@@ -1574,9 +1630,9 @@ def _set_story_field(field: str, value) -> None:
             "voice_name",
             "seamless_joins",
         ):
-            story.final_uri = ""
+            story.clear_films()
         if field == "continuity":
-            story.final_uri = ""
+            story.clear_films()
             for sc in story.scenes[1:]:
                 sc.clip_uri = ""
 
@@ -1601,6 +1657,35 @@ def on_toggle_continuity(e: me.SlideToggleChangeEvent):
 def on_toggle_seamless_joins(e: me.SlideToggleChangeEvent):
     story = _story()
     _set_story_field("seamless_joins", not (story and story.seamless_joins))
+
+
+def _start_translation(force: bool) -> None:
+    s = me.state(StoryState)
+    s.error = ""
+    try:
+        job = story_jobs.start_translation(s.story_id, _owner(), force=force)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
+
+
+def on_toggle_second(e: me.SlideToggleChangeEvent):
+    story = _story()
+    turning_on = not (story and story.second_on)
+
+    def apply(st: Story) -> None:
+        st.second_on = turning_on
+        st.final_alt_uri = ""
+
+    story = _edit(apply)
+    # Translate right away so the lines can be checked before rendering.
+    if turning_on and story and story.needs_translation():
+        _start_translation(force=False)
+
+
+def on_translate_again(e: me.ClickEvent):
+    _start_translation(force=True)
 
 
 def on_music_prompt(e: me.InputBlurEvent):
@@ -1671,6 +1756,8 @@ def video_step(story: Story) -> None:
                             type="stroked",
                             on_click=on_back_editor,
                         )
+                if story.final_alt_uri:
+                    _alt_film(story)
             else:
                 with me.box(classes="ss-media ss-ar-169 ss-player-wait"):
                     if rendering:
@@ -1745,6 +1832,38 @@ def video_step(story: Story) -> None:
                             style=me.Style(font_size=12),
                         )
         progress_panel("Rendering your film", ("video",))
+
+
+def _dir_class(language: str) -> str:
+    """Right-to-left text for Arabic (see .ss-rtl in assets/ui/story.css)."""
+    return "ss-rtl" if language == "Arabic" else ""
+
+
+def _alt_film(story: Story) -> None:
+    """The second-language film, under the main one."""
+    me.text(
+        f"{story.alt_language} version",
+        style=me.Style(font_size=18, font_weight=600, margin=me.Margin(top=24)),
+    )
+    with me.box(
+        classes="ss-media "
+        + (
+            "ss-ar-916 ss-player-portrait"
+            if story.aspect_ratio == "9:16"
+            else "ss-ar-169"
+        )
+    ):
+        me.video(
+            src=display_url(story.final_alt_uri),
+            style=me.Style(width="100%", height="100%"),
+        )
+    with me.box(classes="ss-player-meta"):
+        with me.box(classes=_dir_class(story.alt_language)):
+            me.text(
+                story.title_alt or story.title or "Your film",
+                style=me.Style(font_size=16, font_weight=600),
+            )
+        me.markdown(f"[Download MP4]({display_url(story.final_alt_uri)})")
 
 
 def on_back_editor(e: me.ClickEvent):
