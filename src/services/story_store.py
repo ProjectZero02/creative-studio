@@ -44,6 +44,40 @@ def owns(story_owner: str | None, caller: str | None) -> bool:
     return bool(caller) and bool(story_owner) and story_owner == caller
 
 
+def _bucket_of(uri: str) -> str:
+    """Bucket name of a gs:// URI or a configured bucket path, else ""."""
+    rest = (uri or "").strip().removeprefix("gs://")
+    return rest.split("/", 1)[0]
+
+
+def deployment_buckets() -> set[str]:
+    """Buckets this deployment writes media to (see config.default)."""
+    cfg = Default()
+    names = {
+        _bucket_of(cfg.GENMEDIA_BUCKET or ""),
+        _bucket_of(cfg.VIDEO_BUCKET or ""),
+        _bucket_of(cfg.IMAGE_BUCKET or ""),
+        _bucket_of(cfg.MEDIA_BUCKET or ""),
+    }
+    return {n for n in names if n}
+
+
+def belongs_here(story: Story, buckets: set[str] | None = None) -> bool:
+    """False when the story's media lives in another deployment's bucket.
+
+    Two services can share one Firestore database (for example a quickstart
+    deploy next to a Terraform one). Each writes media to its own bucket,
+    which the other cannot read, so a story from the other service would
+    show here with every image and clip broken. Such stories are hidden.
+    Stories with no gs:// media yet, and demo-mode local:// media, stay.
+    """
+    used = {_bucket_of(u) for u in story.media_uris() if u.startswith("gs://")}
+    if not used:
+        return True
+    mine = deployment_buckets() if buckets is None else buckets
+    return not mine or used <= mine
+
+
 class StoryStore(Protocol):
     def list(self, owner: str) -> list[Story]: ...
     def get(self, story_id: str, owner: str) -> Story | None: ...
@@ -137,7 +171,8 @@ class FirestoreStoryStore:
             .stream()
         )
         rows = [Story.from_dict(d.to_dict() or {}) for d in docs]
-        rows = [s for s in rows if owns(s.owner, owner)]
+        mine = deployment_buckets()
+        rows = [s for s in rows if owns(s.owner, owner) and belongs_here(s, mine)]
         return sorted(rows, key=lambda s: s.updated_at, reverse=True)
 
     def get(self, story_id: str, owner: str) -> Story | None:
@@ -149,7 +184,8 @@ class FirestoreStoryStore:
         data = snap.to_dict() or {}
         if not owns(data.get("owner"), owner):
             return None
-        return Story.from_dict(data)
+        story = Story.from_dict(data)
+        return story if belongs_here(story) else None
 
     def save(self, story: Story, owner: str) -> Story:
         if not owner:
