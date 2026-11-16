@@ -663,3 +663,110 @@ def test_admin_handlers_work_for_admin(session_env, monkeypatch):
 def test_identity_dataclass_defaults_keep_old_callers_working():
     identity = VerifiedIdentity(email="a@x", subject=None, source="iap")
     assert identity.role is None and identity.name is None
+
+
+# --------------------------------------------------------------------------- #
+# /account: users change their own password                                   #
+# --------------------------------------------------------------------------- #
+def _signed_in_client(session_env, who="user"):
+    email, pw = session_env.creds[who]
+    client = TestClient(_app())
+    assert _login(client, email, pw).status_code == 303
+    return client, email, pw
+
+
+def _change(client, current, new, confirm=None, headers=ORIGIN, csrf=None):
+    token = csrf if csrf is not None else _csrf(client, "/account")
+    return client.post(
+        "/account/password",
+        data={
+            "current": current,
+            "new": new,
+            "confirm": new if confirm is None else confirm,
+            "csrf": token,
+        },
+        headers=headers,
+        follow_redirects=False,
+    )
+
+
+def test_account_page_needs_sign_in(session_env):
+    client = TestClient(_app())
+    r = client.get("/account", headers=HTML, follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login?next=/account"
+
+
+def test_account_page_shows_for_regular_user(session_env):
+    client, email, _ = _signed_in_client(session_env)
+    page = client.get("/account", headers=HTML)
+    assert page.status_code == 200
+    assert "Account settings" in page.text and email in page.text
+    assert page.headers["cache-control"] == "no-store"
+
+
+def test_change_own_password_keeps_this_session_and_ends_others(session_env):
+    client, email, old = _signed_in_client(session_env)
+    other, _, _ = _signed_in_client(session_env)  # a second device
+    new = generate_password()
+
+    r = _change(client, old, new)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/account?changed=1"
+    assert sa.SESSION_COOKIE in r.headers["set-cookie"]
+
+    # This device stays signed in and sees the confirmation.
+    page = client.get("/account?changed=1", headers=HTML)
+    assert page.status_code == 200 and "Password changed" in page.text
+    # The other device's session no longer works.
+    assert other.get("/veo", headers=HTML, follow_redirects=False).status_code == 302
+    # Old password is refused, new one works.
+    fresh = TestClient(_app())
+    assert _login(fresh, email, old).status_code == 401
+    assert _login(fresh, email, new).status_code == 303
+
+
+def test_change_password_wrong_current_is_refused(session_env):
+    client, email, old = _signed_in_client(session_env)
+    before = session_env.store.get(email)["password_hash"]
+    r = _change(client, old + "x", generate_password())
+    assert r.status_code == 401
+    assert "current password is wrong" in r.text
+    assert session_env.store.get(email)["password_hash"] == before
+
+
+@pytest.mark.parametrize(
+    "new, confirm, message",
+    [
+        ("short", "short", "at least"),
+        ("a-long-enough-pass", "a-different-pass!", "do not match"),
+    ],
+)
+def test_change_password_rejects_bad_new_password(session_env, new, confirm, message):
+    client, email, old = _signed_in_client(session_env)
+    before = session_env.store.get(email)["password_hash"]
+    r = _change(client, old, new, confirm)
+    assert r.status_code == 400 and message in r.text
+    assert session_env.store.get(email)["password_hash"] == before
+
+
+def test_change_password_must_differ_from_current(session_env):
+    client, _, old = _signed_in_client(session_env)
+    r = _change(client, old, old)
+    assert r.status_code == 400 and "different from your current" in r.text
+
+
+def test_change_password_needs_csrf_and_same_origin(session_env):
+    client, email, old = _signed_in_client(session_env)
+    before = session_env.store.get(email)["password_hash"]
+    assert _change(client, old, generate_password(), csrf="forged").status_code == 400
+    cross = {"origin": "https://evil.example"}
+    assert _change(client, old, generate_password(), headers=cross).status_code == 400
+    assert session_env.store.get(email)["password_hash"] == before
+
+
+def test_change_password_is_rate_limited(session_env):
+    client, _, old = _signed_in_client(session_env)
+    for _ in range(sa.login_limiter.limit):
+        assert _change(client, "wrong-password!", generate_password()).status_code == 401
+    assert _change(client, old, generate_password()).status_code == 429
