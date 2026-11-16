@@ -14,6 +14,30 @@
 * limitations under the License.
 */
 
+variable "iap_members" {
+  description = "List of IAM member strings (e.g. user:email@domain) granted roles/iap.httpsResourceAccessor when deploying with direct Cloud Run IAP (use_lb = false). Set it in terraform.tfvars (git-ignored), not here."
+  type        = list(string)
+  default     = []
+}
+
+variable "ingress_mode" {
+  description = "Cloud Run ingress traffic setting. Set INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER where organization policy constraints/run.allowedIngress requires it."
+  type        = string
+  default     = "INGRESS_TRAFFIC_ALL"
+}
+
+variable "invoker_iam_disabled" {
+  description = "Whether to disable the IAM invoker check on Cloud Run. Defaults to false to comply with organization policy constraints/run.managed.requireInvokerIam."
+  type        = bool
+  default     = false
+}
+
+variable "iap_jwt_audience" {
+  description = "Custom IAP JWT audience string. If empty, automatically derived for Cloud Run direct IAP."
+  type        = string
+  default     = ""
+}
+
 variable "project_id" {
   type = string
 }

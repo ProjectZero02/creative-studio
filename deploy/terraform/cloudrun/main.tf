@@ -159,6 +159,8 @@ locals {
   creative_studio_env_vars = {
     PROJECT_ID                            = var.project_id
     LOCATION                              = var.region
+    APP_ENV                               = var.environment
+    IAP_JWT_AUDIENCE                      = var.iap_jwt_audience != "" ? var.iap_jwt_audience : "/projects/${data.google_project.project.number}/locations/${var.region}/services/creative-studio"
     GEMINI_LOCATION                       = var.gemini_location
     GEMINI_TTS_LOCATION                   = var.gemini_tts_location
     MODEL_ID                              = var.model_id
@@ -249,11 +251,12 @@ module "cloud-run-service" {
   max_instance_count = var.max_instance_count
 
   # use_lb decomposed into explicit ingress + auth fields (exact prior values).
-  ingress_mode         = var.use_lb ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_ALL"
+  ingress_mode         = var.ingress_mode
   default_uri_disabled = var.use_lb
   iap_enabled          = !var.use_lb
-  invoker_iam_disabled = !var.use_lb
+  invoker_iam_disabled = var.invoker_iam_disabled
   launch_stage         = var.use_lb ? "GA" : "BETA"
+  iap_members          = var.iap_members
 
   depends_on = [module.apis]
 }

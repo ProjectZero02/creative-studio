@@ -188,7 +188,7 @@ moved {
 
 moved {
   from = google_cloud_run_service_iam_member.iap_cloudrun_access
-  to   = module.cloud-run-service.google_cloud_run_service_iam_member.iap_cloudrun_access
+  to   = module.cloud-run-service.google_cloud_run_v2_service_iam_member.iap_invoker
 }
 
 moved {
