@@ -137,11 +137,22 @@ resource "google_cloud_run_v2_service" "creative_studio" {
   ]
 }
 
-resource "google_cloud_run_service_iam_member" "iap_cloudrun_access" {
+resource "google_cloud_run_v2_service_iam_member" "iap_invoker" {
+  project  = google_cloud_run_v2_service.creative_studio.project
   location = google_cloud_run_v2_service.creative_studio.location
-  service  = google_cloud_run_v2_service.creative_studio.name
+  name     = google_cloud_run_v2_service.creative_studio.name
   role     = "roles/run.invoker"
   member   = google_project_service_identity.iap_sa.member
+}
+
+resource "google_iap_web_cloud_run_service_iam_binding" "binding" {
+  provider               = google-beta
+  count                  = var.iap_enabled && length(var.iap_members) > 0 ? 1 : 0
+  project                = google_cloud_run_v2_service.creative_studio.project
+  location               = google_cloud_run_v2_service.creative_studio.location
+  cloud_run_service_name = google_cloud_run_v2_service.creative_studio.name
+  role                   = "roles/iap.httpsResourceAccessor"
+  members                = var.iap_members
 }
 
 /********************************************

@@ -14,6 +14,12 @@
 * limitations under the License.
 */
 
+variable "iap_members" {
+  description = "List of IAM member strings (e.g. user:email@example.com) granted roles/iap.httpsResourceAccessor for direct Cloud Run IAP."
+  type        = list(string)
+  default     = []
+}
+
 variable "project_id" {
   description = "GCP project ID."
   type        = string
