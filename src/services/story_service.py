@@ -142,8 +142,16 @@ class StoryBackend(Protocol):
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str: ...
     def generate_music(self, story: Story, prompt: str, seconds: float) -> str: ...
     def generate_voiceover(
-        self, story: Story, index: int, text: str, style: str = "narrator"
+        self,
+        story: Story,
+        index: int,
+        text: str,
+        style: str = "narrator",
+        direction: str = "",
     ) -> str: ...
+    def study_delivery(
+        self, story: Story, index: int, clip_uri: str, text: str, same_language: bool
+    ) -> tuple[str, str]: ...
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
     ) -> str: ...
@@ -337,6 +345,62 @@ def match_words(voice: list[Word], clip: list[Word]) -> list[tuple[float, float,
             if a[blk.a + k]:
                 pairs.append((v[1], v[2], c[1], c[2]))
     return pairs
+
+
+def pause_marked(text: str, clip_words: list[Word]) -> str:
+    """The line with a comma or "..." wherever the person in the clip pauses
+    between two words, so the voice breathes where their lips stop."""
+    import difflib
+
+    tokens = text.split()
+    a = [_norm_word(t) for t in tokens]
+    b = [_norm_word(w) for w, _, _ in clip_words]
+    to_clip: dict[int, int] = {}
+    for blk in difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
+        for k in range(blk.size):
+            if a[blk.a + k]:
+                to_clip[blk.a + k] = blk.b + k
+    out = []
+    for k, tok in enumerate(tokens):
+        if k in to_clip and k + 1 in to_clip and not re.search(r"[^\w]$", tok):
+            gap = clip_words[to_clip[k + 1]][1] - clip_words[to_clip[k]][2]
+            if gap >= 0.6:
+                tok += "..."
+            elif gap >= 0.3:
+                tok += ","
+        out.append(tok)
+    return " ".join(out)
+
+
+def pace_direction(clip_words: list[Word]) -> str:
+    """How fast the person in the clip talks, as a direction for the voice."""
+    if len(clip_words) < 2:
+        return ""
+    span = clip_words[-1][2] - clip_words[0][1]
+    if span <= 0:
+        return ""
+    wps = len(clip_words) / span
+    if wps < 1.8:
+        how = "slowly and deliberately"
+    elif wps > 3.2:
+        how = "quickly, with energy"
+    else:
+        how = "at a natural pace"
+    return (
+        f"Speak {how}, about {wps:.1f} words a second, and pause where the "
+        "line has commas or dots."
+    )
+
+
+def delivery_prompt(line: str) -> str:
+    return (
+        "Watch and listen to this clip. A voice actor will dub the person on "
+        "screen with this line (it may be a translation of what they say): "
+        f"\"{line}\"\n"
+        "In one or two short sentences, direct the voice actor to deliver it "
+        "exactly the way the person does: emotion, energy, pace, and which words "
+        "they stress. Directions only: no quotes, no preamble."
+    )
 
 
 WARP_MIN_TEMPO = 0.6
@@ -951,8 +1015,19 @@ class MockStoryBackend:
         _write_wav(path + ".wav", out, rate)
         return uri + ".wav"
 
+    def study_delivery(
+        self, story: Story, index: int, clip_uri: str, text: str, same_language: bool
+    ) -> tuple[str, str]:
+        """No model to watch the clip offline: no extra direction."""
+        return "", text
+
     def generate_voiceover(
-        self, story: Story, index: int, text: str, style: str = "narrator"
+        self,
+        story: Story,
+        index: int,
+        text: str,
+        style: str = "narrator",
+        direction: str = "",
     ) -> str:
         self._sleep(0.8, 1.6)
         rate = 24000
@@ -1124,15 +1199,70 @@ class VertexStoryBackend:
             raise GenerationError("Lyria returned no music.")
         return uris[0]
 
+    def study_delivery(
+        self, story: Story, index: int, clip_uri: str, text: str, same_language: bool
+    ) -> tuple[str, str]:
+        """How the person in the clip says the line: (direction, line).
+
+        Gemini watches the clip and writes acting notes (emotion, stress);
+        Speech-to-Text gives their pace and pauses. Pauses are copied into the
+        line only when the clip speaks the same language. Any failure just
+        means less direction.
+        """
+        from google.genai import types
+
+        from common.analytics import track_model_call
+        from common.storage import download_from_gcs
+        from models.gemini import client
+
+        notes: list[str] = []
+        line = text
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "clip.mp4")
+                with open(path, "wb") as f:
+                    f.write(download_from_gcs(clip_uri))
+                words = transcribe_words(
+                    path, LANGUAGES.get(story.clip_language or story.language, "en-US")
+                )
+        except Exception as exc:
+            logger.warning("Could not time the clip's speech: %s", exc)
+            words = []
+        if words:
+            notes.append(pace_direction(words))
+            if same_language:
+                line = pause_marked(text, words)
+        model = self.cfg.STORY_SCENARIO_MODEL_ID
+        try:
+            with track_model_call(model_name=model, task="story_delivery"):
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[
+                        types.Part.from_uri(file_uri=clip_uri, mime_type="video/mp4"),
+                        delivery_prompt(text),
+                    ],
+                    config=types.GenerateContentConfig(temperature=0.3),
+                )
+            if response.text:
+                notes.insert(0, " ".join(response.text.split())[:400])
+        except Exception as exc:
+            logger.warning("Gemini could not study the delivery: %s", exc)
+        return " ".join(n for n in notes if n), line
+
     def generate_voiceover(
-        self, story: Story, index: int, text: str, style: str = "narrator"
+        self,
+        story: Story,
+        index: int,
+        text: str,
+        style: str = "narrator",
+        direction: str = "",
     ) -> str:
         from common.storage import store_to_gcs
         from models.gemini_tts import synthesize_speech
 
         audio = synthesize_speech(
             text=text,
-            prompt=PRESENTER_DIRECTION
+            prompt=" ".join(filter(None, [PRESENTER_DIRECTION, direction]))
             if style == "presenter"
             else "Narrate warmly and clearly, like a short film voiceover.",
             model_name=self.cfg.STORY_SPEAKER_TTS_MODEL
