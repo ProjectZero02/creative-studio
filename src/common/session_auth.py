@@ -54,7 +54,16 @@ _SALT = "gm-session-v1"
 
 # Paths that never need a session (the login page itself, health checks, the
 # theme stylesheet and the favicon).
-PUBLIC_PATHS = ("/login", "/logout", "/healthz", "/readyz", "/favicon.ico")
+# /account/renew is public because the renewal token in its body is the proof
+# of identity: the caller's old session cookie died with their old password.
+PUBLIC_PATHS = (
+    "/login",
+    "/logout",
+    "/account/renew",
+    "/healthz",
+    "/readyz",
+    "/favicon.ico",
+)
 PUBLIC_PREFIXES = ("/ui/",)
 
 GENERIC_LOGIN_ERROR = "Email or password is wrong."
@@ -157,6 +166,41 @@ def read_session(
         return None
     except BadSignature:
         logger.warning("Rejected a session cookie with a bad signature.")
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("e"), str):
+        return None
+    return payload
+
+
+# Re-sign-in after a user changes their own password. Changing the password
+# invalidates every session token (they are bound to the password hash),
+# including the one in use. The account page hands the browser this short-lived
+# renewal token, which the browser POSTs (never in a URL) to /account/renew to
+# get a fresh session cookie. It is bound to the email and the NEW password
+# version, so it stops working if the password changes again.
+_RENEW_SALT = "gm-session-renew-v1"
+RENEW_MAX_AGE = 120
+
+
+def issue_renewal(record: Mapping, secret: str | None = None) -> str:
+    """Short-lived token that /account/renew swaps for a session cookie."""
+    return URLSafeTimedSerializer(secret or session_secret(), salt=_RENEW_SALT).dumps(
+        {
+            "e": record["email"],
+            "v": password_version(record.get("password_hash"), secret),
+        },
+    )
+
+
+def read_renewal(token: str | None, secret: str | None = None) -> dict | None:
+    """Payload of a valid, unexpired renewal token, else None."""
+    if not token or len(token) > 4096:
+        return None
+    try:
+        payload = URLSafeTimedSerializer(
+            secret or session_secret(), salt=_RENEW_SALT,
+        ).loads(token, max_age=RENEW_MAX_AGE)
+    except (BadSignature, SignatureExpired):
         return None
     if not isinstance(payload, dict) or not isinstance(payload.get("e"), str):
         return None
