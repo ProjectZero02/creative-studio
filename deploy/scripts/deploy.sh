@@ -581,13 +581,17 @@ precheck_8_bucket_roles() {
     --flatten="bindings[].members" \
     --format="value[separator=' '](bindings.role,bindings.members)" 2>/dev/null |
     grep "serviceAccount:${SERVICE_ACCOUNT_EMAIL}" || true)"
-  if printf '%s' "${roles}" | grep -qE 'roles/storage.(objectViewer|objectCreator|objectUser|bucketViewer|objectAdmin)'; then
-    pass "#8" "runtime SA bucket roles" "object role(s) present on gs://${GCS_ASSETS_BUCKET}"
-  elif has_project_role "${SERVICE_ACCOUNT_EMAIL}" "roles/storage.objectViewer" ||
-       has_project_role "${SERVICE_ACCOUNT_EMAIL}" "roles/storage.objectAdmin"; then
-    pass "#8" "runtime SA bucket roles" "project-level storage object role present"
+  # The app both writes generated media and reads it back, so a read-only role
+  # (objectViewer / bucketViewer) on its own is not enough.
+  if printf '%s' "${roles}" | grep -qE 'roles/storage\.(objectAdmin|objectUser)( |$)' ||
+     { printf '%s' "${roles}" | grep -qE 'roles/storage\.objectCreator( |$)' &&
+       printf '%s' "${roles}" | grep -qE 'roles/storage\.objectViewer( |$)'; }; then
+    pass "#8" "runtime SA bucket roles" "read+write object roles present on gs://${GCS_ASSETS_BUCKET}"
+  elif has_project_role "${SERVICE_ACCOUNT_EMAIL}" "roles/storage.objectAdmin" ||
+       has_project_role "${SERVICE_ACCOUNT_EMAIL}" "roles/storage.objectUser"; then
+    pass "#8" "runtime SA bucket roles" "project-level read+write storage object role present"
   else
-    block "#8" "runtime SA bucket roles" "no object role for SA on gs://${GCS_ASSETS_BUCKET}"
+    block "#8" "runtime SA bucket roles" "SA needs objectAdmin or objectUser (or objectCreator + objectViewer) on gs://${GCS_ASSETS_BUCKET}"
   fi
 }
 
