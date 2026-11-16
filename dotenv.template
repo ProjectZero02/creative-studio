@@ -195,15 +195,15 @@ PROJECT_ID=
 # GENMEDIA_BUCKET=
 
 # [OPTIONAL] Specific bucket/path for video files.
-# Default: {PROJECT_ID}-assets/videos
+# Default: {GENMEDIA_BUCKET}/videos
 # VIDEO_BUCKET=
 
 # [OPTIONAL] Specific bucket/path for image files.
-# Default: {PROJECT_ID}-assets/images
+# Default: {GENMEDIA_BUCKET}/images
 # IMAGE_BUCKET=
 
 # [OPTIONAL] Used by Lyria and potentially other legacy components.
-# Default: {PROJECT_ID}-assets
+# Default: {GENMEDIA_BUCKET}
 # MEDIA_BUCKET=
 
 # [OPTIONAL] Bucket for static assets used in the "About" page.

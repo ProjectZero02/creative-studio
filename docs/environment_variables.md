@@ -138,9 +138,9 @@ Defines where data and media assets are stored.
 | **`GENMEDIA_COLLECTION_NAME`** | `genmedia` | The main Firestore collection for storing generation metadata. |
 | **`SESSIONS_COLLECTION_NAME`** | `sessions` | Firestore collection for user session data. |
 | **`GENMEDIA_BUCKET`** | `{PROJECT_ID}-assets` | The primary GCS bucket for storing generated media. |
-| **`VIDEO_BUCKET`** | `{PROJECT_ID}-assets/videos` | Specific bucket/path for video files. |
-| **`IMAGE_BUCKET`** | `{PROJECT_ID}-assets/images` | Specific bucket/path for image files. |
-| **`MEDIA_BUCKET`** | `{PROJECT_ID}-assets` | Used by Lyria and potentially other legacy components. |
+| **`VIDEO_BUCKET`** | `{GENMEDIA_BUCKET}/videos` | Specific bucket/path for video files. |
+| **`IMAGE_BUCKET`** | `{GENMEDIA_BUCKET}/images` | Specific bucket/path for image files. |
+| **`MEDIA_BUCKET`** | `{GENMEDIA_BUCKET}` | Used by Lyria and potentially other legacy components. |
 | **`GCS_ASSETS_BUCKET`** | *None* | Bucket for static assets used in the "About" page. |
 
 ## ⚙️ Application Logic
