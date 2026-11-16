@@ -420,15 +420,20 @@ def warp_voice(
 
 
 def stage_voice(voice_path: str, out_path: str) -> str:
-    """Make a dry studio voice sound like it comes from the stage: mic EQ,
-    gentle compression and a short hall echo (ffmpeg filters)."""
+    """Make a dry studio voice sound like a live mic: rumble cut, less
+    low-mid "box", a little presence and gentle compression (ffmpeg filters).
+
+    No echo: short repeats of each word sounded boxy and like a second voice
+    talking underneath.
+    """
     import subprocess
 
     subprocess.run(
         [_ffmpeg(), "-v", "error", "-y", "-i", voice_path, "-filter:a",
-         "highpass=f=110,lowpass=f=8500,"
-         "acompressor=threshold=0.125:ratio=3:attack=5:release=80,"
-         "aecho=0.85:0.6:45|95|150:0.22|0.14|0.08",
+         "highpass=f=90,"
+         "equalizer=f=350:t=q:w=1.2:g=-3,"
+         "equalizer=f=3500:t=q:w=1.0:g=2,"
+         "acompressor=threshold=0.125:ratio=2.5:attack=8:release=120",
          out_path],
         check=True,
         capture_output=True,
@@ -436,9 +441,16 @@ def stage_voice(voice_path: str, out_path: str) -> str:
     return out_path
 
 
-def room_tone(samples: np.ndarray, rate: int, seconds: float, ratio: float = 0.1):
+ROOM_TONE_GAIN = 0.5
+
+
+def room_tone(samples: np.ndarray, rate: int, seconds: float, ratio: float = 0.05):
     """The clip's own background (crowd, room) with the speech cut out, looped
-    to `seconds`, or None when there is too little of it."""
+    to `seconds` at half level, or None when there is too little of it.
+
+    Frames near any speech are left out too, so soft syllables and breaths of
+    Veo's voice do not come back as murmuring under the dubbed voice.
+    """
     frame = max(1, int(rate * 0.02))
     n = len(samples) // frame
     if n == 0:
@@ -448,10 +460,13 @@ def room_tone(samples: np.ndarray, rate: int, seconds: float, ratio: float = 0.1
     peak = float(rms.max())
     if peak <= 0:
         return None
-    quiet = frames[rms < peak * ratio]
-    if len(quiet) * frame < int(0.25 * rate):
+    loud = rms >= peak * 0.1
+    guard = 15  # 0.3 s either side of speech
+    near = np.convolve(loud.astype(float), np.ones(2 * guard + 1), "same") > 0
+    quiet = frames[(rms < peak * ratio) & ~near]
+    if len(quiet) * frame < int(0.4 * rate):
         return None
-    bed = quiet.reshape(-1)
+    bed = quiet.reshape(-1) * ROOM_TONE_GAIN
     want = int(seconds * rate)
     reps = int(np.ceil(want / len(bed)))
     return np.tile(bed, reps)[:want].astype(np.float32)

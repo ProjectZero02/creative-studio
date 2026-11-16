@@ -1321,7 +1321,7 @@ def test_warp_voice_moves_each_word_to_its_clip_time(tmp_path):
     assert loud(1.42, 1.58) > 0.1
 
 
-def test_stage_voice_keeps_the_voice_and_adds_echo(tmp_path):
+def test_stage_voice_keeps_the_voice_without_echo(tmp_path):
     import numpy as np
 
     rate = 24000
@@ -1331,7 +1331,8 @@ def test_stage_voice_keeps_the_voice_and_adds_echo(tmp_path):
     src = story_service._write_wav(str(tmp_path / "v.wav"), v, rate)
     out = story_service.read_mono(story_service.stage_voice(src, str(tmp_path / "s.wav")), 16000)
     assert np.abs(out[: int(0.1 * 16000)]).max() > 0.1
-    assert np.abs(out[int(0.12 * 16000) : int(0.3 * 16000)]).max() > 0.005  # the hall
+    # No repeats of the word after it ends (they sounded boxy).
+    assert np.abs(out[int(0.15 * 16000) : int(0.4 * 16000)]).max() < 0.01
 
 
 def test_room_tone_keeps_only_the_background():
@@ -1339,11 +1340,12 @@ def test_room_tone_keeps_only_the_background():
 
     rate = 16000
     rng = np.random.default_rng(1)
-    a = (0.01 * rng.standard_normal(rate * 2)).astype(np.float32)
-    a[rate // 2 : rate] += 0.5  # loud speech
+    a = (0.01 * rng.standard_normal(rate * 3)).astype(np.float32)
+    a[rate : 2 * rate] += 0.5  # loud speech
+    a[int(0.85 * rate) : rate] += 0.04  # a soft breath just before it
     bed = story_service.room_tone(a, rate, 3.0)
     assert len(bed) == 3 * rate
-    assert np.abs(bed).max() < 0.1
+    assert np.abs(bed).max() < 0.03  # background only, at half level
     assert story_service.room_tone(np.zeros(0, dtype=np.float32), rate, 1.0) is None
 
 
