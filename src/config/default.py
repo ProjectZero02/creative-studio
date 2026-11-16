@@ -159,8 +159,11 @@ class Default:
 
     # storage
     GENMEDIA_BUCKET: str = os.environ.get("GENMEDIA_BUCKET", f"{PROJECT_ID}-assets")
-    VIDEO_BUCKET: str = os.environ.get("VIDEO_BUCKET", f"{PROJECT_ID}-assets/videos")
-    IMAGE_BUCKET: str = os.environ.get("IMAGE_BUCKET", f"{PROJECT_ID}-assets/images")
+    # Sub-paths default to the main bucket, so a deploy that only sets
+    # GENMEDIA_BUCKET never points at a bucket that does not exist.
+    _BUCKET_BASE = GENMEDIA_BUCKET.removeprefix("gs://").rstrip("/")
+    VIDEO_BUCKET: str = os.environ.get("VIDEO_BUCKET", f"{_BUCKET_BASE}/videos")
+    IMAGE_BUCKET: str = os.environ.get("IMAGE_BUCKET", f"{_BUCKET_BASE}/images")
     GCS_ASSETS_BUCKET: str = os.environ.get("GCS_ASSETS_BUCKET")
 
     # Library
@@ -246,7 +249,7 @@ class Default:
     LYRIA_LOCATION: str = os.environ.get("LYRIA_LOCATION", "us-central1")
     LYRIA_MODEL_VERSION: str = os.environ.get("LYRIA_MODEL_VERSION", "lyria-002")
     LYRIA_PROJECT_ID: str = os.environ.get("LYRIA_PROJECT_ID", PROJECT_ID)
-    MEDIA_BUCKET: str = os.environ.get("MEDIA_BUCKET", f"{PROJECT_ID}-assets")
+    MEDIA_BUCKET: str = os.environ.get("MEDIA_BUCKET", _BUCKET_BASE)
 
     # Image output folders (names kept for stored media paths).
     IMAGEN_GENERATED_SUBFOLDER: str = os.environ.get(
