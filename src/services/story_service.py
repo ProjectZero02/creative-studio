@@ -141,7 +141,9 @@ class StoryBackend(Protocol):
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str: ...
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str: ...
     def generate_music(self, story: Story, prompt: str, seconds: float) -> str: ...
-    def generate_voiceover(self, story: Story, index: int, text: str) -> str: ...
+    def generate_voiceover(
+        self, story: Story, index: int, text: str, style: str = "narrator"
+    ) -> str: ...
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
     ) -> str: ...
@@ -174,6 +176,74 @@ def read_last_frame_png(video_path: str, out_path: str) -> str:
     return out_path
 
 
+# Dubbing a spoken clip with the fixed voice: find when the person speaks in
+# Veo's audio, then fit the voice line to that span without changing pitch.
+DUB_MIN_TEMPO = 0.9
+DUB_MAX_TEMPO = 1.35
+
+
+def _ffmpeg() -> str:
+    import imageio_ffmpeg
+
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def read_mono(path: str, rate: int = 16000) -> np.ndarray:
+    """Decode a file's audio to mono floats with ffmpeg (empty if no audio)."""
+    import subprocess
+
+    out = subprocess.run(
+        [_ffmpeg(), "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", str(rate),
+         "-f", "s16le", "-"],
+        capture_output=True,
+        check=False,
+    ).stdout
+    return np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def speech_span(
+    samples: np.ndarray, rate: int = 16000, ratio: float = 0.2
+) -> tuple[float, float] | None:
+    """(start, end) seconds of the loud part of a clip's audio, or None.
+
+    Veo's speech is far louder than its room tone, so the span between the
+    first and last 20 ms frame above `ratio` of the peak is the spoken line.
+    """
+    frame = max(1, int(rate * 0.02))
+    n = len(samples) // frame
+    if n == 0:
+        return None
+    rms = np.sqrt((samples[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
+    peak = float(rms.max())
+    if peak < 0.01:
+        return None
+    active = np.nonzero(rms >= max(peak * ratio, 0.01))[0]
+    start, end = active[0] * frame / rate, (active[-1] + 1) * frame / rate
+    return (float(start), float(end)) if end - start >= 0.2 else None
+
+
+def dub_tempo(voice_seconds: float, span_seconds: float) -> float:
+    """Speed change that makes the voice fill the span, within natural limits."""
+    if span_seconds <= 0 or voice_seconds <= 0:
+        return 1.0
+    return min(DUB_MAX_TEMPO, max(DUB_MIN_TEMPO, voice_seconds / span_seconds))
+
+
+def fit_voice(voice_path: str, out_path: str, tempo: float) -> str:
+    """Change the voice's speed by `tempo` (pitch kept) with ffmpeg atempo."""
+    import subprocess
+
+    if abs(tempo - 1.0) < 0.02:
+        return voice_path
+    subprocess.run(
+        [_ffmpeg(), "-v", "error", "-y", "-i", voice_path, "-filter:a",
+         f"atempo={tempo:.4f}", out_path],
+        check=True,
+        capture_output=True,
+    )
+    return out_path
+
+
 def stitch_local(
     clip_paths: list[str],
     plan: StitchPlan,
@@ -186,8 +256,10 @@ def stitch_local(
 
     ``clip_paths`` and ``voice_paths`` follow ``plan.segments`` order. Clip
     audio is dropped except for spoken segments, whose clip carries the
-    on-camera speech. The music is looped/trimmed to the film and ducked under
-    any speech; the voiceover starts just after each crossfade.
+    on-camera speech. Dubbed segments drop the clip's audio and get their
+    voice line fitted to when the person speaks in it. The music is
+    looped/trimmed to the film and ducked under any speech; the voiceover
+    starts just after each crossfade.
     """
     from moviepy import (
         AudioFileClip,
@@ -203,7 +275,7 @@ def stitch_local(
     opened = []
     try:
         sources = [
-            VideoFileClip(p, audio=seg.spoken)
+            VideoFileClip(p, audio=seg.spoken and not seg.dub)
             for p, seg in zip(clip_paths, plan.segments)
         ]
         opened.extend(sources)
@@ -214,7 +286,7 @@ def stitch_local(
             clip = src.subclipped(
                 seg.trim_head, min(seg.trim_head + seg.duration, src.duration)
             )
-            if seg.spoken and clip.audio is not None:
+            if seg.spoken and not seg.dub and clip.audio is not None:
                 speech.append(clip.audio.with_start(seg.start))
             clip = clip.without_audio()
             if tuple(clip.size) != tuple(size):
@@ -240,9 +312,27 @@ def stitch_local(
                 ]
             )
             tracks.append(music)
-        for seg, vpath in zip(plan.segments, voice_paths or []):
+        for k, (seg, vpath) in enumerate(zip(plan.segments, voice_paths or [])):
             if not vpath:
                 continue
+            if seg.dub:
+                # Fit the fixed voice to when the person speaks in the clip.
+                span = speech_span(read_mono(clip_paths[k]))
+                if span:
+                    begin = max(span[0] - seg.trim_head, 0.0)
+                    voice = AudioFileClip(vpath)
+                    tempo = dub_tempo(voice.duration, span[1] - span[0])
+                    voice.close()
+                    fitted = fit_voice(
+                        vpath, f"{out_path}.dub{k}.wav", tempo
+                    )
+                    voice = AudioFileClip(fitted)
+                    opened.append(voice)
+                    room = max(0.3, seg.duration - begin - 0.05)
+                    if voice.duration > room:
+                        voice = voice.subclipped(0, room)
+                    tracks.append(voice.with_start(seg.start + begin))
+                    continue
             voice = AudioFileClip(vpath)
             opened.append(voice)
             lead = min(seg.fade_in + 0.25, seg.duration / 3)
@@ -586,7 +676,9 @@ class MockStoryBackend:
         _write_wav(path + ".wav", out, rate)
         return uri + ".wav"
 
-    def generate_voiceover(self, story: Story, index: int, text: str) -> str:
+    def generate_voiceover(
+        self, story: Story, index: int, text: str, style: str = "narrator"
+    ) -> str:
         self._sleep(0.8, 1.6)
         rate = 24000
         words = max(1, len(text.split()))
@@ -757,13 +849,20 @@ class VertexStoryBackend:
             raise GenerationError("Lyria returned no music.")
         return uris[0]
 
-    def generate_voiceover(self, story: Story, index: int, text: str) -> str:
+    def generate_voiceover(
+        self, story: Story, index: int, text: str, style: str = "narrator"
+    ) -> str:
         from common.storage import store_to_gcs
         from models.gemini_tts import synthesize_speech
 
         audio = synthesize_speech(
             text=text,
-            prompt="Narrate warmly and clearly, like a short film voiceover.",
+            prompt=(
+                "Say this naturally and confidently, like a presenter speaking "
+                "live to an audience."
+                if style == "presenter"
+                else "Narrate warmly and clearly, like a short film voiceover."
+            ),
             model_name=self.cfg.STORY_TTS_MODEL,
             voice_name=story.voice_name,
             language_code=LANGUAGES.get(story.language, "en-US"),
