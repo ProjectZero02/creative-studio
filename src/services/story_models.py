@@ -192,6 +192,13 @@ class Story:
                 return s.frame_uri
         return ""
 
+    def media_uris(self) -> list[str]:
+        """Every stored media URI this story points at (empty ones skipped)."""
+        uris = [self.reference_uri, self.final_uri]
+        for sc in self.scenes:
+            uris += [sc.frame_uri, sc.clip_uri]
+        return [u for u in uris if u]
+
     def to_dict(self) -> dict:
         return asdict(self)
 
