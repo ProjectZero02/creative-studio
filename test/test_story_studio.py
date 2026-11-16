@@ -278,6 +278,81 @@ def test_stitch_local_renders_tiny_clips(tmp_path):
         assert film.audio is not None
 
 
+def _chain(durs, links):
+    """Clips where links[i] says scene i was animated from scene i-1's clip."""
+    scenes = _clips(durs)
+    for i, linked in enumerate(links):
+        if i and linked:
+            scenes[i].continues_from = scenes[i - 1].clip_uri
+    return scenes
+
+
+def test_stitch_plan_seamless_cuts_continued_joins():
+    plan = build_stitch_plan(
+        _chain([6, 6, 6], [0, 1, 1]), crossfade=0.5, seamless=True, fps=24
+    )
+    head = 1 / 24
+    assert [s.fade_in for s in plan.segments] == [0.0, 0.0, 0.0]
+    assert [s.trim_head for s in plan.segments] == pytest.approx([0, head, head])
+    assert [s.start for s in plan.segments] == pytest.approx(
+        [0.0, 6.0, 12.0 - head], abs=1e-3
+    )
+    assert plan.total == pytest.approx(18 - 2 * head, abs=1e-3)
+
+
+def test_stitch_plan_seamless_keeps_crossfade_on_broken_join():
+    scenes = _chain([6, 6, 6], [0, 1, 0])
+    scenes[2].continues_from = "local://an-older-clip.mp4"  # scene 2 re-rendered
+    plan = build_stitch_plan(scenes, crossfade=0.5, seamless=True, fps=24)
+    assert [s.fade_in for s in plan.segments] == [0.0, 0.0, 0.5]
+    assert plan.segments[2].trim_head == 0.0
+
+
+def test_stitch_plan_without_seamless_ignores_links():
+    plan = build_stitch_plan(_chain([6, 6, 6], [0, 1, 1]), crossfade=0.5)
+    assert [s.fade_in for s in plan.segments] == [0.0, 0.5, 0.5]
+    assert plan.total == pytest.approx(17.0)
+
+
+def test_stitch_plan_seamless_needs_adjacent_scene():
+    scenes = _chain([6, 6, 6], [0, 1, 1])
+    scenes[1].clip_uri = ""  # middle scene missing: 0 -> 2 is not a continuation
+    plan = build_stitch_plan(scenes, crossfade=0.5, seamless=True)
+    assert [s.index for s in plan.segments] == [0, 2]
+    assert plan.segments[1].fade_in == 0.5
+
+
+def test_old_stories_load_with_new_defaults():
+    story = Story.from_dict(
+        {"continuity": True, "scenes": [{"visual": "v", "clip_uri": "local://c.mp4"}]}
+    )
+    assert story.seamless_joins is True
+    assert story.scenes[0].continues_from == ""
+
+
+def test_stitch_local_trims_head_on_seamless_join(tmp_path):
+    moviepy = pytest.importorskip("moviepy")
+
+    paths = []
+    for i, color in enumerate([(255, 0, 0), (0, 0, 255)]):
+        p = tmp_path / f"c{i}.mp4"
+        moviepy.ColorClip((64, 36), color=color, duration=1.0).write_videofile(
+            str(p), fps=8, codec="libx264", audio=False, logger=None
+        )
+        paths.append(str(p))
+    plan = build_stitch_plan(
+        _chain([1, 1], [0, 1]), crossfade=0.25, seamless=True, fps=8
+    )
+    out = story_service.stitch_local(paths, plan, str(tmp_path / "film.mp4"), fps=8)
+    with moviepy.VideoFileClip(out) as film:
+        assert film.duration == pytest.approx(2 - 1 / 8, abs=0.2)
+        # No blend at the cut: just before it is pure red, just after pure blue.
+        before = film.get_frame(0.9).mean(axis=(0, 1))
+        after = film.get_frame(1.05).mean(axis=(0, 1))
+        assert before[0] > 200 and before[2] < 60
+        assert after[2] > 200 and after[0] < 60
+
+
 def test_stitch_local_refuses_mismatch(tmp_path):
     from common.error_handling import GenerationError
 
@@ -506,6 +581,25 @@ def test_continuity_uses_last_frame_of_previous_clip(fast_backend, local_store):
     assert starts[0] == "local://f0.png"
     assert starts[1] == f"local://{s.id}/last1.png"
     assert starts[2] == f"local://{s.id}/last2.png"
+
+
+def test_continuity_records_continues_from(fast_backend, local_store):
+    scenes = [Scene(visual=f"v{i}", frame_uri=f"local://f{i}.png") for i in range(3)]
+    s = local_store.save(
+        Story(
+            scenes=scenes,
+            approved=True,
+            continuity=True,
+            voice_on=False,
+            music_on=False,
+        ),
+        OWNER,
+    )
+    _run(story_jobs.start_video(s.id, OWNER))
+    done = local_store.get(s.id, OWNER)
+    assert done.scenes[0].continues_from == ""
+    assert done.scenes[1].continues_from == done.scenes[0].clip_uri
+    assert done.scenes[2].continues_from == done.scenes[1].clip_uri
 
 
 def test_video_requires_frames(fast_backend, local_store):
