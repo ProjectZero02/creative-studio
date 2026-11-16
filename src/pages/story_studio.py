@@ -54,6 +54,7 @@ from services.story_models import (
     default_music_prompt,
     furthest_step,
     max_words,
+    voice_label,
     reachable_steps,
     supported_durations,
 )
@@ -1205,6 +1206,15 @@ def on_toggle_spoken(e: me.SlideToggleChangeEvent):
     _edit(apply)
 
 
+def on_toggle_same_voice(e: me.SlideToggleChangeEvent):
+    story = _story()
+    _set_story_field("same_voice", not (story and story.same_voice))
+
+
+def on_speaker_tts_voice(e: me.SelectSelectionChangeEvent):
+    _set_story_field("speaker_tts_voice", e.value)
+
+
 def on_speaker_voice(e: me.InputBlurEvent):
     value = e.value.strip()[:200]
 
@@ -1574,23 +1584,54 @@ def editor_step(story: Story) -> None:
                     key="ss-voice",
                 )
             if story.has_spoken:
-                me.input(
-                    label="Voice of the person on screen",
-                    value=story.speaker_voice,
-                    placeholder="e.g. a calm, confident male voice, mid-30s",
-                    appearance="outline",
+                me.slide_toggle(
+                    "Same voice in every scene",
+                    checked=story.same_voice,
                     disabled=busy,
-                    on_blur=on_speaker_voice,
-                    style=me.Style(width="100%"),
-                    key="ss-speaker-voice",
+                    on_change=on_toggle_same_voice,
+                    key="ss-same-voice",
                 )
-                me.text(
-                    "Described the same way in every spoken scene so the voice "
-                    "stays consistent. Applies to clips rendered from now on.",
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
+                if story.same_voice:
+                    me.select(
+                        label="Voice of the person on screen",
+                        options=[
+                            me.SelectOption(label=voice_label(v), value=v)
+                            for v in VOICES
+                        ],
+                        value=story.speaker_tts_voice,
+                        appearance="outline",
+                        disabled=busy,
+                        on_selection_change=on_speaker_tts_voice,
+                        style=me.Style(width="100%"),
+                        key="ss-speaker-tts",
+                    )
+                    me.text(
+                        "Veo films the person speaking; their lines are then voiced "
+                        "in this one voice, timed to their lips. Lip sync is close "
+                        "but not exact.",
+                        style=me.Style(
+                            font_size=13, color=me.theme_var("on-surface-variant")
+                        ),
+                    )
+                else:
+                    me.input(
+                        label="Voice of the person on screen",
+                        value=story.speaker_voice,
+                        placeholder="e.g. a calm, confident male voice, mid-30s",
+                        appearance="outline",
+                        disabled=busy,
+                        on_blur=on_speaker_voice,
+                        style=me.Style(width="100%"),
+                        key="ss-speaker-voice",
+                    )
+                    me.text(
+                        "Veo's own voice with exact lip sync. Veo picks the voice "
+                        "for each clip, so it can change between scenes; this "
+                        "description only steers it.",
+                        style=me.Style(
+                            font_size=13, color=me.theme_var("on-surface-variant")
+                        ),
+                    )
             if story.voice_on or story.has_spoken:
                 me.slide_toggle(
                     f"Also make an {alt} version",
@@ -1601,9 +1642,13 @@ def editor_step(story: Story) -> None:
                 )
                 me.text(
                     (
-                        f"Same music. Narration is voiced again in {alt}, and scenes "
-                        f"spoken on camera are rendered again saying the {alt} line "
-                        "(one extra Veo clip each)."
+                        f"Same clips and music. Every line, narrated or spoken on "
+                        f"camera, is voiced again in {alt} (lips follow the "
+                        f"{story.language} words)."
+                        if story.has_spoken and story.same_voice
+                        else f"Same music. Narration is voiced again in {alt}, and "
+                        f"scenes spoken on camera are rendered again saying the {alt} "
+                        "line (one extra Veo clip each)."
                         if story.has_spoken
                         else f"Same clips and music, with the narration translated "
                         f"and voiced in {alt}."
@@ -1665,6 +1710,7 @@ def editor_step(story: Story) -> None:
                         for sc in story.scenes
                         if sc.spoken
                         and sc.narration.strip()
+                        and not story.same_voice
                         and not (sc.clip_uri and sc.has_alt_clip())
                     )
                     if alt_clips:
@@ -1737,6 +1783,8 @@ def _set_story_field(field: str, value) -> None:
             "voice_on",
             "voice_name",
             "seamless_joins",
+            "same_voice",
+            "speaker_tts_voice",
         ):
             story.clear_films()
         if field == "continuity":
