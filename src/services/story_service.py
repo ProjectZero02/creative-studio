@@ -179,6 +179,13 @@ def read_last_frame_png(video_path: str, out_path: str) -> str:
 # Dubbing a spoken clip with the fixed voice: find when the person speaks in
 # Veo's audio, then fit the voice line to that span without changing pitch.
 DUB_MIN_TEMPO = 0.9
+# Acting direction for lines said on camera (not a narration).
+PRESENTER_DIRECTION = (
+    "Deliver this live on a big conference stage, speaking into a handheld "
+    "microphone to a large audience: confident, warm and energetic, a natural "
+    "pace with small pauses and a smile in the voice. A real keynote speaker, "
+    "not a narrator reading a script."
+)
 DUB_MAX_TEMPO = 1.35
 
 
@@ -244,6 +251,236 @@ def fit_voice(voice_path: str, out_path: str, tempo: float) -> str:
     return out_path
 
 
+def _secs(value) -> float:
+    """Speech-to-Text duration ("1.200s" or {"seconds", "nanos"}) in seconds."""
+    if isinstance(value, dict):
+        return float(value.get("seconds", 0)) + float(value.get("nanos", 0)) / 1e9
+    try:
+        return float(str(value or "0").rstrip("s"))
+    except ValueError:
+        return 0.0
+
+
+Word = tuple[str, float, float]  # (word, start, end) in seconds
+
+
+def transcribe_words(path: str, language_code: str) -> list[Word]:
+    """Word timings of a file's speech from Google Speech-to-Text ([] on failure).
+
+    Uses the v1 recognize API with word time offsets on 16 kHz mono audio.
+    Needs speech.googleapis.com enabled; any failure falls back to the
+    simpler span fit, so a render never breaks on it.
+    """
+    import base64
+
+    import google.auth
+    from google.auth.transport.requests import AuthorizedSession
+
+    pcm = read_mono(path, 16000)
+    if len(pcm) == 0:
+        return []
+    content = base64.b64encode(
+        (np.clip(pcm, -1, 1) * 32767).astype("<i2").tobytes()
+    ).decode()
+    try:
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        session = AuthorizedSession(creds)
+        for model in ("latest_short", None):
+            config = {
+                "encoding": "LINEAR16",
+                "sampleRateHertz": 16000,
+                "languageCode": language_code,
+                "enableWordTimeOffsets": True,
+            }
+            if model:
+                config["model"] = model
+            r = session.post(
+                "https://speech.googleapis.com/v1/speech:recognize",
+                json={"config": config, "audio": {"content": content}},
+                timeout=60,
+            )
+            if r.status_code == 200:
+                break
+            logger.warning(
+                "Speech-to-Text %s (model %s): %s", r.status_code, model, r.text[:300]
+            )
+        else:
+            return []
+    except Exception as exc:  # network, auth, API disabled
+        logger.warning("Speech-to-Text unavailable: %s", exc)
+        return []
+    words: list[Word] = []
+    for result in r.json().get("results", []):
+        alts = result.get("alternatives") or [{}]
+        for w in alts[0].get("words", []):
+            words.append((str(w.get("word", "")), _secs(w.get("startTime")), _secs(w.get("endTime"))))
+    return words
+
+
+def _norm_word(word: str) -> str:
+    return re.sub(r"[^\w]", "", word.lower())
+
+
+def match_words(voice: list[Word], clip: list[Word]) -> list[tuple[float, float, float, float]]:
+    """(voice_start, voice_end, clip_start, clip_end) for words said in both,
+    in order (difflib matching, so a misheard word is just skipped)."""
+    import difflib
+
+    a = [_norm_word(w) for w, _, _ in voice]
+    b = [_norm_word(w) for w, _, _ in clip]
+    pairs = []
+    for blk in difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
+        for k in range(blk.size):
+            v, c = voice[blk.a + k], clip[blk.b + k]
+            if a[blk.a + k]:
+                pairs.append((v[1], v[2], c[1], c[2]))
+    return pairs
+
+
+WARP_MIN_TEMPO = 0.6
+WARP_MAX_TEMPO = 1.8
+
+
+def warp_points(
+    pairs: list[tuple[float, float, float, float]], voice_seconds: float
+) -> list[tuple[float, float]]:
+    """Monotonic (voice time, clip time) anchors from matched words, with the
+    voice's lead-in and tail kept at their own length."""
+    points: list[tuple[float, float]] = []
+    for vs, ve, cs, ce in pairs:
+        for p in ((vs, cs), (ve, ce)):
+            if not points or (p[0] > points[-1][0] + 1e-3 and p[1] > points[-1][1] + 1e-3):
+                points.append(p)
+    if not points:
+        return []
+    v0, c0 = points[0]
+    head = (0.0, max(0.0, c0 - v0))
+    if v0 > 1e-3 and head[1] < c0:
+        points.insert(0, head)
+    v1, c1 = points[-1]
+    if voice_seconds > v1 + 1e-3:
+        points.append((voice_seconds, c1 + (voice_seconds - v1)))
+    return points
+
+
+def _atempo_chain(tempo: float) -> str:
+    """ffmpeg atempo filters for any tempo (each stage must stay in 0.5..2)."""
+    stages = []
+    while tempo > 2.0:
+        stages.append(2.0)
+        tempo /= 2.0
+    while tempo < 0.5:
+        stages.append(0.5)
+        tempo /= 0.5
+    stages.append(tempo)
+    return ",".join(f"atempo={t:.4f}" for t in stages)
+
+
+def warp_voice(
+    voice_path: str, points: list[tuple[float, float]], out_path: str, rate: int = 24000
+) -> str:
+    """Re-time the voice piece by piece so each anchor lands at its clip time.
+
+    The output's time 0 is the clip's time 0. Each piece is sped up or slowed
+    down (pitch kept) within WARP_MIN_TEMPO..WARP_MAX_TEMPO.
+    """
+    import subprocess
+
+    src = read_mono(voice_path, rate)
+    out = np.zeros(int((points[-1][1] + 0.5) * rate), dtype=np.float32)
+    fade = int(0.005 * rate)
+    with tempfile.TemporaryDirectory() as tmp:
+        for k, ((va, ca), (vb, cb)) in enumerate(zip(points, points[1:])):
+            piece = src[int(va * rate) : int(vb * rate)]
+            target = int((cb - ca) * rate)
+            if len(piece) < 2 or target < 2:
+                continue
+            tempo = min(WARP_MAX_TEMPO, max(WARP_MIN_TEMPO, len(piece) / target))
+            if abs(tempo - 1.0) > 0.02:
+                p_in, p_out = os.path.join(tmp, f"{k}.wav"), os.path.join(tmp, f"{k}o.wav")
+                _write_wav(p_in, piece, rate)
+                subprocess.run(
+                    [_ffmpeg(), "-v", "error", "-y", "-i", p_in, "-filter:a",
+                     _atempo_chain(tempo), p_out],
+                    check=True,
+                    capture_output=True,
+                )
+                piece = read_mono(p_out, rate)
+            piece = piece[:target].copy()
+            if len(piece) > 2 * fade:
+                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+                piece[:fade] *= ramp
+                piece[-fade:] *= ramp[::-1]
+            at = int(ca * rate)
+            end = min(len(out), at + len(piece))
+            out[at:end] += piece[: end - at]
+    return _write_wav(out_path, out, rate)
+
+
+def stage_voice(voice_path: str, out_path: str) -> str:
+    """Make a dry studio voice sound like it comes from the stage: mic EQ,
+    gentle compression and a short hall echo (ffmpeg filters)."""
+    import subprocess
+
+    subprocess.run(
+        [_ffmpeg(), "-v", "error", "-y", "-i", voice_path, "-filter:a",
+         "highpass=f=110,lowpass=f=8500,"
+         "acompressor=threshold=0.125:ratio=3:attack=5:release=80,"
+         "aecho=0.85:0.6:45|95|150:0.22|0.14|0.08",
+         out_path],
+        check=True,
+        capture_output=True,
+    )
+    return out_path
+
+
+def room_tone(samples: np.ndarray, rate: int, seconds: float, ratio: float = 0.1):
+    """The clip's own background (crowd, room) with the speech cut out, looped
+    to `seconds`, or None when there is too little of it."""
+    frame = max(1, int(rate * 0.02))
+    n = len(samples) // frame
+    if n == 0:
+        return None
+    frames = samples[: n * frame].reshape(n, frame)
+    rms = np.sqrt((frames**2).mean(axis=1))
+    peak = float(rms.max())
+    if peak <= 0:
+        return None
+    quiet = frames[rms < peak * ratio]
+    if len(quiet) * frame < int(0.25 * rate):
+        return None
+    bed = quiet.reshape(-1)
+    want = int(seconds * rate)
+    reps = int(np.ceil(want / len(bed)))
+    return np.tile(bed, reps)[:want].astype(np.float32)
+
+
+def _sync_words(
+    voice_path: str,
+    clip_path: str,
+    out_path: str,
+    word_timer,
+    voice_language: str,
+    clip_language: str,
+) -> str:
+    """Word-level re-timing of the voice to the clip's speech, or "" when it
+    cannot be done (no timer, other language, too few matching words)."""
+    if word_timer is None or not voice_language or voice_language != clip_language:
+        return ""
+    voice_words = word_timer(voice_path, voice_language)
+    clip_words = word_timer(clip_path, clip_language)
+    pairs = match_words(voice_words, clip_words)
+    if len(pairs) < 2 or len(pairs) < 0.5 * max(1, len(voice_words)):
+        return ""
+    voice_seconds = len(read_mono(voice_path, 16000)) / 16000
+    points = warp_points(pairs, voice_seconds)
+    if len(points) < 2:
+        return ""
+    return warp_voice(voice_path, points, out_path)
+
+
 def stitch_local(
     clip_paths: list[str],
     plan: StitchPlan,
@@ -251,6 +488,9 @@ def stitch_local(
     music_path: str = "",
     voice_paths: list[str] | None = None,
     fps: int = 24,
+    word_timer=None,
+    voice_language: str = "",
+    clip_language: str = "",
 ) -> str:
     """Render the film: clips overlapped with crossfades, music bed, voiceover.
 
@@ -316,8 +556,28 @@ def stitch_local(
             if not vpath:
                 continue
             if seg.dub:
+                clip_audio = read_mono(clip_paths[k])
+                bed = room_tone(clip_audio, 16000, seg.duration)
+                if bed is not None:
+                    # Keep the clip's own crowd and room sound under the voice.
+                    bed_path = _write_wav(f"{out_path}.room{k}.wav", bed, 16000)
+                    room = AudioFileClip(bed_path)
+                    opened.append(room)
+                    tracks.append(room.with_start(seg.start))
+                warped = _sync_words(
+                    vpath, clip_paths[k], f"{out_path}.sync{k}.wav",
+                    word_timer, voice_language, clip_language,
+                )
+                if warped:
+                    staged = stage_voice(warped, f"{out_path}.stage{k}.wav")
+                    voice = AudioFileClip(staged)
+                    opened.append(voice)
+                    head = min(seg.trim_head, voice.duration)
+                    voice = voice.subclipped(head, min(voice.duration, head + seg.duration))
+                    tracks.append(voice.with_start(seg.start))
+                    continue
                 # Fit the fixed voice to when the person speaks in the clip.
-                span = speech_span(read_mono(clip_paths[k]))
+                span = speech_span(clip_audio)
                 if span:
                     begin = max(span[0] - seg.trim_head, 0.0)
                     voice = AudioFileClip(vpath)
@@ -326,7 +586,7 @@ def stitch_local(
                     fitted = fit_voice(
                         vpath, f"{out_path}.dub{k}.wav", tempo
                     )
-                    voice = AudioFileClip(fitted)
+                    voice = AudioFileClip(stage_voice(fitted, f"{out_path}.stage{k}.wav"))
                     opened.append(voice)
                     room = max(0.3, seg.duration - begin - 0.05)
                     if voice.duration > room:
@@ -857,13 +1117,12 @@ class VertexStoryBackend:
 
         audio = synthesize_speech(
             text=text,
-            prompt=(
-                "Say this naturally and confidently, like a presenter speaking "
-                "live to an audience."
-                if style == "presenter"
-                else "Narrate warmly and clearly, like a short film voiceover."
-            ),
-            model_name=self.cfg.STORY_TTS_MODEL,
+            prompt=PRESENTER_DIRECTION
+            if style == "presenter"
+            else "Narrate warmly and clearly, like a short film voiceover.",
+            model_name=self.cfg.STORY_SPEAKER_TTS_MODEL
+            if style == "presenter"
+            else self.cfg.STORY_TTS_MODEL,
             voice_name=story.voice_name,
             language_code=LANGUAGES.get(story.language, "en-US"),
         )
@@ -897,7 +1156,16 @@ class VertexStoryBackend:
             music = fetch(music_uri, "music.wav")
             voices = [fetch(v, f"voice{k}.wav") for k, v in enumerate(voice_uris)]
             out = stitch_local(
-                clips, plan, os.path.join(tmp, "film.mp4"), music, voices
+                clips,
+                plan,
+                os.path.join(tmp, "film.mp4"),
+                music,
+                voices,
+                word_timer=transcribe_words,
+                voice_language=LANGUAGES.get(story.language, "en-US"),
+                clip_language=LANGUAGES.get(
+                    story.clip_language or story.language, "en-US"
+                ),
             )
             with open(out, "rb") as f:
                 data = f.read()

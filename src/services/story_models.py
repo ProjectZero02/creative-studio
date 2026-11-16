@@ -260,6 +260,9 @@ class Story:
     # are voiced by one fixed TTS voice instead, timed to when the person
     # on screen talks; the second language is dubbed over the same clips.
     same_voice: bool = True
+    # Language spoken in the clips when it differs from `language` (set on
+    # the dubbed second-language copy, whose clips speak the original).
+    clip_language: str = ""
     speaker_tts_voice: str = "Charon"
     title_alt: str = ""
     final_alt_uri: str = ""
@@ -702,6 +705,7 @@ def alt_story(story: Story) -> Story:
     return replace(
         story,
         language=story.alt_language,
+        clip_language=story.language,
         title=story.title_alt or story.title,
         scenes=[
             replace(
