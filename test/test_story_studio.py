@@ -700,3 +700,150 @@ def test_local_paths_reject_traversal():
         story_service.local_path("local://../secrets.txt")
     assert story_service.display_url("local://abc/x.png") == "/story-media/abc/x.png"
     assert story_service.display_url("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Second-language version
+# ---------------------------------------------------------------------------
+
+
+def test_second_language_is_english_for_arabic_else_arabic():
+    assert story_models.other_language("English") == "Arabic"
+    assert story_models.other_language("French") == "Arabic"
+    assert story_models.other_language("Arabic") == "English"
+
+
+def test_translation_prompt_asks_for_msa_and_line_count():
+    s = Story(title="Fox", scenes=[Scene(narration="Run."), Scene(narration="")])
+    prompt = story_models.translation_prompt(s)
+    assert "into Arabic" in prompt and "Modern Standard Arabic" in prompt
+    assert "exactly 2 lines" in prompt
+    english = story_models.translation_prompt(Story(language="Arabic"))
+    assert "into English" in english and "Modern Standard" not in english
+
+
+def test_parse_translation():
+    title, lines = story_models.parse_translation(
+        '```json' + chr(10) + '{"title": "T", "lines": ["a", ""]}' + chr(10) + '```', 2
+    )
+    assert title == "T" and lines == ["a", ""]
+    for bad in ("nope", "[]", '{"lines": ["a"]}', '{"lines": "a"}'):
+        with pytest.raises(story_models.ScenarioError):
+            story_models.parse_translation(bad, 2)
+
+
+def test_alt_story_swaps_language_title_and_narration_only():
+    s = Story(
+        title="Fox",
+        title_alt="TA",
+        scenes=[Scene(narration="Run.", narration_alt="RA", clip_uri="local://c")],
+    )
+    a = story_models.alt_story(s)
+    assert (a.language, a.title, a.scenes[0].narration) == ("Arabic", "TA", "RA")
+    assert a.scenes[0].clip_uri == "local://c"
+    assert s.scenes[0].narration == "Run." and s.title == "Fox"  # original intact
+
+
+def test_makes_alt_needs_voiceover():
+    assert Story(second_on=True, voice_on=True).makes_alt
+    assert not Story(second_on=True, voice_on=False).makes_alt
+    assert not Story(second_on=False, voice_on=True).makes_alt
+
+
+class _BilingualMock(_FastMock):
+    def generate_voiceover(self, story, index, text):
+        return f"local://{story.language}-v{index}.wav"
+
+    def stitch(self, story, plan, music_uri, voice_uris):
+        self.films = getattr(self, "films", []) + [(story.language, voice_uris)]
+        return f"local://film-{story.language}.mp4"
+
+    def save_to_library(self, story, final_uri, owner):
+        self.saved = getattr(self, "saved", []) + [(story.title, final_uri)]
+        return "id"
+
+
+@pytest.fixture
+def bilingual(local_store):
+    backend = _BilingualMock()
+    story_service.set_backend(backend)
+    yield backend
+    story_service.set_backend(None)
+
+
+def _ready_story(local_store, **kw):
+    scenes = [
+        Scene(narration="Run.", frame_uri="local://f0"),
+        Scene(narration="", frame_uri="local://f1"),
+        Scene(narration="Stop.", frame_uri="local://f2"),
+    ]
+    return local_store.save(
+        Story(title="Fox", approved=True, scenes=scenes, **kw), OWNER
+    )
+
+
+def test_render_makes_both_films_from_the_same_clips(bilingual, local_store):
+    s = _ready_story(local_store, second_on=True)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    kinds = [t.kind for t in job.tasks]
+    assert kinds.count("clip") == 3  # clips are rendered once, not per language
+    assert kinds.count("voice_alt") == 2  # the silent scene gets no voice
+    assert [lang for lang, _ in bilingual.films] == ["English", "Arabic"]
+    assert bilingual.films[1][1] == [
+        "local://Arabic-v0.wav",
+        "",
+        "local://Arabic-v2.wav",
+    ]
+    s = local_store.get(s.id, OWNER)
+    assert s.final_uri == "local://film-English.mp4"
+    assert s.final_alt_uri == "local://film-Arabic.mp4"
+    assert s.scenes[0].narration_alt == "[Arabic] Run."
+    assert s.scenes[1].narration_alt == ""
+    assert [t for t, _ in bilingual.saved] == ["Fox", "[Arabic] Fox"]
+
+
+def test_render_without_toggle_makes_one_film(bilingual, local_store):
+    s = _ready_story(local_store)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    assert not {"translate", "voice_alt", "stitch_alt"} & {t.kind for t in job.tasks}
+    assert local_store.get(s.id, OWNER).final_alt_uri == ""
+
+
+def test_render_without_voiceover_skips_second_film(bilingual, local_store):
+    s = _ready_story(local_store, second_on=True, voice_on=False)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    assert "stitch_alt" not in {t.kind for t in job.tasks}
+
+
+def test_translation_keeps_edited_lines_unless_forced(bilingual, local_store):
+    s = _ready_story(local_store, second_on=True)
+
+    def edited(x):
+        x.scenes[0].narration_alt = "my wording"
+
+    story_jobs.mutate_story(s.id, OWNER, edited)
+    assert _run(story_jobs.start_translation(s.id, OWNER)).status == "done"
+    lines = [sc.narration_alt for sc in local_store.get(s.id, OWNER).scenes]
+    assert lines == ["my wording", "", "[Arabic] Stop."]
+    assert _run(story_jobs.start_translation(s.id, OWNER, force=True)).status == "done"
+    lines = [sc.narration_alt for sc in local_store.get(s.id, OWNER).scenes]
+    assert lines == ["[Arabic] Run.", "", "[Arabic] Stop."]
+
+
+def test_failed_translation_still_makes_main_film(bilingual, local_store):
+    bilingual.translate = lambda story: "not json"
+    s = _ready_story(local_store, second_on=True)
+    job = _run(story_jobs.start_video(s.id, OWNER))
+    by_kind = {t.kind: t.status for t in job.tasks}
+    assert by_kind["translate"] == "failed"
+    assert by_kind["stitch"] == by_kind["library"] == "done"
+    assert by_kind["stitch_alt"] == "skipped"
+    s = local_store.get(s.id, OWNER)
+    assert s.final_uri and not s.final_alt_uri
+
+
+def test_clear_films_forgets_both():
+    s = Story(final_uri="a", final_alt_uri="b")
+    s.clear_films()
+    assert s.final_uri == s.final_alt_uri == ""
