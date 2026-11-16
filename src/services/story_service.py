@@ -204,7 +204,9 @@ def stitch_local(
         size = sources[0].size
         layers = []
         for seg, src in zip(plan.segments, sources):
-            clip = src.subclipped(0, min(seg.duration, src.duration))
+            clip = src.subclipped(
+                seg.trim_head, min(seg.trim_head + seg.duration, src.duration)
+            )
             if tuple(clip.size) != tuple(size):
                 clip = clip.resized(new_size=size)
             if seg.fade_in > 0:
