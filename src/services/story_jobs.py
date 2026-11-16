@@ -650,19 +650,27 @@ def start_video(story_id: str, owner: str) -> Job:
                 for i in clip_tasks
             ]
 
-        def speak(st: Story, i: int, text: str) -> str:
-            """Narrator line, or a dubbed on-camera line in the fixed voice."""
-            if _is_spoken(st.scenes[i]):
-                return backend.generate_voiceover(
-                    replace(st, voice_name=st.speaker_tts_voice),
-                    i,
-                    text,
-                    style="presenter",
-                )
-            return backend.generate_voiceover(st, i, text)
+        def speak(st: Story, i: int, text: str, same_language: bool) -> str:
+            """Narrator line, or a dubbed on-camera line in the fixed voice,
+            directed by how the person says it in their clip."""
+            if not _is_spoken(st.scenes[i]):
+                return backend.generate_voiceover(st, i, text)
+            current = get_store().get(story_id, owner) or story
+            clip = current.scenes[i].clip_uri
+            if not clip:
+                raise GenerationError(f"Scene {i + 1} has no clip to voice yet.")
+            direction, line = backend.study_delivery(st, i, clip, text, same_language)
+            extra = {"direction": direction} if direction else {}
+            return backend.generate_voiceover(
+                replace(st, voice_name=st.speaker_tts_voice),
+                i,
+                line,
+                style="presenter",
+                **extra,
+            )
 
         def voice(i: int) -> str:
-            uri = speak(story, i, story.scenes[i].narration)
+            uri = speak(story, i, story.scenes[i].narration, True)
             voice_uris[i] = uri
             return uri
 
@@ -670,9 +678,20 @@ def start_video(story_id: str, owner: str) -> Job:
             text = translated.scenes[i].narration
             if not text.strip():
                 raise GenerationError(f"Scene {i + 1} has no {alt} line yet.")
-            uri = speak(translated, i, text)
+            uri = speak(translated, i, text, False)
             alt_voice_uris[i] = uri
             return uri
+
+        # On-camera lines are voiced once their clip exists (they copy how the
+        # person speaks in it); narration can start right away.
+        after_clips = [
+            (t, voice) for i, t in voice_tasks.items() if _is_spoken(story.scenes[i])
+        ] + [
+            (t, voice_alt)
+            for i, t in alt_voice_tasks.items()
+            if _is_spoken(story.scenes[i])
+        ]
+        held = {id(t) for t, _ in after_clips}
 
         with ThreadPoolExecutor(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
             futures = []
@@ -687,9 +706,10 @@ def start_video(story_id: str, owner: str) -> Job:
                     )
                 )
             for i, t in voice_tasks.items():
-                futures.append(pool.submit(_run_task, t, lambda i=i: voice(i)))
+                if id(t) not in held:
+                    futures.append(pool.submit(_run_task, t, lambda i=i: voice(i)))
             for i, t in alt_voice_tasks.items():
-                if t.status == QUEUED:
+                if t.status == QUEUED and id(t) not in held:
                     futures.append(
                         pool.submit(_run_task, t, lambda i=i: voice_alt(i))
                     )
@@ -699,6 +719,14 @@ def start_video(story_id: str, owner: str) -> Job:
                 futures.extend(clips_parallel(pool))
             for f in futures:
                 f.result()
+        pending_lines = [(t, fn) for t, fn in after_clips if t.status == QUEUED]
+        if pending_lines:
+            with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+                for f in [
+                    pool.submit(_run_task, t, lambda fn=fn, i=t.scene_index: fn(i))
+                    for t, fn in pending_lines
+                ]:
+                    f.result()
         if music_task and music_task.status == DONE:
             music_uri = music_task.result_uri
 
