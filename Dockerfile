@@ -25,9 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /usr/local/bin/uv
 
 # 1) Dependencies only (cached unless pyproject.toml or uv.lock change).
+# No `RUN --mount=type=cache`: that needs BuildKit, and `gcloud run deploy
+# --source` builds with Cloud Build's classic Docker builder, which rejects it.
+# The Docker layer cache still skips this step when the lock is unchanged.
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+RUN uv sync --frozen --no-install-project --no-cache
 
 # 2) App code.
 COPY . .
