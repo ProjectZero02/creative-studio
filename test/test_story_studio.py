@@ -1408,3 +1408,68 @@ def test_presenter_lines_use_the_speaker_model():
     cfg = Default()
     assert cfg.STORY_SPEAKER_TTS_MODEL == "gemini-2.5-pro-tts"
     assert "stage" in story_service.PRESENTER_DIRECTION
+
+
+
+# ---------------------------------------------------------------------------
+# Dubbed lines copy how the person speaks in the clip
+# ---------------------------------------------------------------------------
+
+
+def test_pause_marked_adds_pauses_where_the_person_stops():
+    clip = [
+        ("good", 0.0, 0.3), ("evening", 0.35, 0.8),  # short gap: no pause
+        ("everyone", 1.2, 1.7),  # 0.4 s gap: comma
+        ("welcome", 2.5, 3.0),  # 0.8 s gap: dots
+        ("home", 3.05, 3.4),
+    ]
+    out = story_service.pause_marked("Good evening everyone welcome home.", clip)
+    assert out == "Good evening, everyone... welcome home."
+    # Existing punctuation is kept, and no timings means no change.
+    assert story_service.pause_marked("Hi, there", [("hi", 0, 0.2), ("there", 1.0, 1.3)]) == "Hi, there"
+    assert story_service.pause_marked("Hi there", []) == "Hi there"
+
+
+def test_pace_direction_reads_the_speed():
+    fast = [(str(i), i * 0.2, i * 0.2 + 0.15) for i in range(10)]
+    slow = [(str(i), i * 0.8, i * 0.8 + 0.5) for i in range(5)]
+    assert "quickly" in story_service.pace_direction(fast)
+    assert "slowly" in story_service.pace_direction(slow)
+    assert story_service.pace_direction([]) == ""
+
+
+def test_spoken_line_is_voiced_after_its_clip_with_its_delivery(local_store):
+    order = []
+
+    class Backend(_VoiceMock):
+        def generate_clip(self, story, index, start_frame_uri):
+            order.append(("clip", index))
+            return super().generate_clip(story, index, start_frame_uri)
+
+        def study_delivery(self, story, index, clip_uri, text, same_language):
+            order.append(("study", index, bool(clip_uri), same_language))
+            return "Warm and excited.", text.replace(" ", ", ", 1)
+
+        def generate_voiceover(self, story, index, text, style="narrator", direction=""):
+            order.append(("voice", index, style, direction, text))
+            return super().generate_voiceover(story, index, text, style)
+
+    backend = Backend()
+    story_service.set_backend(backend)
+    try:
+        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus")
+        job = _run(story_jobs.start_video(s.id, OWNER))
+        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+        clip0 = order.index(("clip", 0))
+        studies = [e for e in order if e[0] == "study"]
+        assert {e[3] for e in studies} == {True, False}  # main line, then Arabic
+        assert all(order.index(e) > clip0 and e[2] for e in studies)
+        spoken = [e for e in order if e[0] == "voice" and e[2] == "presenter"]
+        assert spoken and all(e[3] == "Warm and excited." and ", " in e[4] for e in spoken)
+    finally:
+        story_service.set_backend(None)
+
+
+def test_mock_backend_studies_nothing():
+    backend = story_service.MockStoryBackend()
+    assert backend.study_delivery(Story(), 0, "local://c.mp4", "Hi there", True) == ("", "Hi there")
