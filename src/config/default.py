@@ -337,6 +337,10 @@ class Default:
         "STORY_SCENARIO_MODEL_ID", os.environ.get("MODEL_ID", "gemini-3.5-flash")
     )
     STORY_TTS_MODEL: str = os.environ.get("STORY_TTS_MODEL", "gemini-2.5-flash-tts")
+    # Lines said on camera with the fixed voice: the newest, most expressive model.
+    STORY_SPEAKER_TTS_MODEL: str = os.environ.get(
+        "STORY_SPEAKER_TTS_MODEL", "gemini-2.5-pro-tts"
+    )
     STORY_CROSSFADE_SECONDS: float = float(
         os.environ.get("STORY_CROSSFADE_SECONDS", 0.5)
     )
