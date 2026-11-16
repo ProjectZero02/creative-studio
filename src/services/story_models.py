@@ -184,6 +184,9 @@ class Scene:
     # video, so it is rendered again) and the clip and line it was made from.
     clip_alt_uri: str = ""
     clip_alt_key: str = ""
+    # Clip whose last frame the second-language clip started from (the
+    # previous scene's clip in that film), like continues_from.
+    clip_alt_from: str = ""
 
     def alt_clip_key(self) -> str:
         """What a second-language clip must match to still be current."""
@@ -530,7 +533,8 @@ def parse_single_scene(
 def _speech_rules(story: Story) -> str:
     voice = (
         '- "voice": one short English description of the on-screen speaker\'s '
-        "voice (gender, age, tone, accent), reused for every spoken scene so it "
+        "voice that starts with their gender, e.g. \"a male voice, mid-30s, calm "
+        "and confident, neutral American accent\". It is reused for every spoken scene so it "
         'sounds the same. Use "" if nobody speaks on camera.'
     )
     if story.speech_mode == "narrator":
@@ -641,10 +645,13 @@ def clip_prompt(story: Story, scene: Scene) -> str:
     base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
     if not (scene.spoken and scene.narration.strip()):
         return base
-    voice = f" Voice: {story.speaker_voice}." if story.speaker_voice else ""
+    voice = story.speaker_voice or "a voice that matches their age and gender"
+    who = f" ({story.character})" if story.character else ""
     return (
-        f"{base} The person on screen looks at the camera and says in "
-        f'{story.language}: "{scene.narration.strip()}"{voice} Clear, natural, '
+        f"{base} The person on screen{who} looks at the camera and says in "
+        f'{story.language}: "{scene.narration.strip()}" '
+        f"They speak in {voice}, the same voice in every scene. They are the only "
+        "voice: no narrator, no other speakers, no voice-over. Clear, natural, "
         "lip-synced speech with light room sound. No music, no subtitles, no "
         "on-screen text."
     )
@@ -674,10 +681,11 @@ def alt_story(story: Story) -> Story:
             replace(
                 sc,
                 narration=sc.narration_alt,
-                clip_uri=sc.clip_alt_uri
-                if sc.spoken and sc.has_alt_clip()
-                else sc.clip_uri,
+                clip_uri=sc.clip_alt_uri,
+                continues_from=sc.clip_alt_from,
             )
+            if sc.spoken and sc.has_alt_clip()
+            else replace(sc, narration=sc.narration_alt)
             for sc in story.scenes
         ],
     )

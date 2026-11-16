@@ -705,6 +705,7 @@ class VertexStoryBackend:
         from models.veo import generate_video
 
         scene = story.scenes[index]
+        spoken = bool(scene.spoken and scene.narration.strip())
         caps = apply_caps(story.scene_count, scene.duration)
         uris, _ = generate_video(
             VideoGenerationRequest(
@@ -713,10 +714,12 @@ class VertexStoryBackend:
                 video_count=1,
                 aspect_ratio=story.aspect_ratio,
                 resolution=caps.resolution,
-                enhance_prompt=True,
+                # Prompt rewriting can drop the line or the voice, so spoken
+                # scenes go to Veo exactly as written.
+                enhance_prompt=not spoken,
                 # Spoken scenes: Veo renders the line with lip sync. Other
                 # clips stay silent under the music and voiceover.
-                generate_audio=bool(scene.spoken and scene.narration.strip()),
+                generate_audio=spoken,
                 model_version_id=self.cfg.STORY_VEO_MODEL_VERSION,
                 person_generation="Allow (Adults only)",
                 reference_image_gcs=start_frame_uri or None,
