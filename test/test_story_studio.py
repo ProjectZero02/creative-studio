@@ -933,7 +933,10 @@ def test_clip_prompt_carries_the_spoken_line():
     spoken = Scene(visual="A man on stage.", narration="Meet Gemini.", spoken=True)
     prompt = story_models.clip_prompt(st, spoken)
     assert '"Meet Gemini."' in prompt and "calm male voice" in prompt
-    assert "lip-synced" in prompt
+    assert "lip-synced" in prompt and "only voice" in prompt
+    # Without a described voice, Veo is told to match the person it shows.
+    fallback = story_models.clip_prompt(Story(), spoken)
+    assert "matches their age and gender" in fallback
     silent = Scene(visual="A man on stage.", narration="Meet Gemini.")
     assert "Meet Gemini" not in story_models.clip_prompt(st, silent)
 
@@ -1040,3 +1043,40 @@ def test_mock_scenario_speaks_for_presenter_ideas(fast_backend, local_store):
     assert _run(story_jobs.start_scenario(s.id, OWNER)).status == "done"
     s = local_store.get(s.id, OWNER)
     assert all(sc.spoken for sc in s.scenes) and s.speaker_voice
+
+
+class _ChainMock(_SpeechMock):
+    def last_frame(self, story, clip_uri, index):
+        self.starts = getattr(self, "starts", []) + [(index, clip_uri)]
+        return f"local://last-of-{clip_uri.rsplit('/', 1)[-1]}"
+
+
+def test_arabic_clips_chain_from_each_other_with_continuity(local_store):
+    backend = _ChainMock()
+    story_service.set_backend(backend)
+    try:
+        scenes = [
+            Scene(narration="One.", spoken=True, frame_uri="local://f0"),
+            Scene(narration="Two.", spoken=True, frame_uri="local://f1"),
+        ]
+        s = local_store.save(
+            Story(approved=True, continuity=True, second_on=True, scenes=scenes),
+            OWNER,
+        )
+        job = _run(story_jobs.start_video(s.id, OWNER))
+        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+        s = local_store.get(s.id, OWNER)
+        first_ar = s.scenes[0].clip_alt_uri
+        # The Arabic scene 2 starts from the end of the Arabic scene 1, not
+        # from the English one.
+        assert (1, first_ar) in backend.starts
+        assert s.scenes[1].clip_alt_from == first_ar
+        second = story_models.alt_story(s)
+        assert story_models.is_seamless_join(second.scenes[0], second.scenes[1])
+    finally:
+        story_service.set_backend(None)
+
+
+def test_scenario_prompt_asks_for_the_speakers_gender():
+    prompt = story_models.scenario_prompt(Story(speech_mode="on_camera"))
+    assert "starts with their gender" in prompt
