@@ -658,11 +658,16 @@ def start_video(story_id: str, owner: str) -> Job:
             second = alt_story(current)
             if not second.scenes[i].narration.strip():
                 raise GenerationError(f"Scene {i + 1} has no {alt} line yet.")
-            # Start where the main clip started, so both versions match.
+            # With continuity, start from the last frame of the clip that
+            # comes before it in the second film (that scene's own second-
+            # language clip when it has one), so the joins match there too.
+            # Otherwise start from the scene's storyboard frame, like the main clip.
+            start_from = ""
+            if sc.continues_from and i > 0:
+                prev = second.scenes[i - 1]
+                start_from = prev.clip_uri or sc.continues_from
             start = (
-                backend.last_frame(current, sc.continues_from, i)
-                if sc.continues_from
-                else sc.frame_uri
+                backend.last_frame(current, start_from, i) if start_from else sc.frame_uri
             )
             uri = backend.generate_clip(second, i, start)
             scene_id, key = sc.id, sc.alt_clip_key()
@@ -671,12 +676,17 @@ def start_video(story_id: str, owner: str) -> Job:
                 for x in s.scenes:
                     if x.id == scene_id:
                         x.clip_alt_uri, x.clip_alt_key = uri, key
+                        x.clip_alt_from = start_from
 
             mutate_story(story_id, owner, apply)
             return uri
 
         pending_alt = [i for i, t in alt_clip_tasks.items() if t.status == QUEUED]
-        if pending_alt:
+        if pending_alt and story.continuity:
+            # One after another: each may start from the previous one.
+            for i in sorted(pending_alt):
+                _run_task(alt_clip_tasks[i], lambda i=i: animate_alt(i))
+        elif pending_alt:
             with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
                 for f in [
                     pool.submit(_run_task, alt_clip_tasks[i], lambda i=i: animate_alt(i))
