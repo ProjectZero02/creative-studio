@@ -51,6 +51,11 @@ class StoryState:
     job_running: bool = False
     job_tasks_done: int = 0
 
+    # "Hear this voice" sample: which voice it is and its media URI.
+    preview_voice: str = ""
+    preview_uri: str = ""
+    previewing: bool = False
+
     error: str = ""
     notice: str = ""
     confirm_delete_id: str = ""

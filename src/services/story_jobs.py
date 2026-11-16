@@ -418,6 +418,30 @@ def start_storyboard(
     return _spawn(job, work)
 
 
+PREVIEW_LINE = {
+    "English": "Good evening everyone, and thank you so much for being here tonight.",
+    "Arabic": "مساء الخير جميعاً، وشكراً جزيلاً لحضوركم الليلة.",
+}
+
+
+def preview_voice(story: Story, voice: str) -> str:
+    """A short sample of `voice` saying the first on-camera line (or a stock
+    line), delivered the way the film will deliver it."""
+    from services.story_service import get_backend
+
+    index = next(
+        (i for i, sc in enumerate(story.scenes) if _is_spoken(sc)),
+        0 if story.scenes else -1,
+    )
+    if index < 0:
+        raise GenerationError("Add a scene first.")
+    text = story.scenes[index].narration.strip() if _is_spoken(story.scenes[index]) else ""
+    text = text or PREVIEW_LINE.get(story.language, PREVIEW_LINE["English"])
+    return get_backend().generate_voiceover(
+        replace(story, voice_name=voice), index, text, style="presenter"
+    )
+
+
 def _is_spoken(scene) -> bool:
     return bool(scene.spoken and scene.narration.strip())
 

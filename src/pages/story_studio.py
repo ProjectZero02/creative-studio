@@ -1215,6 +1215,24 @@ def on_speaker_tts_voice(e: me.SelectSelectionChangeEvent):
     _set_story_field("speaker_tts_voice", e.value)
 
 
+def on_preview_voice(e: me.ClickEvent):
+    s = me.state(StoryState)
+    story = _story()
+    if not story:
+        return
+    s.error = ""
+    s.previewing = True
+    yield
+    try:
+        s.preview_uri = story_jobs.preview_voice(story, story.speaker_tts_voice)
+        s.preview_voice = story.speaker_tts_voice
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+    finally:
+        s.previewing = False
+    yield
+
+
 def on_speaker_voice(e: me.InputBlurEvent):
     value = e.value.strip()[:200]
 
@@ -1605,6 +1623,23 @@ def editor_step(story: Story) -> None:
                         style=me.Style(width="100%"),
                         key="ss-speaker-tts",
                     )
+                    st = me.state(StoryState)
+                    me.button(
+                        "Making a sample…"
+                        if st.previewing
+                        else f"Hear the {story.speaker_tts_voice} voice",
+                        type="stroked",
+                        disabled=busy or st.previewing,
+                        on_click=on_preview_voice,
+                        style=me.Style(width="100%"),
+                        key="ss-preview-voice",
+                    )
+                    if st.preview_uri and st.preview_voice == story.speaker_tts_voice:
+                        me.audio(
+                            src=display_url(st.preview_uri),
+                            autoplay=True,
+                            key=f"ss-preview-{st.preview_uri[-12:]}",
+                        )
                     me.text(
                         "Veo films the person speaking; their lines are then voiced "
                         "in this one voice, timed to their lips. Lip sync is close "
