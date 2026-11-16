@@ -454,6 +454,47 @@ def test_firestore_store_hides_legacy_ownerless_docs():
     assert store.get("x", OWNER) is None
 
 
+def _story_with_media(bucket):
+    return Story(
+        scenes=[Scene(frame_uri=f"gs://{bucket}/images/a.png", clip_uri="")],
+    )
+
+
+def test_belongs_here_only_hides_other_deployments_media():
+    mine = {"ours-assets"}
+    assert story_store.belongs_here(_story_with_media("ours-assets"), mine)
+    assert not story_store.belongs_here(_story_with_media("theirs-assets"), mine)
+    # No gs:// media yet, or demo-mode local media: nothing to break, keep it.
+    assert story_store.belongs_here(Story(idea="script only"), mine)
+    local = Story(scenes=[Scene(frame_uri="local://x/frame1.png")])
+    assert story_store.belongs_here(local, mine)
+    # One foreign file is enough to hide it.
+    mixed = _story_with_media("ours-assets")
+    mixed.final_uri = "gs://theirs-assets/videos/film.mp4"
+    assert not story_store.belongs_here(mixed, mine)
+
+
+def test_deployment_buckets_reads_config(monkeypatch):
+    cfg = SimpleNamespace(
+        GENMEDIA_BUCKET="gs://ours-assets",
+        VIDEO_BUCKET="ours-assets/videos",
+        IMAGE_BUCKET="ours-images/x",
+        MEDIA_BUCKET="",
+    )
+    monkeypatch.setattr(story_store, "Default", lambda: cfg)
+    assert story_store.deployment_buckets() == {"ours-assets", "ours-images"}
+
+
+def test_firestore_store_hides_other_deployments_stories(monkeypatch):
+    monkeypatch.setattr(story_store, "deployment_buckets", lambda: {"ours-assets"})
+    db = _FakeDb()
+    store = story_store.FirestoreStoryStore(db=db, collection="stories")
+    theirs = store.save(_story_with_media("theirs-assets"), OWNER)
+    ours = store.save(_story_with_media("ours-assets"), OWNER)
+    assert store.get(theirs.id, OWNER) is None
+    assert store.get(ours.id, OWNER) is not None
+
+
 # ---------------------------------------------------------------------------
 # Jobs with the mock backend (no network)
 # ---------------------------------------------------------------------------
