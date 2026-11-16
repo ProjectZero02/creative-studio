@@ -149,6 +149,7 @@ from pages.test_pixie_compositor import test_pixie_compositor_page
 from pages.test_svg import test_svg_page
 from pages.test_uploader import test_uploader_page
 from pages.test_vto_prompt_generator import page as test_vto_prompt_generator_page
+from pages import account as account_page
 from pages import admin_users as admin_users_page
 from routers import auth_router, veo_router
 from routers.auth_router import session_gate
