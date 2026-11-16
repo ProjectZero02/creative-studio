@@ -532,6 +532,9 @@ class Segment:
     duration: float
     fade_in: float
     narration: str = ""
+    # Seconds skipped at the start of the clip. A seamless join drops the
+    # clip's first frame, which repeats the previous clip's last frame.
+    trim_head: float = 0.0
 
 
 @dataclass
@@ -541,8 +544,17 @@ class StitchPlan:
     total: float
 
 
+def is_seamless_join(prev: Scene, scene: Scene) -> bool:
+    """True when scene's clip was animated from prev's current clip."""
+    return bool(scene.continues_from) and scene.continues_from == prev.clip_uri
+
+
 def build_stitch_plan(
-    scenes: list[Scene], crossfade: float, clip_durations: list[float] | None = None
+    scenes: list[Scene],
+    crossfade: float,
+    clip_durations: list[float] | None = None,
+    seamless: bool = False,
+    fps: int = 24,
 ) -> StitchPlan:
     """Lay out clips on a timeline with overlapping crossfades.
 
@@ -550,6 +562,11 @@ def build_stitch_plan(
     film is sum(durations) - crossfade * (n - 1) long. The crossfade is
     shortened when a clip is too short to hold it (at most a third of the
     shortest clip). Scenes without a clip are skipped.
+
+    With ``seamless``, a join where the clip was animated from the previous
+    scene's current clip (see ``is_seamless_join``) is a straight cut: no
+    overlap, and the clip's first frame (a copy of the previous last frame)
+    is dropped. Every other join keeps the crossfade.
     """
     usable = [(i, s) for i, s in enumerate(scenes) if s.clip_uri]
     if not usable:
@@ -563,17 +580,32 @@ def build_stitch_plan(
     xf = max(0.0, min(float(crossfade), min(durs) / 3.0)) if len(usable) > 1 else 0.0
     segments: list[Segment] = []
     t = 0.0
+    head = 1.0 / fps if fps > 0 else 0.0
     for k, ((i, s), d) in enumerate(zip(usable, durs)):
-        start = 0.0 if k == 0 else t - xf
+        prev_i, prev = usable[k - 1] if k else (-1, None)
+        cut = (
+            seamless
+            and prev is not None
+            and prev_i == i - 1
+            and d > head
+            and is_seamless_join(prev, s)
+        )
+        if k == 0:
+            start, fade, trim = 0.0, 0.0, 0.0
+        elif cut:
+            start, fade, trim = t, 0.0, head
+        else:
+            start, fade, trim = t - xf, xf, 0.0
         segments.append(
             Segment(
                 index=i,
                 clip_uri=s.clip_uri,
                 start=round(start, 3),
-                duration=d,
-                fade_in=0.0 if k == 0 else xf,
+                duration=round(d - trim, 4),
+                fade_in=fade,
                 narration=s.narration,
+                trim_head=round(trim, 4),
             )
         )
-        t = start + d
+        t = start + d - trim
     return StitchPlan(segments=segments, crossfade=xf, total=round(t, 3))

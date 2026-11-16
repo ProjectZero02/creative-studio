@@ -524,7 +524,11 @@ def start_video(story_id: str, owner: str) -> Job:
             stitch_task.status = library_task.status = SKIPPED
             stitch_task.error = f"Waiting for scene {', '.join(map(str, missing))}."
             return
-        plan = build_stitch_plan(final.scenes, cfg.STORY_CROSSFADE_SECONDS)
+        plan = build_stitch_plan(
+            final.scenes,
+            cfg.STORY_CROSSFADE_SECONDS,
+            seamless=final.continuity and final.seamless_joins,
+        )
         voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
         if not _run_task(
             stitch_task, lambda: backend.stitch(final, plan, music_uri, voices)
