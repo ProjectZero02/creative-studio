@@ -29,14 +29,14 @@ Sign in at `<URL>/login`, then add your colleagues and clients from the avatar m
 
 ## What it creates
 
-| Thing | Name | Why |
-|---|---|---|
-| APIs | from `deploy/scripts/apis.txt` (+ Secret Manager) | Vertex AI, Firestore, Storage, Cloud Run, Cloud Build |
-| Service account | `genmedia-studio-run@…` | Runs the app; Vertex AI user, Firestore user, bucket object admin, log writer, signs its own media links |
-| Bucket | `<project>-genmedia-assets` (private) | Generated images, videos and audio |
-| Firestore | database `create-studio-asset-metadata` + library indexes | Library, users, stories |
-| Secrets | `genmedia-session-secret`, `genmedia-admin-password` | Sign-in cookie key and first admin password (session mode) |
-| Cloud Run | `genmedia-studio` | Built from source. Session affinity, CPU boost, CPU kept on while running (Story Studio renders in the background), 60-minute timeout, 2 CPU / 4 GiB, scales to zero, max 3 instances |
+| Thing           | Name                                                        | Why                                                                                                                                                                                   |
+| --------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| APIs            | from `deploy/scripts/apis.txt` (+ Secret Manager)         | Vertex AI, Firestore, Storage, Cloud Run, Cloud Build                                                                                                                                 |
+| Service account | `genmedia-studio-run@…`                                  | Runs the app; Vertex AI user, Firestore user, bucket object admin, log writer, signs its own media links                                                                              |
+| Bucket          | `<project>-genmedia-assets` (private)                     | Generated images, videos and audio                                                                                                                                                    |
+| Firestore       | database `create-studio-asset-metadata` + library indexes | Library, users, stories                                                                                                                                                               |
+| Secrets         | `genmedia-session-secret`, `genmedia-admin-password`    | Sign-in cookie key and first admin password (session mode)                                                                                                                            |
+| Cloud Run       | `genmedia-studio`                                         | Built from source. Session affinity, CPU boost, CPU kept on while running (Story Studio renders in the background), 60-minute timeout, 2 CPU / 4 GiB, scales to zero, max 3 instances |
 
 ## Sign-in options
 
