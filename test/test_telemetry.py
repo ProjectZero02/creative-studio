@@ -86,7 +86,7 @@ def test_store_to_gcs_bucket_normalization(mock_get_client):
     mock_client = MagicMock()
     mock_bucket = MagicMock()
     mock_blob = MagicMock()
-    mock_client.get_bucket.return_value = mock_bucket
+    mock_client.bucket.return_value = mock_bucket
     mock_bucket.blob.return_value = mock_blob
     mock_get_client.return_value = mock_client
 
@@ -101,7 +101,9 @@ def test_store_to_gcs_bucket_normalization(mock_get_client):
         bucket_name="gs://my-test-bucket/subpath",
     )
 
-    mock_client.get_bucket.assert_called_once_with("my-test-bucket")
+    mock_client.bucket.assert_called_once_with("my-test-bucket")
+    # No bucket metadata fetch, so storage.buckets.get is not required.
+    mock_client.get_bucket.assert_not_called()
     assert uri == "gs://my-test-bucket/videos/test.mp4"
 
 
