@@ -368,6 +368,11 @@ class MockStoryBackend:
             _MOCK_BEATS[round(i * (len(_MOCK_BEATS) - 1) / max(1, n - 1))]
             for i in range(n)
         ]
+        # Demo stand-in for Gemini's choice of who speaks.
+        talky = ("present", "speech", "interview", "talk", "vlog", "pitch")
+        spoken = story.speech_mode == "on_camera" or (
+            story.speech_mode == "auto" and any(w in story.idea.lower() for w in talky)
+        )
         scenes = []
         for i, (verb, line) in enumerate(beats):
             cam = (
@@ -381,6 +386,7 @@ class MockStoryBackend:
                     "visual": f"The {hero} {verb} in {_MOCK_PLACES[i % len(_MOCK_PLACES)]}, "
                     "same outfit and face as before, soft cinematic light.",
                     "camera": cam,
+                    "spoken": spoken,
                 }
             )
         first = re.split(r"[.,;:!?]| and | who | that ", story.idea.strip())[0].strip()
@@ -390,7 +396,8 @@ class MockStoryBackend:
                 break
             title = f"{title} {w}".strip()
         title = (title or "Untitled story")[0].upper() + (title or "Untitled story")[1:]
-        return json.dumps({"title": title, "scenes": scenes})
+        voice = "a warm, confident voice, mid-30s" if spoken else ""
+        return json.dumps({"title": title, "voice": voice, "scenes": scenes})
 
     def rewrite_scene(self, story: Story, index: int) -> str:
         self._sleep(1.0, 1.8)
