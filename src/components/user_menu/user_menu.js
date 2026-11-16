@@ -40,6 +40,7 @@ class UserMenu extends LitElement {
     showSignOut: { type: Boolean },
     showUsers: { type: Boolean },
     showSettings: { type: Boolean },
+    showAccount: { type: Boolean },
     lang: { type: String },
     labels: { type: String },
     themeEvent: { type: String },
@@ -56,6 +57,7 @@ class UserMenu extends LitElement {
     this.showSignOut = false;
     this.showUsers = false;
     this.showSettings = false;
+    this.showAccount = false;
     this.lang = 'en';
     this.labels = '{}';
     this.themeEvent = '';
@@ -326,6 +328,11 @@ class UserMenu extends LitElement {
               <span class="grow">${L.label || 'Language'}</span>
               <span class="value"><span lang="en">English</span> / <span lang="ar">العربية</span></span>
             </button>` : nothing}
+          ${this.showAccount ? html`
+            <a class="item" href="/account">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9zm3 11a2 2 0 1 1 2-2 2 2 0 0 1-2 2z"/></svg>
+              <span class="grow">${L.account_settings || 'Account settings'}</span>
+            </a>` : nothing}
           ${this.showUsers ? html`
             <a class="item" href="/admin/users">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 1.9 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg>
