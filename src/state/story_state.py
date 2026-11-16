@@ -36,6 +36,7 @@ class StoryState:
     idea: str = ""
     character: str = ""
     language: str = "English"
+    speech_mode: str = "auto"
     scene_count: int = 4
     duration: int = 6
     aspect_ratio: str = "16:9"

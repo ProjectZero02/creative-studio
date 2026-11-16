@@ -45,12 +45,15 @@ from services.story_models import (
     STEPS,
     STYLE_BY_ID,
     STYLES,
+    SPEECH_HINTS,
+    SPEECH_MODES,
     VOICES,
     Story,
     apply_caps,
     can_enter,
     default_music_prompt,
     furthest_step,
+    max_words,
     reachable_steps,
     supported_durations,
 )
@@ -252,6 +255,7 @@ def _load_form(story: Story) -> None:
     s.idea = story.idea
     s.character = story.character
     s.language = story.language
+    s.speech_mode = story.speech_mode
     s.scene_count = story.scene_count
     s.duration = story.duration
     s.aspect_ratio = story.aspect_ratio
@@ -745,6 +749,17 @@ def create_step(story: Story | None) -> None:
                     on_selection_change=on_language,
                     key="ss-lang",
                 )
+                me.select(
+                    label="Who speaks",
+                    options=[
+                        me.SelectOption(label=label, value=k)
+                        for k, label in SPEECH_MODES.items()
+                    ],
+                    value=s.speech_mode,
+                    appearance="outline",
+                    on_selection_change=on_speech_mode,
+                    key="ss-speech",
+                )
                 cfg = Default()
                 me.select(
                     label="Scenes",
@@ -793,6 +808,10 @@ def create_step(story: Story | None) -> None:
                     on_selection_change=on_camera,
                     key="ss-camera",
                 )
+            me.text(
+                SPEECH_HINTS.get(s.speech_mode, ""),
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+            )
             story_style_picker(
                 options=[
                     {
@@ -922,6 +941,10 @@ def on_language(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).language = e.value
 
 
+def on_speech_mode(e: me.SelectSelectionChangeEvent):
+    me.state(StoryState).speech_mode = e.value
+
+
 def on_scene_count(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).scene_count = int(e.value)
 
@@ -972,6 +995,7 @@ def on_generate_scenario(e: me.ClickEvent):
         story.idea = idea
         story.character = s.character.strip()
         story.language = s.language
+        story.speech_mode = s.speech_mode
         story.scene_count = caps.scene_count
         story.duration = caps.duration
         story.aspect_ratio = s.aspect_ratio
@@ -997,6 +1021,43 @@ def on_generate_scenario(e: me.ClickEvent):
 # ---------------------------------------------------------------------------
 # Step 3: Scenario
 # ---------------------------------------------------------------------------
+
+
+def _line_fields(story: Story, sc, prefix: str, disabled: bool) -> None:
+    """Who says the scene's line (switch), the line itself, and a hint.
+
+    Keys: "<prefix>spk-<id>" and "<prefix>nar-<id>" (see _scene_id_from_key).
+    """
+    me.slide_toggle(
+        "Person on screen says this line",
+        checked=sc.spoken,
+        disabled=disabled,
+        on_change=on_toggle_spoken,
+        key=f"{prefix}spk-{sc.id}",
+    )
+    me.textarea(
+        label="Line spoken on camera" if sc.spoken else "Narration (voiceover)",
+        value=sc.narration,
+        rows=2,
+        appearance="outline",
+        disabled=disabled,
+        on_blur=on_scene_narration,
+        style=me.Style(width="100%"),
+        key=f"{prefix}nar-{sc.id}",
+    )
+    fit = max_words(sc.duration)
+    if sc.narration.strip() and sc.line_too_long():
+        me.text(
+            f"Too long for {sc.duration}s: about {fit} words fit, the rest may be cut off.",
+            style=me.Style(font_size=13, color=me.theme_var("error")),
+        )
+    else:
+        me.text(
+            f"The person on screen says this, lips in sync (about {fit} words fit)."
+            if sc.spoken
+            else "A narrator reads this over the picture.",
+            style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+        )
 
 
 def scenario_step(story: Story) -> None:
@@ -1070,15 +1131,7 @@ def scenario_step(story: Story) -> None:
                     with me.box(classes="ss-busy-line"):
                         me.box(classes="ss-spinner")
                         me.text("Rewriting this scene…", style=me.Style(font_size=13))
-                me.textarea(
-                    label="Narration (voiceover)",
-                    value=sc.narration,
-                    rows=2,
-                    appearance="outline",
-                    on_blur=on_scene_narration,
-                    style=me.Style(width="100%"),
-                    key=f"nar-{sc.id}",
-                )
+                _line_fields(story, sc, "", disabled=False)
                 me.textarea(
                     label="What we see",
                     value=sc.visual,
@@ -1129,9 +1182,36 @@ def on_title_blur(e: me.InputBlurEvent):
 
 
 def on_scene_narration(e: me.InputBlurEvent):
-    _update_scene(
-        _scene_id_from_key(e.key), "narration", e.value.strip(), clear=("narration_alt",)
+    scene_id = _scene_id_from_key(e.key)
+    story = _story()
+    spoken = bool(
+        story and any(sc.id == scene_id and sc.spoken for sc in story.scenes)
     )
+    # A spoken line is baked into the clip, so changing it needs a new clip.
+    clear = ("narration_alt", "clip_uri") if spoken else ("narration_alt",)
+    _update_scene(scene_id, "narration", e.value.strip(), clear=clear)
+
+
+def on_toggle_spoken(e: me.SlideToggleChangeEvent):
+    scene_id = _scene_id_from_key(e.key)
+
+    def apply(story: Story) -> None:
+        for sc in story.scenes:
+            if sc.id == scene_id:
+                sc.spoken = not sc.spoken
+                sc.clip_uri = ""  # the clip changes between silent and speaking
+                story.clear_films()
+
+    _edit(apply)
+
+
+def on_speaker_voice(e: me.InputBlurEvent):
+    value = e.value.strip()[:200]
+
+    def apply(story: Story) -> None:
+        story.speaker_voice = value
+
+    _edit(apply)
 
 
 def on_scene_narration_alt(e: me.InputBlurEvent):
@@ -1428,20 +1508,13 @@ def editor_step(story: Story) -> None:
                                         ):
                                             me.icon(icon)
                                             _sr(f"{label}: scene {i + 1}")
-                        me.textarea(
-                            label="Narration (voiceover)",
-                            value=sc.narration,
-                            rows=2,
-                            appearance="outline",
-                            disabled=busy,
-                            on_blur=on_scene_narration,
-                            style=me.Style(width="100%"),
-                            key=f"enar-{sc.id}",
-                        )
+                        _line_fields(story, sc, "e", disabled=busy)
                         if story.makes_alt and sc.narration.strip():
                             with me.box(classes=_dir_class(alt)):
                                 me.textarea(
-                                    label=f"Narration ({alt})",
+                                    label=f"Line spoken on camera ({alt})"
+                                    if sc.spoken
+                                    else f"Narration ({alt})",
                                     value=sc.narration_alt,
                                     placeholder="Translated when you render",
                                     rows=2,
@@ -1483,7 +1556,7 @@ def editor_step(story: Story) -> None:
                     key="ss-music",
                 )
             me.slide_toggle(
-                "Voiceover (Gemini TTS)",
+                "Narrator voiceover (Gemini TTS)",
                 checked=story.voice_on,
                 disabled=busy,
                 on_change=on_toggle_voice,
@@ -1500,6 +1573,25 @@ def editor_step(story: Story) -> None:
                     style=me.Style(width="100%"),
                     key="ss-voice",
                 )
+            if story.has_spoken:
+                me.input(
+                    label="Voice of the person on screen",
+                    value=story.speaker_voice,
+                    placeholder="e.g. a calm, confident male voice, mid-30s",
+                    appearance="outline",
+                    disabled=busy,
+                    on_blur=on_speaker_voice,
+                    style=me.Style(width="100%"),
+                    key="ss-speaker-voice",
+                )
+                me.text(
+                    "Described the same way in every spoken scene so the voice "
+                    "stays consistent. Applies to clips rendered from now on.",
+                    style=me.Style(
+                        font_size=13, color=me.theme_var("on-surface-variant")
+                    ),
+                )
+            if story.voice_on or story.has_spoken:
                 me.slide_toggle(
                     f"Also make an {alt} version",
                     checked=story.second_on,
@@ -1508,8 +1600,15 @@ def editor_step(story: Story) -> None:
                     key="ss-second-on",
                 )
                 me.text(
-                    f"Same clips and music, with the narration translated and voiced "
-                    f"in {alt}. Check the {alt} lines under each scene before rendering.",
+                    (
+                        f"Same music. Narration is voiced again in {alt}, and scenes "
+                        f"spoken on camera are rendered again saying the {alt} line "
+                        "(one extra Veo clip each)."
+                        if story.has_spoken
+                        else f"Same clips and music, with the narration translated "
+                        f"and voiced in {alt}."
+                    )
+                    + f" Check the {alt} lines under each scene before rendering.",
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
@@ -1561,6 +1660,15 @@ def editor_step(story: Story) -> None:
                 me.text(f"Veo clips to render: {to_render} of {len(story.scenes)}")
                 if story.makes_alt:
                     me.text(f"Films: {story.language} and {alt}")
+                    alt_clips = sum(
+                        1
+                        for sc in story.scenes
+                        if sc.spoken
+                        and sc.narration.strip()
+                        and not (sc.clip_uri and sc.has_alt_clip())
+                    )
+                    if alt_clips:
+                        me.text(f"{alt} clips with speech to render: {alt_clips}")
             me.button(
                 "Rendering…" if _job_active_for("video") else "Render film",
                 type="flat",
