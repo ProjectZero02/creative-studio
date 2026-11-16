@@ -158,7 +158,10 @@ def store_to_gcs(
         f"store_to_gcs: Target project {cfg.PROJECT_ID}, target bucket {actual_bucket_name}",
     )
     client = get_storage_client()
-    bucket = client.get_bucket(actual_bucket_name)
+    # client.bucket() builds a local handle without an API call, so uploads only
+    # need storage.objects.create. get_bucket() would also need storage.buckets.get,
+    # which roles/storage.objectAdmin does not grant.
+    bucket = client.bucket(actual_bucket_name)
     destination_blob_name = f"{folder}/{file_name}"
     logger.info(f"store_to_gcs: Destination {destination_blob_name}")
     blob = bucket.blob(destination_blob_name)
@@ -191,7 +194,8 @@ def download_from_gcs_as_string(gcs_uri: str):
 def list_files_in_bucket(bucket_name, prefix=None):
     """Lists all blobs (files) in the specified GCS bucket, optionally filtered by a prefix."""
     client = get_storage_client()
-    bucket = client.get_bucket(bucket_name)
+    # No metadata fetch: listing only needs storage.objects.list.
+    bucket = client.bucket(bucket_name)
 
     # List blobs, optionally with a prefix to emulate a "folder"
     blobs = bucket.list_blobs(prefix=prefix)
