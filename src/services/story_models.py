@@ -110,6 +110,27 @@ LANGUAGES: dict[str, str] = {
 
 ASPECT_RATIOS = ["16:9", "9:16"]
 VOICES = ["Kore", "Puck", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Zephyr"]
+VOICE_GENDER = {
+    "Kore": "female",
+    "Puck": "male",
+    "Charon": "male",
+    "Aoede": "female",
+    "Fenrir": "male",
+    "Leda": "female",
+    "Orus": "male",
+    "Zephyr": "female",
+}
+
+
+def voice_label(name: str) -> str:
+    gender = VOICE_GENDER.get(name)
+    return f"{name} ({gender})" if gender else name
+
+
+def tts_voice_for(description: str) -> str:
+    """A fixed TTS voice matching the speaker described by the scenario."""
+    d = (description or "").lower()
+    return "Kore" if ("female" in d or "woman" in d) else "Charon"
 
 # Who speaks each scene's line: a narrator over the picture, or the person on
 # screen (Veo renders the speech with lip sync). "auto" lets Gemini choose per
@@ -235,6 +256,11 @@ class Story:
     # the same way in every spoken clip so it stays consistent.
     speech_mode: str = "auto"
     speaker_voice: str = ""
+    # Veo picks a new voice for every clip. With same_voice, spoken lines
+    # are voiced by one fixed TTS voice instead, timed to when the person
+    # on screen talks; the second language is dubbed over the same clips.
+    same_voice: bool = True
+    speaker_tts_voice: str = "Charon"
     title_alt: str = ""
     final_alt_uri: str = ""
     created_at: str = field(default_factory=_now_iso)
@@ -684,7 +710,7 @@ def alt_story(story: Story) -> Story:
                 clip_uri=sc.clip_alt_uri,
                 continues_from=sc.clip_alt_from,
             )
-            if sc.spoken and sc.has_alt_clip()
+            if sc.spoken and sc.has_alt_clip() and not story.same_voice
             else replace(sc, narration=sc.narration_alt)
             for sc in story.scenes
         ],
@@ -782,6 +808,9 @@ class Segment:
     narration: str = ""
     # The clip carries its own speech (keep its audio, no voiceover).
     spoken: bool = False
+    # Spoken, but voiced by the fixed TTS voice: the clip's own audio is
+    # dropped and the voice is fitted to when the person speaks.
+    dub: bool = False
     # Seconds skipped at the start of the clip. A seamless join drops the
     # clip's first frame, which repeats the previous clip's last frame.
     trim_head: float = 0.0
@@ -805,6 +834,7 @@ def build_stitch_plan(
     clip_durations: list[float] | None = None,
     seamless: bool = False,
     fps: int = 24,
+    dub: bool = False,
 ) -> StitchPlan:
     """Lay out clips on a timeline with overlapping crossfades.
 
@@ -858,6 +888,7 @@ def build_stitch_plan(
                 fade_in=fade,
                 narration=s.narration,
                 spoken=bool(s.spoken and s.narration.strip()),
+                dub=dub and bool(s.spoken and s.narration.strip()),
                 trim_head=round(trim, 4),
             )
         )
