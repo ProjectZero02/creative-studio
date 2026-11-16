@@ -1269,3 +1269,140 @@ def test_scenario_picks_fixed_voice_from_speaker_gender(fast_backend, local_stor
     fast_backend.write_scenario = female
     assert _run(story_jobs.start_scenario(s.id, OWNER)).status == "done"
     assert local_store.get(s.id, OWNER).speaker_tts_voice == "Kore"
+
+
+
+# ---------------------------------------------------------------------------
+# Word-level lip timing, stage sound and voice preview
+# ---------------------------------------------------------------------------
+
+
+def test_match_words_pairs_the_same_words_in_order():
+    voice = [("Hello", 0.0, 0.4), ("everyone,", 0.5, 1.0), ("welcome", 1.1, 1.6)]
+    clip = [("hello", 0.8, 1.1), ("um", 1.2, 1.3), ("everyone", 1.4, 2.0), ("welcome", 2.2, 2.9)]
+    pairs = story_service.match_words(voice, clip)
+    assert pairs == [(0.0, 0.4, 0.8, 1.1), (0.5, 1.0, 1.4, 2.0), (1.1, 1.6, 2.2, 2.9)]
+    assert story_service.match_words(voice, []) == []
+
+
+def test_warp_points_are_monotonic_and_keep_lead_in_and_tail():
+    pairs = [(0.2, 0.5, 1.0, 1.4), (0.6, 1.0, 1.5, 2.0)]
+    points = story_service.warp_points(pairs, 1.3)
+    assert points[0] == (0.0, pytest.approx(0.8))
+    assert points[-1] == (1.3, pytest.approx(2.3))
+    assert all(b[0] > a[0] and b[1] > a[1] for a, b in zip(points, points[1:]))
+
+
+def test_atempo_chain_splits_extreme_tempos():
+    assert story_service._atempo_chain(1.2) == "atempo=1.2000"
+    assert story_service._atempo_chain(3.0).count("atempo") == 2
+
+
+def test_warp_voice_moves_each_word_to_its_clip_time(tmp_path):
+    import numpy as np
+
+    rate = 24000
+    v = np.zeros(int(rate * 1.0), dtype=np.float32)
+    t = np.arange(int(rate * 0.2)) / rate
+    v[: len(t)] = 0.3 * np.sin(2 * np.pi * 200 * t)  # word 1: 0.0-0.2s
+    v[int(rate * 0.5) : int(rate * 0.5) + len(t)] = 0.3 * np.sin(2 * np.pi * 300 * t)  # word 2
+    src = story_service._write_wav(str(tmp_path / "v.wav"), v, rate)
+    # Word 1 lands at 0.4s, word 2 at 1.4s in the clip.
+    points = [(0.0, 0.4), (0.2, 0.6), (0.5, 1.4), (0.7, 1.6), (1.0, 1.9)]
+    out = story_service.warp_voice(src, points, str(tmp_path / "w.wav"))
+    a = story_service.read_mono(out, 16000)
+
+    def loud(t0, t1):
+        return np.abs(a[int(t0 * 16000) : int(t1 * 16000)]).max()
+
+    assert loud(0.0, 0.35) < 0.02
+    assert loud(0.42, 0.58) > 0.1
+    assert loud(0.7, 1.3) < 0.05
+    assert loud(1.42, 1.58) > 0.1
+
+
+def test_stage_voice_keeps_the_voice_and_adds_echo(tmp_path):
+    import numpy as np
+
+    rate = 24000
+    v = np.zeros(rate, dtype=np.float32)
+    t = np.arange(int(rate * 0.1)) / rate
+    v[: len(t)] = 0.3 * np.sin(2 * np.pi * 220 * t)
+    src = story_service._write_wav(str(tmp_path / "v.wav"), v, rate)
+    out = story_service.read_mono(story_service.stage_voice(src, str(tmp_path / "s.wav")), 16000)
+    assert np.abs(out[: int(0.1 * 16000)]).max() > 0.1
+    assert np.abs(out[int(0.12 * 16000) : int(0.3 * 16000)]).max() > 0.005  # the hall
+
+
+def test_room_tone_keeps_only_the_background():
+    import numpy as np
+
+    rate = 16000
+    rng = np.random.default_rng(1)
+    a = (0.01 * rng.standard_normal(rate * 2)).astype(np.float32)
+    a[rate // 2 : rate] += 0.5  # loud speech
+    bed = story_service.room_tone(a, rate, 3.0)
+    assert len(bed) == 3 * rate
+    assert np.abs(bed).max() < 0.1
+    assert story_service.room_tone(np.zeros(0, dtype=np.float32), rate, 1.0) is None
+
+
+def test_transcribe_words_falls_back_quietly(tmp_path, monkeypatch):
+    import numpy as np
+    import google.auth
+
+    def broken(*a, **k):
+        raise RuntimeError("no credentials")
+
+    monkeypatch.setattr(google.auth, "default", broken)
+    src = story_service._write_wav(
+        str(tmp_path / "v.wav"), 0.1 * np.ones(1600, dtype=np.float32), 16000
+    )
+    assert story_service.transcribe_words(src, "en-US") == []
+
+
+def test_sync_words_only_for_same_language(tmp_path):
+    import numpy as np
+
+    src = story_service._write_wav(
+        str(tmp_path / "v.wav"), np.zeros(16000, dtype=np.float32), 16000
+    )
+    words = [("a", 0.1, 0.2), ("b", 0.3, 0.4), ("c", 0.5, 0.6)]
+    timer = lambda path, lang: words  # noqa: E731
+    out = str(tmp_path / "o.wav")
+    assert story_service._sync_words(src, src, out, timer, "ar-SA", "en-US") == ""
+    assert story_service._sync_words(src, src, out, None, "en-US", "en-US") == ""
+    assert story_service._sync_words(src, src, out, timer, "en-US", "en-US") == out
+
+
+def test_dubbed_second_language_remembers_clip_language():
+    sc = Scene(narration="a", narration_alt="b", spoken=True, clip_uri="main")
+    alt = story_models.alt_story(Story(scenes=[sc], second_on=True))
+    assert alt.language == "Arabic" and alt.clip_language == "English"
+
+
+def test_preview_voice_uses_first_spoken_line(local_store):
+    calls = []
+
+    class Backend(_SpeechMock):
+        def generate_voiceover(self, story, index, text, style="narrator"):
+            calls.append((story.voice_name, index, text, style))
+            return "local://sample.wav"
+
+    story_service.set_backend(Backend())
+    try:
+        scenes = [Scene(narration="Intro.", duration=4), Scene(narration="Hi all!", spoken=True, duration=4)]
+        assert story_jobs.preview_voice(Story(scenes=scenes), "Orus") == "local://sample.wav"
+        assert calls == [("Orus", 1, "Hi all!", "presenter")]
+        story_jobs.preview_voice(Story(scenes=[Scene(narration="x", duration=4)]), "Kore")
+        assert calls[-1][2] == story_jobs.PREVIEW_LINE["English"]
+    finally:
+        story_service.set_backend(None)
+
+
+def test_presenter_lines_use_the_speaker_model():
+    from config.default import Default
+
+    cfg = Default()
+    assert cfg.STORY_SPEAKER_TTS_MODEL == "gemini-2.5-pro-tts"
+    assert "stage" in story_service.PRESENTER_DIRECTION
