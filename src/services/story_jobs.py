@@ -31,7 +31,7 @@ import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from common.analytics import get_logger
 from common.error_handling import GenerationError, classify_error
@@ -46,6 +46,7 @@ from services.story_models import (
     parse_single_scene,
     parse_translation,
     parse_voice,
+    tts_voice_for,
 )
 from services.story_service import get_backend
 from services.story_store import StoryAccessError, get_store
@@ -299,6 +300,8 @@ def start_scenario(story_id: str, owner: str) -> Job:
                 s.title = title
                 s.title_alt = ""
                 s.speaker_voice = voice
+                if voice:
+                    s.speaker_tts_voice = tts_voice_for(voice)
                 s.scenes = scenes
                 s.approved = False
                 s.clear_films()
@@ -419,6 +422,20 @@ def _is_spoken(scene) -> bool:
     return bool(scene.spoken and scene.narration.strip())
 
 
+def _needs_voice(story: Story, scene) -> bool:
+    """A TTS line: narrator scenes with the voiceover on, and on-camera
+    scenes when the fixed voice replaces Veo's."""
+    if _is_spoken(scene):
+        return story.same_voice
+    return story.voice_on and bool(scene.narration.strip())
+
+
+def _voice_label(story: Story, scene) -> str:
+    if _is_spoken(scene):
+        return f"line in the {story.speaker_tts_voice} voice"
+    return "voiceover"
+
+
 def _translate_into(story_id: str, owner: str, force: bool = False) -> str:
     """Translate the narration into the story's second language and save it.
 
@@ -499,9 +516,9 @@ def start_video(story_id: str, owner: str) -> Job:
         _add_task(job, "Music · Lyria score", "music") if story.music_on else None
     )
     voice_tasks = {
-        i: _add_task(job, f"Scene {i + 1} · voiceover", "voice", i)
+        i: _add_task(job, f"Scene {i + 1} · {_voice_label(story, sc)}", "voice", i)
         for i, sc in enumerate(story.scenes)
-        if story.voice_on and sc.narration.strip() and not sc.spoken
+        if _needs_voice(story, sc)
     }
     stitch_task = _add_task(job, "Stitching the film · crossfades and mix", "stitch")
     library_task = _add_task(job, "Saving to your library", "library")
@@ -515,9 +532,11 @@ def start_video(story_id: str, owner: str) -> Job:
     )
     alt_voice_tasks = (
         {
-            i: _add_task(job, f"Scene {i + 1} · {alt} voiceover", "voice_alt", i)
+            i: _add_task(
+                job, f"Scene {i + 1} · {alt} {_voice_label(story, sc)}", "voice_alt", i
+            )
             for i, sc in enumerate(story.scenes)
-            if story.voice_on and sc.narration.strip() and not sc.spoken
+            if _needs_voice(story, sc)
         }
         if alt_on
         else {}
@@ -532,7 +551,7 @@ def start_video(story_id: str, owner: str) -> Job:
             for i, sc in enumerate(story.scenes)
             if _is_spoken(sc) and not (sc.clip_uri and sc.has_alt_clip())
         }
-        if alt_on
+        if alt_on and not story.same_voice  # dubbing reuses the main clips
         else {}
     )
     alt_stitch_task = (
@@ -607,8 +626,19 @@ def start_video(story_id: str, owner: str) -> Job:
                 for i in clip_tasks
             ]
 
+        def speak(st: Story, i: int, text: str) -> str:
+            """Narrator line, or a dubbed on-camera line in the fixed voice."""
+            if _is_spoken(st.scenes[i]):
+                return backend.generate_voiceover(
+                    replace(st, voice_name=st.speaker_tts_voice),
+                    i,
+                    text,
+                    style="presenter",
+                )
+            return backend.generate_voiceover(st, i, text)
+
         def voice(i: int) -> str:
-            uri = backend.generate_voiceover(story, i, story.scenes[i].narration)
+            uri = speak(story, i, story.scenes[i].narration)
             voice_uris[i] = uri
             return uri
 
@@ -616,7 +646,7 @@ def start_video(story_id: str, owner: str) -> Job:
             text = translated.scenes[i].narration
             if not text.strip():
                 raise GenerationError(f"Scene {i + 1} has no {alt} line yet.")
-            uri = backend.generate_voiceover(translated, i, text)
+            uri = speak(translated, i, text)
             alt_voice_uris[i] = uri
             return uri
 
@@ -707,6 +737,7 @@ def start_video(story_id: str, owner: str) -> Job:
             final.scenes,
             cfg.STORY_CROSSFADE_SECONDS,
             seamless=final.continuity and final.seamless_joins,
+            dub=final.same_voice,
         )
         voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
         if not _run_task(
@@ -729,7 +760,7 @@ def start_video(story_id: str, owner: str) -> Job:
         latest = get_store().get(story_id, owner) or final
         no_speech = [
             i + 1 for i, sc in enumerate(latest.scenes)
-            if _is_spoken(sc) and not sc.has_alt_clip()
+            if _is_spoken(sc) and not sc.has_alt_clip() and not latest.same_voice
         ]
         if no_speech:
             alt_stitch_task.status = alt_library_task.status = SKIPPED
@@ -748,6 +779,7 @@ def start_video(story_id: str, owner: str) -> Job:
             second.scenes,
             cfg.STORY_CROSSFADE_SECONDS,
             seamless=second.continuity and second.seamless_joins,
+            dub=second.same_voice,
         )
         alt_voices = [alt_voice_uris.get(seg.index, "") for seg in alt_plan.segments]
         if not _run_task(
