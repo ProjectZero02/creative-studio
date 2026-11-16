@@ -54,6 +54,7 @@ from services.story_models import (
     frame_prompt,
     scenario_prompt,
     scene_regen_prompt,
+    translation_prompt,
 )
 
 logger = get_logger(__name__)
@@ -135,6 +136,7 @@ class StoryBackend(Protocol):
 
     def write_scenario(self, story: Story) -> str: ...
     def rewrite_scene(self, story: Story, index: int) -> str: ...
+    def translate(self, story: Story) -> str: ...
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str: ...
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str: ...
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str: ...
@@ -393,6 +395,19 @@ class MockStoryBackend:
             }
         )
 
+    def translate(self, story: Story) -> str:
+        self._sleep(0.8, 1.4)
+        tag = f"[{story.alt_language}] "
+        return json.dumps(
+            {
+                "title": tag + (story.title or "Untitled"),
+                "lines": [
+                    tag + sc.narration if sc.narration else "" for sc in story.scenes
+                ],
+            },
+            ensure_ascii=False,
+        )
+
     # -- frames --
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str:
         from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -620,20 +635,22 @@ class VertexStoryBackend:
     def _folder(self, story: Story) -> str:
         return f"story_studio/{story.id}"
 
-    def _json_text(self, prompt: str) -> str:
+    def _json_text(
+        self, prompt: str, temperature: float = 0.8, task: str = "story_scenario"
+    ) -> str:
         from google.genai import types
 
         from common.analytics import track_model_call
         from models.gemini import client
 
         model = self.cfg.STORY_SCENARIO_MODEL_ID
-        with track_model_call(model_name=model, task="story_scenario"):
+        with track_model_call(model_name=model, task=task):
             response = client.models.generate_content(
                 model=model,
                 contents=[prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.8,
+                    temperature=temperature,
                 ),
             )
         if not response.text:
@@ -645,6 +662,11 @@ class VertexStoryBackend:
 
     def rewrite_scene(self, story: Story, index: int) -> str:
         return self._json_text(scene_regen_prompt(story, index))
+
+    def translate(self, story: Story) -> str:
+        return self._json_text(
+            translation_prompt(story), temperature=0.3, task="story_translate"
+        )
 
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str:
         from models.gemini import generate_image_from_prompt_and_images
