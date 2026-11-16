@@ -111,6 +111,30 @@ LANGUAGES: dict[str, str] = {
 ASPECT_RATIOS = ["16:9", "9:16"]
 VOICES = ["Kore", "Puck", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Zephyr"]
 
+# Who speaks each scene's line: a narrator over the picture, or the person on
+# screen (Veo renders the speech with lip sync). "auto" lets Gemini choose per
+# scene from the idea, e.g. a presenter talks on camera.
+SPEECH_MODES: dict[str, str] = {
+    "auto": "Auto: Gemini picks per scene",
+    "narrator": "Narrator voiceover",
+    "on_camera": "People speak on camera",
+}
+SPEECH_HINTS: dict[str, str] = {
+    "auto": "Gemini has the person on screen speak when the idea calls for it "
+    "(a presenter, an interview, a conversation) and uses a narrator otherwise. "
+    "You can switch any scene later.",
+    "narrator": "A narrator speaks over every scene. Nobody on screen talks.",
+    "on_camera": "The person on screen says every line, lips in sync. "
+    "No narrator.",
+}
+# Speech pace used to warn about lines that will not fit a scene.
+WORDS_PER_SECOND = 2.5
+
+
+def max_words(duration: int | float) -> int:
+    """Roughly how many spoken words fit in a scene of `duration` seconds."""
+    return max(1, int(float(duration) * WORDS_PER_SECOND))
+
 
 def supported_durations() -> list[int]:
     """Veo-supported clip lengths (seconds) for the configured story model."""
@@ -153,6 +177,23 @@ class Scene:
     continues_from: str = ""
     # The same line in the story's second language (see Story.second_on).
     narration_alt: str = ""
+    # True: the person on screen says `narration` to camera (Veo renders the
+    # speech in the clip). False: a narrator voices it over the picture.
+    spoken: bool = False
+    # Second-language clip of a spoken scene (the speech is baked into the
+    # video, so it is rendered again) and the clip and line it was made from.
+    clip_alt_uri: str = ""
+    clip_alt_key: str = ""
+
+    def alt_clip_key(self) -> str:
+        """What a second-language clip must match to still be current."""
+        return f"{self.clip_uri}|{self.narration_alt}"
+
+    def has_alt_clip(self) -> bool:
+        return bool(self.clip_alt_uri) and self.clip_alt_key == self.alt_clip_key()
+
+    def line_too_long(self) -> bool:
+        return len(self.narration.split()) > max_words(self.duration)
 
 
 @dataclass
@@ -187,6 +228,10 @@ class Story:
     # Second-language version: same clips and music, narration translated
     # into alt_language and voiced again. Needs the voiceover on.
     second_on: bool = False
+    # Who speaks (SPEECH_MODES) and the on-screen speaker's voice, described
+    # the same way in every spoken clip so it stays consistent.
+    speech_mode: str = "auto"
+    speaker_voice: str = ""
     title_alt: str = ""
     final_alt_uri: str = ""
     created_at: str = field(default_factory=_now_iso)
@@ -205,9 +250,14 @@ class Story:
         return other_language(self.language)
 
     @property
+    def has_spoken(self) -> bool:
+        return any(sc.spoken and sc.narration.strip() for sc in self.scenes)
+
+    @property
     def makes_alt(self) -> bool:
-        """True when a render should also make the second-language film."""
-        return self.second_on and self.voice_on
+        """True when a render should also make the second-language film:
+        there is a voiceover or an on-camera line to translate."""
+        return self.second_on and (self.voice_on or self.has_spoken)
 
     def needs_translation(self) -> bool:
         """Some narrated scene has no second-language line yet."""
@@ -369,10 +419,13 @@ def parse_scenario(
     scene_count: int,
     duration: int,
     camera_preset: str = "auto",
+    speech_mode: str = "auto",
 ) -> tuple[str, list[Scene]]:
     """Parse and validate the model's scenario JSON.
 
-    Expected shape: {"title": str, "scenes": [{"narration", "visual", "camera"}]}.
+    Expected shape: {"title": str, "voice": str,
+    "scenes": [{"narration", "spoken", "visual", "camera"}]}.
+    ``speech_mode`` "narrator" or "on_camera" overrides each scene's "spoken".
     Extra scenes are dropped; too few or empty scenes raise ScenarioError.
     A fixed camera preset (not "auto") overrides each scene's camera.
     """
@@ -407,15 +460,46 @@ def parse_scenario(
             )
         )
         scenes.append(
-            Scene(narration=narration, visual=visual, camera=camera, duration=duration)
+            Scene(
+                narration=narration,
+                visual=visual,
+                camera=camera,
+                duration=duration,
+                spoken=_spoken(raw.get("spoken"), narration, speech_mode),
+            )
         )
     if len(scenes) < scene_count:
         raise ScenarioError(f"Expected {scene_count} scenes, got {len(scenes)}.")
     return title[:120], scenes
 
 
-def parse_single_scene(text: str, duration: int, camera_preset: str = "auto") -> Scene:
-    """Parse one regenerated scene: {"narration", "visual", "camera"}."""
+def _spoken(raw, narration: str, speech_mode: str) -> bool:
+    if not narration:
+        return False
+    if speech_mode == "narrator":
+        return False
+    if speech_mode == "on_camera":
+        return True
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("true", "yes", "1", "on camera")
+    return bool(raw)
+
+
+def parse_voice(text: str) -> str:
+    """The scenario's "voice" (the on-screen speaker), or "" if missing."""
+    try:
+        data = json.loads(_strip_fences(text))
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("voice") or "").strip()[:200]
+
+
+def parse_single_scene(
+    text: str, duration: int, camera_preset: str = "auto", speech_mode: str = "auto"
+) -> Scene:
+    """Parse one regenerated scene: {"narration", "spoken", "visual", "camera"}."""
     try:
         data = json.loads(_strip_fences(text))
     except ValueError as exc:
@@ -429,7 +513,11 @@ def parse_single_scene(text: str, duration: int, camera_preset: str = "auto") ->
     if not isinstance(data, dict):
         raise ScenarioError("The scene must be a JSON object.")
     _, scenes = parse_scenario(
-        json.dumps({"title": "x", "scenes": [data]}), 1, duration, camera_preset
+        json.dumps({"title": "x", "scenes": [data]}),
+        1,
+        duration,
+        camera_preset,
+        speech_mode,
     )
     return scenes[0]
 
@@ -437,6 +525,35 @@ def parse_single_scene(text: str, duration: int, camera_preset: str = "auto") ->
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
+
+
+def _speech_rules(story: Story) -> str:
+    voice = (
+        '- "voice": one short English description of the on-screen speaker\'s '
+        "voice (gender, age, tone, accent), reused for every spoken scene so it "
+        'sounds the same. Use "" if nobody speaks on camera.'
+    )
+    if story.speech_mode == "narrator":
+        return (
+            '- Every line is a narrator voiceover: "spoken" is false for every '
+            'scene and nobody on screen talks. "voice" is "".'
+        )
+    if story.speech_mode == "on_camera":
+        return (
+            '- Every line is said on camera by the person on screen: "spoken" is '
+            'true for every scene and "narration" is the exact words they say. '
+            "Each visual shows that person facing the camera and speaking.\n"
+            + voice
+        )
+    return (
+        "- Decide for each scene who speaks. If the idea features a person "
+        "talking (a presenter, a speech, an interview, a conversation, a vlog), "
+        'set "spoken" to true and write "narration" as the exact words that '
+        "person says on camera, with the visual showing them speaking. Prefer "
+        "on-camera speech whenever a speaking person is the point of the film. "
+        'Otherwise set "spoken" to false and write a narrator voiceover line.\n'
+        + voice
+    )
 
 
 def scenario_prompt(story: Story) -> str:
@@ -455,15 +572,16 @@ Idea: \"\"\"{story.idea.strip()}\"\"\"
 
 Rules:
 - Write the title and every narration line in {story.language}.
-- Narration: one short voiceover sentence per scene that can be spoken in
-  under {story.duration} seconds.
+- Narration: one short sentence per scene that can be spoken in under
+  {story.duration} seconds (at most {max_words(story.duration)} words).
+{_speech_rules(story)}
 - Visual: a detailed, self-contained description of what the camera sees
   (subject, action, setting, lighting). Keep the main character's look
   identical in every scene and describe it each time. Write visuals in English.
 - {cam_rule}
 - Build a clear beginning, middle and end.
 
-Return only JSON: {{"title": str, "scenes": [{{"narration": str, "visual": str, "camera": str}}]}}"""
+Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "visual": str, "camera": str}}]}}"""
 
 
 def scene_regen_prompt(story: Story, index: int) -> str:
@@ -482,9 +600,24 @@ Idea of the film: {story.idea}
 Previous scene: {before}
 Next scene: {after}
 Current scene (replace it): {current.visual}
-Narration in {story.language}, visual in English, one camera move from:
-{", ".join(CAMERA_IDS)}.
-Return only JSON: {{"narration": str, "visual": str, "camera": str}}"""
+Narration in {story.language} (at most {max_words(current.duration)} words),
+visual in English, one camera move from: {", ".join(CAMERA_IDS)}.
+{_scene_speech_rule(story, current)}
+Return only JSON: {{"narration": str, "spoken": bool, "visual": str, "camera": str}}"""
+
+
+def _scene_speech_rule(story: Story, current: Scene) -> str:
+    if story.speech_mode == "narrator":
+        return '"spoken" is false: the line is a narrator voiceover.'
+    if story.speech_mode == "on_camera" or current.spoken:
+        return (
+            '"spoken" is true: "narration" is the exact words the person on '
+            "screen says to camera, and the visual shows them speaking."
+        )
+    return (
+        '"spoken" is true if the person on screen should say the line on '
+        "camera, false for a narrator voiceover."
+    )
 
 
 def frame_prompt(story: Story, scene: Scene, has_reference: bool) -> str:
@@ -505,7 +638,16 @@ def frame_prompt(story: Story, scene: Scene, has_reference: bool) -> str:
 def clip_prompt(story: Story, scene: Scene) -> str:
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cam = CAMERA_PRESETS.get(scene.camera, CAMERA_PRESETS["static"])["prompt"]
-    return f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
+    base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
+    if not (scene.spoken and scene.narration.strip()):
+        return base
+    voice = f" Voice: {story.speaker_voice}." if story.speaker_voice else ""
+    return (
+        f"{base} The person on screen looks at the camera and says in "
+        f'{story.language}: "{scene.narration.strip()}"{voice} Clear, natural, '
+        "lip-synced speech with light room sound. No music, no subtitles, no "
+        "on-screen text."
+    )
 
 
 def default_music_prompt(story: Story) -> str:
@@ -528,7 +670,16 @@ def alt_story(story: Story) -> Story:
         story,
         language=story.alt_language,
         title=story.title_alt or story.title,
-        scenes=[replace(sc, narration=sc.narration_alt) for sc in story.scenes],
+        scenes=[
+            replace(
+                sc,
+                narration=sc.narration_alt,
+                clip_uri=sc.clip_alt_uri
+                if sc.spoken and sc.has_alt_clip()
+                else sc.clip_uri,
+            )
+            for sc in story.scenes
+        ],
     )
 
 
@@ -621,6 +772,8 @@ class Segment:
     duration: float
     fade_in: float
     narration: str = ""
+    # The clip carries its own speech (keep its audio, no voiceover).
+    spoken: bool = False
     # Seconds skipped at the start of the clip. A seamless join drops the
     # clip's first frame, which repeats the previous clip's last frame.
     trim_head: float = 0.0
@@ -683,6 +836,9 @@ def build_stitch_plan(
             start, fade, trim = 0.0, 0.0, 0.0
         elif cut:
             start, fade, trim = t, 0.0, head
+        elif s.spoken or prev.spoken:
+            # A crossfade would overlap speech with the next shot: cut instead.
+            start, fade, trim = t, 0.0, 0.0
         else:
             start, fade, trim = t - xf, xf, 0.0
         segments.append(
@@ -693,6 +849,7 @@ def build_stitch_plan(
                 duration=round(d - trim, 4),
                 fade_in=fade,
                 narration=s.narration,
+                spoken=bool(s.spoken and s.narration.strip()),
                 trim_head=round(trim, 4),
             )
         )
