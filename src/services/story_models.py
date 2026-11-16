@@ -24,7 +24,7 @@ import datetime
 import json
 import re
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from config.default import Default
 from config.veo_models import get_veo_model_config
@@ -151,6 +151,8 @@ class Scene:
     # frame was the start frame). Empty when the clip started from its own
     # storyboard frame. Lets the stitcher tell which joins really match.
     continues_from: str = ""
+    # The same line in the story's second language (see Story.second_on).
+    narration_alt: str = ""
 
 
 @dataclass
@@ -182,6 +184,11 @@ class Story:
     # same moment twice). Has no effect when continuity is off.
     seamless_joins: bool = True
     final_uri: str = ""
+    # Second-language version: same clips and music, narration translated
+    # into alt_language and voiced again. Needs the voiceover on.
+    second_on: bool = False
+    title_alt: str = ""
+    final_alt_uri: str = ""
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 
@@ -192,9 +199,28 @@ class Story:
                 return s.frame_uri
         return ""
 
+    @property
+    def alt_language(self) -> str:
+        """Language of the second version: English for Arabic, else Arabic."""
+        return other_language(self.language)
+
+    @property
+    def makes_alt(self) -> bool:
+        """True when a render should also make the second-language film."""
+        return self.second_on and self.voice_on
+
+    def needs_translation(self) -> bool:
+        """Some narrated scene has no second-language line yet."""
+        return any(sc.narration.strip() and not sc.narration_alt.strip() for sc in self.scenes)
+
+    def clear_films(self) -> None:
+        """Forget both rendered films (call when anything they used changes)."""
+        self.final_uri = ""
+        self.final_alt_uri = ""
+
     def media_uris(self) -> list[str]:
         """Every stored media URI this story points at (empty ones skipped)."""
-        uris = [self.reference_uri, self.final_uri]
+        uris = [self.reference_uri, self.final_uri, self.final_alt_uri]
         for sc in self.scenes:
             uris += [sc.frame_uri, sc.clip_uri]
         return [u for u in uris if u]
@@ -488,6 +514,62 @@ def default_music_prompt(story: Story) -> str:
         f"Cinematic instrumental score for a short {style['label'].lower()} film: "
         f"{story.title or story.idea[:80]}. Warm, building, no vocals."
     )
+
+
+def other_language(language: str) -> str:
+    """The second language offered for a story: English for Arabic, else Arabic."""
+    return "English" if language == "Arabic" else "Arabic"
+
+
+def alt_story(story: Story) -> Story:
+    """A copy of `story` as its second-language version (for voice, stitch and
+    library): language, title and narration swapped, media unchanged."""
+    return replace(
+        story,
+        language=story.alt_language,
+        title=story.title_alt or story.title,
+        scenes=[replace(sc, narration=sc.narration_alt) for sc in story.scenes],
+    )
+
+
+def translation_prompt(story: Story) -> str:
+    src, dst = story.language, story.alt_language
+    lines = [sc.narration for sc in story.scenes]
+    secs = [sc.duration for sc in story.scenes]
+    arabic = (
+        "\n- Write Modern Standard Arabic (fusha), natural and clear when read aloud."
+        if dst == "Arabic"
+        else ""
+    )
+    return f"""You translate voiceover scripts for short films.
+Translate the title and each narration line of this film from {src} into {dst}.
+
+Title: {json.dumps(story.title, ensure_ascii=False)}
+Lines (JSON, one per scene, in order): {json.dumps(lines, ensure_ascii=False)}
+Scene lengths in seconds (same order): {json.dumps(secs)}
+
+Rules:
+- Keep the meaning, tone and emotion; do not add or drop ideas.
+- Each line must be speakable within its scene length, about as long as the
+  original when read aloud. Prefer a shorter wording over a literal one.
+- Keep exactly one line per scene, in the same order. An empty line stays empty.{arabic}
+
+Return only JSON: {{"title": str, "lines": [str, ...]}} with exactly {len(lines)} lines."""
+
+
+def parse_translation(text: str, count: int) -> tuple[str, list[str]]:
+    """Parse {"title", "lines"}; raise ScenarioError unless there are `count` lines."""
+    try:
+        data = json.loads(_strip_fences(text))
+    except ValueError as exc:
+        raise ScenarioError("The translation was not valid JSON.") from exc
+    if not isinstance(data, dict):
+        raise ScenarioError("The translation had the wrong shape.")
+    lines = data.get("lines")
+    if not isinstance(lines, list) or len(lines) != count:
+        raise ScenarioError("The translation had the wrong number of lines.")
+    title = str(data.get("title") or "").strip()[:120]
+    return title, [str(x or "").strip() for x in lines]
 
 
 # ---------------------------------------------------------------------------
