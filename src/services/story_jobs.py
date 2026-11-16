@@ -440,7 +440,9 @@ def start_video(story_id: str, owner: str) -> Job:
         voice_uris: dict[int, str] = {}
         music_uri = ""
 
-        def animate(i: int, start_frame: str) -> str:
+        def animate(i: int, start_frame: str, from_clip: str = "") -> str:
+            """Render scene i's clip. from_clip: the previous clip whose last
+            frame is start_frame (continuity), else empty."""
             current = get_store().get(story_id, owner)
             if current is None:
                 raise StoryAccessError("Story not found.")
@@ -451,6 +453,7 @@ def start_video(story_id: str, owner: str) -> Job:
                 for sc in s.scenes:
                     if sc.id == scene_id:
                         sc.clip_uri = uri
+                        sc.continues_from = from_clip
 
             mutate_story(story_id, owner, apply)
             return uri
@@ -463,16 +466,18 @@ def start_video(story_id: str, owner: str) -> Job:
                 if i not in clip_tasks:
                     prev_clip = sc.clip_uri
                     continue
-                start = sc.frame_uri
+                start, from_clip = sc.frame_uri, ""
                 if i in bridge_tasks:
                     if prev_clip and _run_task(
                         bridge_tasks[i],
                         lambda i=i, c=prev_clip: backend.last_frame(current, c, i),
                     ):
-                        start = bridge_tasks[i].result_uri
+                        start, from_clip = bridge_tasks[i].result_uri, prev_clip
                     elif not prev_clip:
                         bridge_tasks[i].status = SKIPPED
-                ok = _run_task(clip_tasks[i], lambda i=i, s=start: animate(i, s))
+                ok = _run_task(
+                    clip_tasks[i], lambda i=i, s=start, c=from_clip: animate(i, s, c)
+                )
                 prev_clip = clip_tasks[i].result_uri if ok else ""
 
         def clips_parallel(pool: ThreadPoolExecutor) -> list:
