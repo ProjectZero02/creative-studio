@@ -31,6 +31,8 @@
   --focus: #1a5fd8;
   --error: #b3261e;
   --error-bg: #fde7e5;
+  --ok: #0d652d;
+  --ok-bg: #e6f4ea;
   /* The visual panel is dark in both themes. */
   --panel: #0b1220;
   --panel-2: #111a2c;
@@ -75,6 +77,8 @@
     --focus: #8cb4ff;
     --error: #ffb4ab;
     --error-bg: #3a1512;
+    --ok: #a8dab5;
+    --ok-bg: #10291a;
     --panel: #0a1020;
   }
 }
@@ -355,6 +359,35 @@ a:focus-visible {
 }
 
 .error[hidden] { display: none; }
+
+/* ---------- Account settings (/account) ---------- */
+.auth-single { grid-template-columns: minmax(0, 1fr); }
+
+.notice {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ok);
+  background: var(--ok-bg);
+  border-radius: 10px;
+}
+
+.notice[hidden] { display: none; }
+
+.section-title {
+  margin: 8px 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.help a { color: var(--accent); }
 
 .help {
   margin: 28px 0 0;

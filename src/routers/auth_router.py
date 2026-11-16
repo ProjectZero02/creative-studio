@@ -11,7 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Sign-in routes for ``AUTH_MODE=session``: GET/POST /login, POST /logout.
+"""Sign-in routes for ``AUTH_MODE=session``: GET/POST /login, POST /logout,
+and the signed-in user's own settings: GET /account, POST /account/password.
 
 The login page is plain server-rendered HTML (no Mesop), styled by
 ``/ui/login.css``. It complies with the app CSP (only self, Google Fonts and an
@@ -37,7 +38,7 @@ from common.i18n import (
     other_lang,
     tl,
 )
-from common.passwords import burn_time, verify_password
+from common.passwords import MIN_PASSWORD_LENGTH, burn_time, verify_password
 from common.ui_theme import versioned
 from common.user_store import ROLE_ADMIN, get_user_store, normalize_email
 from common.verified_identity import AUTH_MODE_SESSION, auth_mode
@@ -407,6 +408,244 @@ async def logout(request: Request):
         httponly=True,
         samesite="lax",
     )
+    return _no_store(response)
+
+
+# --------------------------------------------------------------------------- #
+# /account: a signed-in user changes their own password                       #
+# --------------------------------------------------------------------------- #
+ACCOUNT_PATH = "/account"
+
+_ACCOUNT_PAGE = """<!doctype html>
+<html lang="{lang}" dir="{dir}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{s_title}</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{font_css}">
+<link rel="stylesheet" href="{login_css}">
+</head>
+<body>
+<div class="auth auth-single">
+  <main class="auth-main">
+    <div class="auth-card">
+      <div class="brand">{brand_mark}<span>GenMedia Studio</span></div>
+      <h1>{s_title}</h1>
+      <p class="lead">{s_lead}</p>
+      <p class="notice" role="status"{notice_hidden}>{notice}</p>
+      <h2 class="section-title">{s_password_heading}</h2>
+      <form method="post" action="/account/password" autocomplete="on">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <input type="text" name="username" value="{email}" autocomplete="username" hidden>
+        <div class="field">
+          <label for="current">{s_current}</label>
+          <input id="current" name="current" type="password" required
+            autocomplete="current-password"{invalid_current} autofocus>
+        </div>
+        <div class="field">
+          <label for="new">{s_new}</label>
+          <input id="new" name="new" type="password" required minlength="{min_len}"
+            maxlength="256" autocomplete="new-password" aria-describedby="new-rule"{invalid_new}>
+          <p class="field-hint" id="new-rule">{s_rule}</p>
+        </div>
+        <div class="field">
+          <label for="confirm">{s_confirm}</label>
+          <input id="confirm" name="confirm" type="password" required minlength="{min_len}"
+            maxlength="256" autocomplete="new-password"{invalid_new}>
+        </div>
+        <button type="submit" class="submit">{s_submit}</button>
+        <p class="error" id="form-error" role="alert"{error_hidden}>{error}</p>
+      </form>
+      <p class="help"><a href="/home">{s_back}</a></p>
+    </div>
+  </main>
+</div>
+</body>
+</html>
+"""
+
+# Error key -> which field it points at (for aria-invalid).
+_CURRENT_ERRORS = {"account.err_current"}
+_NEW_ERRORS = {
+    "account.err_mismatch",
+    "account.err_short",
+    "account.err_long",
+    "account.err_same",
+}
+
+
+def render_account_page(
+    *, csrf: str, email: str, lang: str = "en", error: str = "", notice: str = ""
+) -> str:
+    """Return the account settings page HTML. Every dynamic value is escaped.
+
+    `error` and `notice` are i18n keys (account.*), or empty.
+    """
+    lang = lang if lang in LANGS else "en"
+
+    def esc(key: str, **fmt) -> str:
+        return html.escape(tl(lang, key, **fmt), quote=True)
+
+    invalid = ' aria-invalid="true" aria-describedby="form-error"'
+    return _ACCOUNT_PAGE.format(
+        font_css=html.escape(FONT_CSS, quote=True),
+        login_css=versioned("/ui/login.css"),
+        brand_mark=BRAND_MARK,
+        lang=lang,
+        dir="rtl" if is_rtl(lang) else "ltr",
+        s_title=esc("account.title"),
+        s_lead=esc("account.lead", email=email),
+        s_password_heading=esc("account.password_heading"),
+        s_current=esc("account.current"),
+        s_new=esc("account.new"),
+        s_confirm=esc("account.confirm"),
+        s_rule=esc("account.rule", n=MIN_PASSWORD_LENGTH),
+        s_submit=esc("account.submit"),
+        s_back=esc("account.back"),
+        csrf=html.escape(csrf, quote=True),
+        email=html.escape(email, quote=True),
+        min_len=MIN_PASSWORD_LENGTH,
+        invalid_current=invalid if error in _CURRENT_ERRORS else "",
+        invalid_new=invalid if error in _NEW_ERRORS else "",
+        error=esc(error, n=MIN_PASSWORD_LENGTH) if error else "",
+        error_hidden="" if error else " hidden",
+        notice=esc(notice) if notice else "",
+        notice_hidden="" if notice else " hidden",
+    )
+
+
+def _account_response(
+    request: Request,
+    email: str,
+    *,
+    error: str = "",
+    notice: str = "",
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Render the account page with a fresh CSRF token (cookie + hidden field)."""
+    token = sa.new_csrf_token()
+    response = HTMLResponse(
+        render_account_page(
+            csrf=token,
+            email=email,
+            lang=request_lang(request),
+            error=error,
+            notice=notice,
+        ),
+        status_code=status_code,
+    )
+    response.set_cookie(
+        sa.CSRF_COOKIE,
+        token,
+        max_age=3600,
+        httponly=True,
+        secure=sa.secure_cookies(),
+        samesite="strict",
+        path=ACCOUNT_PATH,
+    )
+    return _no_store(response)
+
+
+def _new_password_error(current: str, new: str, confirm: str) -> str:
+    """i18n key for what is wrong with the new password, or "" if it is fine."""
+    if new != confirm:
+        return "account.err_mismatch"
+    if len(new) < MIN_PASSWORD_LENGTH:
+        return "account.err_short"
+    if len(new) > 256:
+        return "account.err_long"
+    if new == current:
+        return "account.err_same"
+    return ""
+
+
+async def _signed_in(request: Request):
+    """The caller's session identity, or None."""
+    return await run_in_threadpool(
+        sa.identity_from_token, request.cookies.get(sa.SESSION_COOKIE),
+    )
+
+
+@router.get(ACCOUNT_PATH)
+async def account_page(request: Request):
+    if not _session_mode():
+        return RedirectResponse("/home", status_code=302)
+    identity = await _signed_in(request)
+    if identity is None:
+        return RedirectResponse(login_redirect_url(ACCOUNT_PATH, ""), status_code=302)
+    notice = "account.changed" if request.query_params.get("changed") == "1" else ""
+    return _account_response(request, identity.email, notice=notice)
+
+
+@router.post(ACCOUNT_PATH + "/password")
+async def account_change_password(request: Request):
+    """Change the caller's own password.
+
+    Needs the current password (a stolen session alone cannot take over the
+    account), same-origin + CSRF, and is rate limited per account like sign-in.
+    Changing the password signs out every other session (the session token is
+    bound to the password hash); this response re-issues the caller's cookie so
+    they stay signed in here.
+    """
+    if not _session_mode():
+        return RedirectResponse("/home", status_code=303)
+    identity = await _signed_in(request)
+    if identity is None:
+        return RedirectResponse(login_redirect_url(ACCOUNT_PATH, ""), status_code=303)
+    email = identity.email
+
+    body = (await request.body())[:8192].decode("utf-8", errors="replace")
+    form = {k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()}
+    current = form.get("current", "")[:256]
+    new = form.get("new", "")[:257]
+    confirm = form.get("confirm", "")[:257]
+
+    if not sa.same_origin(request.headers) or not sa.csrf_matches(
+        request.cookies.get(sa.CSRF_COOKIE), form.get("csrf"),
+    ):
+        return _account_response(
+            request, email, error="account.err_expired", status_code=400
+        )
+
+    key = f"pw:{email}"
+    if sa.login_limiter.blocked(key):
+        return _account_response(
+            request, email, error="account.err_too_many", status_code=429
+        )
+
+    record = await run_in_threadpool(_authenticate, email, current)
+    if record is None:
+        sa.login_limiter.hit(key)
+        logger.info("Failed password change for a signed-in user")
+        return _account_response(
+            request, email, error="account.err_current", status_code=401
+        )
+
+    problem = _new_password_error(current, new, confirm)
+    if problem:
+        return _account_response(request, email, error=problem, status_code=400)
+
+    sa.login_limiter.reset(key)
+    store = get_user_store()
+    await run_in_threadpool(store.set_password, email, new)
+    sa.forget_user(email)
+    updated = await run_in_threadpool(store.get, email)
+
+    response = RedirectResponse(ACCOUNT_PATH + "?changed=1", status_code=303)
+    response.set_cookie(
+        sa.SESSION_COOKIE,
+        sa.issue_session(updated),
+        max_age=sa.session_ttl_seconds(),
+        httponly=True,
+        secure=sa.secure_cookies(),
+        samesite="lax",
+        path="/",
+    )
+    response.delete_cookie(sa.CSRF_COOKIE, path=ACCOUNT_PATH)
     return _no_store(response)
 
 
