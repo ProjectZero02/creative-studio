@@ -1336,7 +1336,10 @@ def editor_step(story: Story) -> None:
     busy = _job_active_for("video", "storyboard", "scene")
     total = sum(sc.duration for sc in story.scenes)
     xf = Default().STORY_CROSSFADE_SECONDS
-    film_len = max(0.0, total - xf * max(0, len(story.scenes) - 1))
+    seamless = story.continuity and story.seamless_joins
+    # Seamless continuity films are cut, not overlapped (estimate: assumes
+    # every join continues; broken joins still crossfade).
+    film_len = total if seamless else max(0.0, total - xf * max(0, len(story.scenes) - 1))
     to_render = sum(1 for sc in story.scenes if not sc.clip_uri)
     with me.box(classes="ss-editor"):
         with me.box(classes="ss-editor-list"):
@@ -1480,8 +1483,27 @@ def editor_step(story: Story) -> None:
                 "Smoother cuts, but clips render one after another (slower).",
                 style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )
+            if story.continuity:
+                me.slide_toggle(
+                    "Seamless joins: cut between continued scenes instead of crossfading",
+                    checked=story.seamless_joins,
+                    disabled=busy,
+                    on_change=on_toggle_seamless_joins,
+                    key="ss-seamless-joins",
+                )
+                me.text(
+                    "A crossfade over matching frames shows a ghosted double image. "
+                    "Scenes that did not continue still crossfade.",
+                    style=me.Style(
+                        font_size=13, color=me.theme_var("on-surface-variant")
+                    ),
+                )
             with me.box(classes="ss-summary-lines"):
-                me.text(f"Film length ≈ {_fmt_secs(film_len)} with {xf:g}s crossfades")
+                me.text(
+                    f"Film length ≈ {_fmt_secs(film_len)} with seamless joins"
+                    if seamless
+                    else f"Film length ≈ {_fmt_secs(film_len)} with {xf:g}s crossfades"
+                )
                 me.text(f"Veo clips to render: {to_render} of {len(story.scenes)}")
             me.button(
                 "Rendering…" if _job_active_for("video") else "Render film",
@@ -1545,7 +1567,13 @@ def on_scene_duration(e: me.SelectSelectionChangeEvent):
 def _set_story_field(field: str, value) -> None:
     def apply(story: Story) -> None:
         setattr(story, field, value)
-        if field in ("music_on", "music_prompt", "voice_on", "voice_name"):
+        if field in (
+            "music_on",
+            "music_prompt",
+            "voice_on",
+            "voice_name",
+            "seamless_joins",
+        ):
             story.final_uri = ""
         if field == "continuity":
             story.final_uri = ""
@@ -1568,6 +1596,11 @@ def on_toggle_voice(e: me.SlideToggleChangeEvent):
 def on_toggle_continuity(e: me.SlideToggleChangeEvent):
     story = _story()
     _set_story_field("continuity", not (story and story.continuity))
+
+
+def on_toggle_seamless_joins(e: me.SlideToggleChangeEvent):
+    story = _story()
+    _set_story_field("seamless_joins", not (story and story.seamless_joins))
 
 
 def on_music_prompt(e: me.InputBlurEvent):
