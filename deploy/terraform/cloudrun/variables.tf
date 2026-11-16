@@ -32,6 +32,17 @@ variable "invoker_iam_disabled" {
   default     = false
 }
 
+variable "app_sign_in" {
+  description = "How people sign in to the app itself. \"iap\" (default): the app trusts the IAP identity, no login page. \"session\": IAP only controls who can reach the URL, then the app's own login page and user list (admin and regular users) apply. Session needs initial_user and the SESSION_SECRET and BOOTSTRAP_ADMIN_PASSWORD entries in secret_env."
+  type        = string
+  default     = "iap"
+
+  validation {
+    condition     = contains(["iap", "session"], var.app_sign_in)
+    error_message = "app_sign_in must be \"iap\" or \"session\"."
+  }
+}
+
 variable "iap_jwt_audience" {
   description = "Custom IAP JWT audience string. If empty, automatically derived for Cloud Run direct IAP."
   type        = string

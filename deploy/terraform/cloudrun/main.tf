@@ -228,7 +228,19 @@ locals {
   # Prod (use_lb = true) extends the base map with the LB-form identity vars;
   # nonprod (use_lb = false) extends it with the native-Cloud-Run identity vars.
   # Each env gets S1+S3 together for its topology.
-  cloud_run_env_vars = var.use_lb ? merge(local.creative_studio_env_vars, local.prod_identity_env_vars) : merge(local.creative_studio_env_vars, local.nonprod_identity_env_vars)
+  cloud_run_env_vars = merge(
+    var.use_lb ? merge(local.creative_studio_env_vars, local.prod_identity_env_vars) : merge(local.creative_studio_env_vars, local.nonprod_identity_env_vars),
+    local.session_sign_in_env_vars,
+  )
+
+  # app_sign_in = "session": IAP still gates the URL, but the app runs its own
+  # sign-in (login page, admin and regular users). An explicit AUTH_MODE=session
+  # is the one value the app honours over the APP_ENV-derived mode. The first
+  # admin is initial_user; secrets come from var.secret_env (see the guard below).
+  session_sign_in_env_vars = var.app_sign_in == "session" ? {
+    AUTH_MODE             = "session"
+    BOOTSTRAP_ADMIN_EMAIL = var.initial_user == null ? "" : var.initial_user
+  } : {}
 
   deployed_domain = var.use_lb ? ["https://${var.domain}"] : module.cloud-run-service.service_urls
   cors_domains    = concat(local.deployed_domain, var.allow_local_domain_cors_requests ? ["http://localhost:8080", "http://0.0.0.0:8080"] : [])
@@ -292,6 +304,24 @@ resource "terraform_data" "prod_app_env_guard" {
     precondition {
       condition     = !contains(local.local_app_envs, local.prod_identity_env_vars.APP_ENV)
       error_message = "Vuln #4 LOW-3 misconfig: prod LB-backed Cloud Run (use_lb=true) resolved APP_ENV='${local.prod_identity_env_vars.APP_ENV}', which is in the app's LOCAL set {\"\", dev, development, local, test} and would derive AUTH_MODE='local' (mock identity, fail-open) with the LB-form IAP_JWT_AUDIENCE inert. Set var.environment to a non-local value (e.g. \"prod\") so AUTH_MODE derives to 'iap'."
+    }
+  }
+}
+
+# app_sign_in = "session" needs a first admin and both session secrets, or the
+# app refuses to start (SESSION_SECRET) or has nobody who can sign in
+# (BOOTSTRAP_ADMIN_*). Fail the plan instead of shipping a broken revision.
+resource "terraform_data" "session_sign_in_guard" {
+  count = var.app_sign_in == "session" ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = var.initial_user != null && var.initial_user != ""
+      error_message = "app_sign_in = \"session\" needs initial_user (the first admin's email)."
+    }
+    precondition {
+      condition     = contains(keys(var.secret_env), "SESSION_SECRET") && contains(keys(var.secret_env), "BOOTSTRAP_ADMIN_PASSWORD")
+      error_message = "app_sign_in = \"session\" needs secret_env entries for SESSION_SECRET and BOOTSTRAP_ADMIN_PASSWORD (and their ids in secret_ids), e.g. SESSION_SECRET = { secret = \"creative-studio-session-secret\" }."
     }
   }
 }
