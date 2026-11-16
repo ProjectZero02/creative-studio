@@ -39,10 +39,12 @@ from config.default import Default
 from services.story_models import (
     ScenarioError,
     Story,
+    alt_story,
     build_stitch_plan,
     default_music_prompt,
     parse_scenario,
     parse_single_scene,
+    parse_translation,
 )
 from services.story_service import get_backend
 from services.story_store import StoryAccessError, get_store
@@ -291,9 +293,10 @@ def start_scenario(story_id: str, owner: str) -> Job:
 
             def apply(s: Story) -> None:
                 s.title = title
+                s.title_alt = ""
                 s.scenes = scenes
                 s.approved = False
-                s.final_uri = ""
+                s.clear_films()
                 s.step = "scenario"
                 if not s.music_prompt:
                     s.music_prompt = default_music_prompt(s)
@@ -332,7 +335,8 @@ def start_scene_rewrite(story_id: str, owner: str, index: int) -> Job:
                         scene.camera,
                     )
                     cur.frame_uri = cur.clip_uri = ""
-                    s.final_uri = ""
+                    cur.narration_alt = ""
+                    s.clear_films()
 
             mutate_story(story_id, owner, apply)
             return ""
@@ -379,7 +383,7 @@ def start_storyboard(
                     if sc.id == scene_id:
                         sc.frame_uri = uri
                         sc.clip_uri = ""
-                s.final_uri = ""
+                s.clear_films()
 
             mutate_story(story_id, owner, apply)
             return uri
@@ -400,6 +404,62 @@ def start_storyboard(
         with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
             for i in rest:
                 pool.submit(_run_task, tasks[i], lambda i=i: paint(i, reference))
+
+    return _spawn(job, work)
+
+
+def _translate_into(story_id: str, owner: str, force: bool = False) -> str:
+    """Translate the narration into the story's second language and save it.
+
+    Fills only missing lines (keeps the user's edits) unless `force`.
+    """
+    backend = get_backend()
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    last: Exception | None = None
+    for _ in range(2):  # one automatic retry on malformed JSON
+        try:
+            title, lines = parse_translation(
+                backend.translate(story), len(story.scenes)
+            )
+            break
+        except ScenarioError as exc:
+            last = exc
+    else:
+        raise last or ScenarioError("No translation.")
+    by_id = {sc.id: line for sc, line in zip(story.scenes, lines)}
+
+    def apply(s: Story) -> None:
+        changed = False
+        for sc in s.scenes:
+            line = by_id.get(sc.id)
+            if line is None or not sc.narration.strip():
+                continue
+            if force or not sc.narration_alt.strip():
+                sc.narration_alt = line
+                changed = True
+        if title and (force or not s.title_alt):
+            s.title_alt = title
+        if changed:
+            s.final_alt_uri = ""
+
+    mutate_story(story_id, owner, apply)
+    return ""
+
+
+def start_translation(story_id: str, owner: str, force: bool = False) -> Job:
+    """Translate the narration for the second-language film (reviewable)."""
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    job = _new_job(owner, story_id, "translate", {"force": force})
+    task = _add_task(
+        job, f"Translating the narration into {story.alt_language}", "translate"
+    )
+
+    def work(job: Job) -> None:
+        _run_task(task, lambda: _translate_into(story_id, owner, force))
 
     return _spawn(job, work)
 
@@ -433,12 +493,44 @@ def start_video(story_id: str, owner: str) -> Job:
     }
     stitch_task = _add_task(job, "Stitching the film · crossfades and mix", "stitch")
     library_task = _add_task(job, "Saving to your library", "library")
+    # Second-language film: same clips and music, translated voiceover.
+    alt = story.alt_language
+    alt_on = story.makes_alt and any(sc.narration.strip() for sc in story.scenes)
+    translate_task = (
+        _add_task(job, f"Translating the narration into {alt}", "translate")
+        if alt_on and story.needs_translation()
+        else None
+    )
+    alt_voice_tasks = (
+        {
+            i: _add_task(job, f"Scene {i + 1} · {alt} voiceover", "voice_alt", i)
+            for i, sc in enumerate(story.scenes)
+            if sc.narration.strip()
+        }
+        if alt_on
+        else {}
+    )
+    alt_stitch_task = (
+        _add_task(job, f"Stitching the {alt} film", "stitch_alt") if alt_on else None
+    )
+    alt_library_task = (
+        _add_task(job, f"Saving the {alt} film to your library", "library_alt")
+        if alt_on
+        else None
+    )
     cfg = Default()
 
     def work(job: Job) -> None:
         backend = get_backend()
         voice_uris: dict[int, str] = {}
+        alt_voice_uris: dict[int, str] = {}
         music_uri = ""
+        if translate_task and not _run_task(
+            translate_task, lambda: _translate_into(story_id, owner)
+        ):
+            for t in alt_voice_tasks.values():
+                t.status = SKIPPED
+        translated = alt_story(get_store().get(story_id, owner) or story)
 
         def animate(i: int, start_frame: str, from_clip: str = "") -> str:
             """Render scene i's clip. from_clip: the previous clip whose last
@@ -495,6 +587,14 @@ def start_video(story_id: str, owner: str) -> Job:
             voice_uris[i] = uri
             return uri
 
+        def voice_alt(i: int) -> str:
+            text = translated.scenes[i].narration
+            if not text.strip():
+                raise GenerationError(f"Scene {i + 1} has no {alt} line yet.")
+            uri = backend.generate_voiceover(translated, i, text)
+            alt_voice_uris[i] = uri
+            return uri
+
         with ThreadPoolExecutor(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
             futures = []
             if music_task:
@@ -509,6 +609,11 @@ def start_video(story_id: str, owner: str) -> Job:
                 )
             for i, t in voice_tasks.items():
                 futures.append(pool.submit(_run_task, t, lambda i=i: voice(i)))
+            for i, t in alt_voice_tasks.items():
+                if t.status == QUEUED:
+                    futures.append(
+                        pool.submit(_run_task, t, lambda i=i: voice_alt(i))
+                    )
             if story.continuity:
                 clips_continuity()
             else:
@@ -520,8 +625,11 @@ def start_video(story_id: str, owner: str) -> Job:
 
         final = get_store().get(story_id, owner)
         missing = [i + 1 for i, s in enumerate(final.scenes) if not s.clip_uri]
+        later = [stitch_task, library_task, alt_stitch_task, alt_library_task]
         if missing:
-            stitch_task.status = library_task.status = SKIPPED
+            for t in later:
+                if t:
+                    t.status = SKIPPED
             stitch_task.error = f"Waiting for scene {', '.join(map(str, missing))}."
             return
         plan = build_stitch_plan(
@@ -533,7 +641,9 @@ def start_video(story_id: str, owner: str) -> Job:
         if not _run_task(
             stitch_task, lambda: backend.stitch(final, plan, music_uri, voices)
         ):
-            library_task.status = SKIPPED
+            for t in later[1:]:
+                if t:
+                    t.status = SKIPPED
             return
         film = stitch_task.result_uri
 
@@ -543,6 +653,32 @@ def start_video(story_id: str, owner: str) -> Job:
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(final, film, owner))
+        if not alt_stitch_task:
+            return
+        if alt_voice_tasks and not any(
+            t.status == DONE for t in alt_voice_tasks.values()
+        ):
+            alt_stitch_task.status = alt_library_task.status = SKIPPED
+            alt_stitch_task.error = f"No {alt} voiceover was made."
+            return
+        second = alt_story(get_store().get(story_id, owner) or final)
+        alt_voices = [alt_voice_uris.get(seg.index, "") for seg in plan.segments]
+        if not _run_task(
+            alt_stitch_task,
+            lambda: backend.stitch(second, plan, music_uri, alt_voices),
+        ):
+            alt_library_task.status = SKIPPED
+            return
+        alt_film = alt_stitch_task.result_uri
+
+        def apply_alt(s: Story) -> None:
+            s.final_alt_uri = alt_film
+
+        mutate_story(story_id, owner, apply_alt)
+        _run_task(
+            alt_library_task,
+            lambda: backend.save_to_library(second, alt_film, owner),
+        )
 
     return _spawn(job, work)
 
@@ -556,6 +692,10 @@ def retry(job_id: str, owner: str) -> Job | None:
         return start_scenario(job.story_id, owner)
     if job.kind == "scene":
         return start_scene_rewrite(job.story_id, owner, int(job.params.get("index", 0)))
+    if job.kind == "translate":
+        return start_translation(
+            job.story_id, owner, bool(job.params.get("force"))
+        )
     if job.kind == "storyboard":
         failed = [t.scene_index for t in job.tasks if t.status == FAILED]
         return start_storyboard(job.story_id, owner, failed or None)
