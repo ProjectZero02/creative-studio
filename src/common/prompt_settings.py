@@ -528,7 +528,7 @@ def _label(kind: str, value: object, noun: str = "image") -> str:
     if kind == AUDIO:
         return "sound on" if value else "sound off"
     if kind == INSTRUMENTAL:
-        return "instrumental"
+        return "instrumental" if value else "with lyrics"
     return str(value)
 
 
@@ -761,6 +761,10 @@ def _label_tr(kind: str, value: object, noun: str, tr: Translate) -> str:
         )
     if kind == DURATION:
         return tr("settings.seconds", "{n} s", n=value)
+    if kind == INSTRUMENTAL:
+        if value:
+            return tr("settings.instrumental", "instrumental")
+        return tr("settings.with_lyrics", "with lyrics")
     return _label(kind, value, noun)
 
 

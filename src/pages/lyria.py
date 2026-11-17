@@ -21,7 +21,10 @@ import mesop as me
 
 from common.metadata import MediaItem, add_media_item_to_firestore  # Updated import
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
+from common import prompt_settings
+from common.i18n import t, tr
 from common.prompt_prefill import prefill_prompt
+from common.prompt_settings import SettingLimits
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer, composer_attachment
@@ -151,6 +154,10 @@ def lyria_content(app_state: me.state):
                 render_top=_render_music_references if supports_images else None,
                 on_clear=clear_music,
                 clear_label="Clear prompt, lyrics and results",
+                notice=pagestate.settings_notice,
+                on_notice_undo=on_music_settings_undo
+                if pagestate.settings_undo_json
+                else None,
             ):
                 _music_chips(pagestate, model_config)
 
@@ -612,6 +619,54 @@ def on_click_lyria_rewriter(e: me.ClickEvent):
         yield
 
 
+def _set_music_settings(state: PageState, values: dict):
+    """Write count and instrumental values (by prompt_settings kind) to state."""
+    if "count" in values:
+        state.sample_count = int(values["count"])
+    if "instrumental" in values:
+        state.show_lyrics = not values["instrumental"]
+
+
+def _apply_typed_settings(state: PageState) -> tuple[str, bool]:
+    """Use "2 tracks" or "instrumental" typed in the prompt.
+
+    Returns the prompt to send and whether this run should skip the lyrics.
+    "instrumental" stays in the prompt: Lyria only hears it from the text.
+    """
+    state.settings_notice = ""
+    state.settings_undo_json = ""
+    cfg = get_lyria_model_config(state.selected_model_id)
+    prompt = state.music_prompt_input or ""
+    if not cfg or not prompt:
+        return prompt, False
+    has_lyrics = state.show_lyrics or bool((state.lyrics_input or "").strip())
+    run = prompt_settings.apply(
+        prompt,
+        prompt_settings.MUSIC_KINDS,
+        SettingLimits.from_lyria_config(cfg),
+        current={"count": state.sample_count, "instrumental": not has_lyrics},
+        ignored=prompt_settings.ignored_list(state.settings_ignored_json),
+        tr=tr,
+    )
+    _set_music_settings(state, run.changes)
+    state.settings_notice = run.notice
+    state.settings_undo_json = run.undo_json
+    return run.prompt, bool(run.changes.get("instrumental"))
+
+
+def on_music_settings_undo(e: me.ClickEvent):  # pylint: disable=unused-argument
+    """Undo on the notice: put the chips back and stop applying those words."""
+    state = me.state(PageState)
+    previous, phrases = prompt_settings.read_undo(state.settings_undo_json)
+    _set_music_settings(state, previous)
+    state.settings_ignored_json = prompt_settings.add_ignored(
+        state.settings_ignored_json, phrases
+    )
+    state.settings_undo_json = ""
+    state.settings_notice = t("settings.undone")
+    yield
+
+
 def on_click_lyria(e: me.ClickEvent):
     """Generate music with Lyria handler"""
     app_state = me.state(AppState)
@@ -628,6 +683,8 @@ def on_click_lyria(e: me.ClickEvent):
         progress_fail(state, "Describe the music first, then press Enter.")
         yield
         return
+    # "2 tracks" or "instrumental" typed in the prompt move the chips.
+    send_prompt, instrumental = _apply_typed_settings(state)
 
     state.is_loading = True
     state.loading_operation_message = (
@@ -665,9 +722,9 @@ def on_click_lyria(e: me.ClickEvent):
     yield
     try:
         destination_blob_paths, c2pa_data, text_outputs = generate_music_with_lyria(
-            prompt=prompt_for_api,
+            prompt=send_prompt,
             model_name=get_lyria_model_config(state.selected_model_id).model_name,
-            lyrics=state.lyrics_input,
+            lyrics="" if instrumental else state.lyrics_input,
             image_gcs_uri=state.uploaded_image_gcs_uris[0]
             if state.uploaded_image_gcs_uris
             else None,
@@ -780,7 +837,7 @@ def on_click_lyria(e: me.ClickEvent):
         item = MediaItem(
             user_email=app_state.user_email,
             timestamp=datetime.datetime.now(datetime.UTC),
-            prompt=prompt_for_api,
+            prompt=send_prompt,
             original_prompt=logged_original_prompt,
             rewritten_prompt=logged_rewritten_prompt
             if logged_rewritten_prompt
@@ -833,6 +890,9 @@ def _mock_music_job(state: PageState, prompt: str):
 
 def clear_music(e: me.ClickEvent):
     state = me.state(PageState)
+    state.settings_notice = ""
+    state.settings_undo_json = ""
+    state.settings_ignored_json = ""
     state.lyrics_input = ""
     state.lyrics_placeholder = ""
     state.lyrics_key += 1

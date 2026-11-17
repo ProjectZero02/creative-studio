@@ -164,6 +164,8 @@ EN: dict[str, str] = {
     "settings.noun.videos": "videos",
     "settings.noun.track": "track",
     "settings.noun.tracks": "tracks",
+    "settings.instrumental": "instrumental",
+    "settings.with_lyrics": "with lyrics",
     # Results
     "results.recent": "Recent",
     "results.latest": "Latest",
@@ -443,6 +445,8 @@ AR: dict[str, str] = {
     "settings.noun.videos": "فيديوهات",
     "settings.noun.track": "مقطع",
     "settings.noun.tracks": "مقاطع",
+    "settings.instrumental": "موسيقى فقط",
+    "settings.with_lyrics": "مع كلمات",
     "results.recent": "الأحدث",
     "results.latest": "آخر نتيجة",
     "results.count_one": "عنصر واحد في هذه الجلسة",
