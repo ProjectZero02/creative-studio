@@ -91,7 +91,25 @@ CHIP_STYLE = me.Style(
 )
 
 
+# get_all_image_presets runs on every render (Mesop re-renders on each yield),
+# and loading reads a JSON file and queries Firestore. Cache the merged list
+# briefly so templates an admin adds still show up within a minute.
+_PRESETS_TTL_SECONDS = 60.0
+_presets_cache: dict = {"at": None, "value": None}
+
+
 def get_all_image_presets():
+    """Static presets merged with dynamic templates, cached for a minute."""
+    now = time.monotonic()
+    at = _presets_cache["at"]
+    if at is None or now - at > _PRESETS_TTL_SECONDS:
+        _presets_cache["value"] = _load_all_image_presets()
+        _presets_cache["at"] = now
+    # Fresh lists per call, so a caller can't change the cached copy.
+    return {k: list(v) for k, v in _presets_cache["value"].items()}
+
+
+def _load_all_image_presets():
     """Loads dynamic templates and merges them with static presets."""
     # Start with a deep copy of the hardcoded presets
     # to ensure backward compatibility and avoid mutating the original
@@ -1040,8 +1058,12 @@ def on_suggest_transformations_click(e: me.ClickEvent):
     yield
 
     try:
-        # Use the first generated image to get suggestions
-        gcs_uri = f"gs://{state.generated_image_urls[0].replace('/media/', '')}"
+        # Suggest edits for the selected image (the first one if none is
+        # selected). https_url_to_gcs_uri handles both the /media/ proxy and
+        # signed storage.googleapis.com URLs.
+        gcs_uri = https_url_to_gcs_uri(
+            state.selected_image_url or state.generated_image_urls[0]
+        )
         raw_transformations = generate_transformation_prompts(image_uris=[gcs_uri])
         # Convert Pydantic objects to dicts for state
         state.suggested_transformations = [t.model_dump() for t in raw_transformations]
@@ -1143,6 +1165,30 @@ def show_snackbar(state: PageState, message: str):
     # The snackbar will be hidden on the next interaction.
 
 
+def _requested_count(state: PageState) -> int:
+    """Images this run asks for: 1 when the model makes one at a time.
+
+    Otherwise the count chip's value (0 means "Auto").
+    """
+    cfg = get_gemini_image_model_config(state.selected_model)
+    if cfg and cfg.max_output_images <= 1:
+        return 1
+    return state.num_images_to_generate
+
+
+def _keep_requested(
+    gcs_uris: list[str], captions: list[str], requested: int
+) -> tuple[list[str], list[str]]:
+    """Drop images beyond the requested count, keeping the last (final) ones."""
+    if not requested or len(gcs_uris) <= requested:
+        return gcs_uris, captions
+    analytics_logger.warning(
+        f"Model returned {len(gcs_uris)} images for {requested} requested; "
+        f"keeping the last {requested}."
+    )
+    return gcs_uris[-requested:], list(captions)[-requested:]
+
+
 def _get_appended_prompt(base_prompt: str, num_images: int) -> str:
     """Appends the number of images prompt to the base prompt."""
     if num_images <= 1:
@@ -1175,6 +1221,7 @@ def _generate_and_save(
     # Clear previous suggestions before generating new ones
     state.suggested_transformations = []
 
+    state.num_images_to_generate = _requested_count(state)
     final_prompt = _get_appended_prompt(base_prompt, state.num_images_to_generate)
     # final_prompt = base_prompt
 
@@ -1213,6 +1260,9 @@ def _generate_and_save(
 
         progress_step(state, 3)
         yield
+        gcs_uris, captions = _keep_requested(
+            gcs_uris, captions, state.num_images_to_generate
+        )
         state.generation_time = execution_time
         state.grounding_info = json.dumps(grounding_info) if grounding_info else ""
         state.thoughts = all_thoughts[0] if all_thoughts else ""
