@@ -130,11 +130,12 @@ class CapabilityCard extends LitElement {
       color: var(--sys-on-surface, #15171c);
       /* Glass on the home page (--gm-glass-* set on .gm-home), solid elsewhere. */
       background: var(--gm-glass-solid, var(--sys-surface-container-lowest, #fff));
-      border: 1px solid var(--gm-glass-border, var(--gm-border, #e1e4ea));
+      /* No outline: the shadow separates the card. The transparent border keeps
+         the size the same as the high-contrast version below. */
+      border: 1px solid transparent;
       border-radius: 20px;
       overflow: hidden;
-      box-shadow: var(--gm-glass-highlight, inset 0 0 0 transparent),
-        var(--gm-glass-shadow, var(--gm-card-shadow, 0 0 0 transparent));
+      box-shadow: var(--gm-glass-shadow, var(--gm-card-shadow, 0 0 0 transparent));
       transition: transform 200ms cubic-bezier(0.2, 0, 0, 1),
         box-shadow 200ms cubic-bezier(0.2, 0, 0, 1),
         border-color 200ms cubic-bezier(0.2, 0, 0, 1);
@@ -153,8 +154,7 @@ class CapabilityCard extends LitElement {
     }
     a:hover {
       transform: translateY(-3px);
-      box-shadow: var(--gm-glass-highlight, inset 0 0 0 transparent),
-        var(--gm-card-shadow-hover, 0 14px 40px rgba(20, 20, 60, 0.18));
+      box-shadow: var(--gm-card-shadow-hover, 0 14px 40px rgba(20, 20, 60, 0.18));
     }
     a:focus-visible {
       outline: 2px solid var(--gm-focus, #1a5fd8);

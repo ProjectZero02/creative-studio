@@ -114,8 +114,7 @@ class HomePrompt extends LitElement {
       padding: 10px;
       background: var(--gm-glass-solid, rgba(255, 255, 255, 0.95));
       border: 1px solid var(--gm-glass-border, rgba(255, 255, 255, 0.7));
-      box-shadow: var(--gm-glass-highlight, inset 0 1.5px 0 rgba(255, 255, 255, 0.85)),
-        var(--gm-glass-shadow, 0 8px 32px rgba(20, 20, 60, 0.12));
+      box-shadow: var(--gm-glass-shadow, 0 8px 32px rgba(20, 20, 60, 0.12));
     }
     @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
       @media (prefers-reduced-transparency: no-preference) {
