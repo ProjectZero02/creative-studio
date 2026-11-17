@@ -821,7 +821,12 @@ html body .gm-aurora-c {
 /* The colour fields sit behind every page (page_scaffold draws them first). */
 html body .gm-page { position: relative; }
 html body .gm-page > :not(.gm-aurora) { position: relative; z-index: 1; }
-html body .gm-page > .gm-topbar { z-index: 3; }
+/* Mesop wraps user_menu_bar() in a component-renderer, so .gm-topbar is not a
+   direct child of .gm-page and a .gm-page > .gm-topbar rule never matches: the page body
+   (same z-index, later in the DOM) painted over the open avatar menu. Lift the
+   child that holds the menu, only while it is open, so the top bar never sits
+   over page overlays such as the lightbox. */
+html body .gm-page > :has(user-menu[data-open]) { z-index: 30; }
 
 /* Hero: centred headline, one line of copy, the prompt box. */
 html body .gm-home-hero {
