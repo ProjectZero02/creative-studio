@@ -802,6 +802,8 @@ html body .gm-home-lede {
   text-wrap: balance;
 }
 html body .gm-home-prompt { width: 100%; max-width: 880px; margin-top: 10px; }
+/* Voice agent call button (components/live_agent). */
+html body .gm-home-call { margin-top: 18px; display: flex; flex-direction: column; align-items: center; text-align: center; }
 
 /* Sections */
 html body .gm-home-section { display: flex; flex-direction: column; gap: 18px; }

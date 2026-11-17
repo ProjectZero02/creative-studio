@@ -22,7 +22,8 @@ from components.capability_card.capability_card import capability_card
 from components.home_prompt.home_prompt import home_prompt
 from components.page_scaffold import page_frame, page_scaffold
 from common.i18n import route_key, t, tr
-from config.default import get_welcome_page_config
+from components.live_agent.live_agent import live_call_button
+from config.default import Default, get_welcome_page_config
 from state.state import AppState
 
 
@@ -220,6 +221,9 @@ def _hero(enabled_routes: set):
                     "Turn one idea into images, video, voice and music, or a finished short film.",
                 )
             )
+        if Default.LIVE_AGENT_ENABLED:
+            with me.box(classes="gm-home-call"):
+                live_call_button()
         if modes:
             with me.box(classes="gm-home-prompt"):
                 home_prompt(

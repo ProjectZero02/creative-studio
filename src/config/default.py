@@ -97,6 +97,22 @@ class Default:
     GEMINI_LOCATION: str = os.environ.get("GEMINI_LOCATION", "global")
     GEMINI_TTS_LOCATION: str = os.environ.get("GEMINI_TTS_LOCATION", "global")
     GA_MEASUREMENT_ID: str = os.environ.get("GA_MEASUREMENT_ID")
+    # Live voice agent (call button on every page; see docs/LIVE_AGENT_PLAN.md).
+    LIVE_AGENT_ENABLED: bool = (
+        os.environ.get("LIVE_AGENT_ENABLED", "true").lower() == "true"
+    )
+    LIVE_MODEL: str = os.environ.get("LIVE_MODEL", "gemini-3.8-live")
+    LIVE_LOCATION: str = os.environ.get("LIVE_LOCATION", "us-central1")
+    LIVE_VOICE: str = os.environ.get("LIVE_VOICE", "Aoede")
+    # NON_BLOCKING job tools with WHEN_IDLE results. Set false for Live models
+    # that only support blocking tools; results then arrive as text updates.
+    LIVE_ASYNC_TOOLS: bool = (
+        os.environ.get("LIVE_ASYNC_TOOLS", "true").lower() == "true"
+    )
+    # Use the scripted offline agent (typed commands, no model) instead of Live.
+    LIVE_AGENT_OFFLINE: bool = (
+        os.environ.get("LIVE_AGENT_OFFLINE", "false").lower() == "true"
+    )
     MODEL_ID: str = os.environ.get("MODEL_ID", "gemini-3.5-flash")
     INIT_VERTEX: bool = True
     GEMINI_IMAGE_GEN_MODEL: str = os.environ.get(
