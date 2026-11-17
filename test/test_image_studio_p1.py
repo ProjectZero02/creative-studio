@@ -64,3 +64,26 @@ def test_keep_requested_leaves_auto_alone():
     uris = ["a", "b", "c"]
     assert page._keep_requested(uris, ["1", "2", "3"], 0) == (uris, ["1", "2", "3"])
     assert page._keep_requested(uris, ["1", "2", "3"], 2) == (["b", "c"], ["2", "3"])
+
+
+def test_presets_are_cached_between_renders(monkeypatch):
+    loads = []
+
+    def fake_load(**_kwargs):
+        loads.append(1)
+        return []
+
+    monkeypatch.setattr(page.prompt_template_service, "load_templates", fake_load)
+    monkeypatch.setitem(page._presets_cache, "at", None)
+    clock = [1000.0]
+    monkeypatch.setattr(page.time, "monotonic", lambda: clock[0])
+
+    first = page.get_all_image_presets()
+    page.get_all_image_presets()
+    assert len(loads) == 1
+    # A caller changing its copy doesn't change the cache.
+    first["edit"].clear()
+    assert page.get_all_image_presets()["edit"]
+    clock[0] += page._PRESETS_TTL_SECONDS + 1
+    page.get_all_image_presets()
+    assert len(loads) == 2

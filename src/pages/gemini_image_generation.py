@@ -88,7 +88,25 @@ CHIP_STYLE = me.Style(
 )
 
 
+# get_all_image_presets runs on every render (Mesop re-renders on each yield),
+# and loading reads a JSON file and queries Firestore. Cache the merged list
+# briefly so templates an admin adds still show up within a minute.
+_PRESETS_TTL_SECONDS = 60.0
+_presets_cache: dict = {"at": None, "value": None}
+
+
 def get_all_image_presets():
+    """Static presets merged with dynamic templates, cached for a minute."""
+    now = time.monotonic()
+    at = _presets_cache["at"]
+    if at is None or now - at > _PRESETS_TTL_SECONDS:
+        _presets_cache["value"] = _load_all_image_presets()
+        _presets_cache["at"] = now
+    # Fresh lists per call, so a caller can't change the cached copy.
+    return {k: list(v) for k, v in _presets_cache["value"].items()}
+
+
+def _load_all_image_presets():
     """Loads dynamic templates and merges them with static presets."""
     # Start with a deep copy of the hardcoded presets
     # to ensure backward compatibility and avoid mutating the original
