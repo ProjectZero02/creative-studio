@@ -43,6 +43,8 @@ class PromptTemplate(BaseModel):
     attribution: str
     is_default: bool = False
     references: Optional[list[str]] = None
+    # "person" for presets that only make sense on a photo of people.
+    subject: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

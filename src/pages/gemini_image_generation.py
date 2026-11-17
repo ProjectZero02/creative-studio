@@ -71,9 +71,10 @@ from components.pill import pill
 from components.search_entry_point.search_entry_point import search_entry_point
 from components.snackbar import snackbar
 from components.svg_icon.svg_icon import svg_icon
-from config.banana_presets import IMAGE_ACTION_PRESETS
+from config.banana_presets import CORE_CREATIVE_KEYS, IMAGE_ACTION_PRESETS
 from config.gemini_image_models import get_gemini_image_model_config
 from config.rewriters import REWRITER_PROMPT
+from config.video_studio_models import VIDEO_STUDIO_PATH, omni_link_params
 from models.gemini import (
     generate_image_from_prompt_and_images,
     generate_transformation_prompts,
@@ -139,6 +140,41 @@ def _load_all_image_presets():
         analytics_logger.error(f"Error loading dynamic prompt templates: {e}")
 
     return all_presets
+
+
+def split_presets(all_presets: dict) -> tuple[dict, list]:
+    """Split presets into the inline core set and the "More styles" rest.
+
+    Edit actions and the short creative set (``CORE_CREATIVE_KEYS``) stay
+    inline. Everything else, and every preset tagged ``subject: person``,
+    goes behind the expander, because it rarely fits an arbitrary image.
+    """
+    core: dict = {}
+    more: list = []
+    for category, presets in all_presets.items():
+        for preset in presets:
+            is_person = preset.get("subject") == "person"
+            is_core = category == "edit" or (
+                category == "creative" and preset["key"] in CORE_CREATIVE_KEYS
+            )
+            if is_core and not is_person:
+                core.setdefault(category, []).append(preset)
+            else:
+                more.append(preset)
+    return core, more
+
+
+def _preset_chips(presets: list) -> None:
+    with me.box(classes="gm-preset-row"):
+        for preset in presets:
+            label = preset.get("label") or preset["key"]
+            me.button(
+                label,
+                on_click=on_image_action_click,
+                type="stroked",
+                key=preset["key"],
+                style=CHIP_STYLE,
+            )
 
 
 @me.stateclass
@@ -534,15 +570,19 @@ def _render_next_steps(state: "PageState"):
                     with me.box(classes="gm-btn-row"):
                         me.icon("edit")
                         me.text("Edit this image")
-                omni_button(gcs_uri=https_url_to_gcs_uri(state.selected_image_url))
-                veo_button(gcs_uri=https_url_to_gcs_uri(state.selected_image_url))
+                with me.content_button(
+                    on_click=on_make_video_click,
+                    type="stroked",
+                    key=https_url_to_gcs_uri(state.selected_image_url),
+                ):
+                    with me.box(classes="gm-btn-row"):
+                        me.icon("movie")
+                        me.text("Make a video")
 
         # Image presets
         if state.generated_image_urls or state.uploaded_image_gcs_uris:
-            all_presets = get_all_image_presets()
-            for category_name, presets in all_presets.items():
-                if not presets:
-                    continue
+            core, more = split_presets(get_all_image_presets())
+            for category_name, presets in core.items():
                 me.text(
                     f"{category_name.capitalize()} actions",
                     style=me.Style(
@@ -552,16 +592,15 @@ def _render_next_steps(state: "PageState"):
                         margin=me.Margin(top=8),
                     ),
                 )
-                with me.box(classes="gm-preset-row"):
-                    for preset in presets:
-                        label = preset.get("label") or preset["key"]
-                        me.button(
-                            label,
-                            on_click=on_image_action_click,
-                            type="stroked",
-                            key=preset["key"],
-                            style=CHIP_STYLE,
-                        )
+                _preset_chips(presets)
+            if more:
+                with me.box(style=me.Style(margin=me.Margin(top=12))):
+                    with me.expansion_panel(
+                        title=f"More styles ({len(more)})",
+                        icon="palette",
+                        key="more_styles",
+                    ):
+                        _preset_chips(more)
 
         # Suggest transformations button
         if (
@@ -719,15 +758,36 @@ def gemini_image_gen_page_content():
             on_close=on_close_image_lightbox,
         ):
             if state.lightbox_url:
-                me.image(
-                    src=state.lightbox_url,
-                    alt="Generated image, full size",
+                lightbox_prompt = _prompt_for_image(state, state.lightbox_url)
+                with me.box(
                     style=me.Style(
-                        width="100%",
-                        height="100%",
-                        object_fit="contain",
+                        display="flex",
+                        flex_direction="column",
+                        gap=12,
                     ),
-                )
+                ):
+                    # Leave room under the image for the full prompt.
+                    me.image(
+                        src=state.lightbox_url,
+                        alt="Generated image, full size",
+                        style=me.Style(
+                            width="100%",
+                            max_height="62vh" if lightbox_prompt else "80vh",
+                            object_fit="contain",
+                        ),
+                    )
+                    if lightbox_prompt:
+                        me.text(
+                            lightbox_prompt,
+                            style=me.Style(
+                                max_height="16vh",
+                                overflow_y="auto",
+                                white_space="pre-wrap",
+                                font_size=14,
+                                line_height="1.5",
+                                color=me.theme_var("on-surface-variant"),
+                            ),
+                        )
 
         snackbar(is_visible=state.show_snackbar, label=state.snackbar_message)
 
@@ -847,6 +907,15 @@ def on_open_latest(e: me.ClickEvent):
     """Open the latest image in the lightbox."""
     me.state(PageState).lightbox_url = e.key
     yield
+
+
+def _prompt_for_image(state: "PageState", url: str) -> str:
+    """The prompt an image was made from: its Recent entry, else the last run."""
+    if url in state.history_urls:
+        i = state.history_urls.index(url)
+        if i < len(state.history_prompts):
+            return state.history_prompts[i]
+    return state.last_prompt
 
 
 def on_close_image_lightbox(e: me.ClickEvent):  # pylint: disable=unused-argument
@@ -1132,6 +1201,26 @@ def on_image_action_click(e: me.ClickEvent):
     )
 
 
+def on_make_video_click(e: me.ClickEvent):
+    """Open Video Studio with this image as the first frame.
+
+    Uses Video Studio's default model, so there is one "Make a video" button
+    instead of separate "Omni" and "Veo" buttons that both went to /veo.
+    """
+    app_state = me.state(AppState)
+    log_ui_click(
+        element_id="image_studio_make_video",
+        page_name=app_state.current_page,
+        session_id=app_state.session_id,
+    )
+    if e.key:
+        me.navigate(
+            url=VIDEO_STUDIO_PATH,
+            query_params=omni_link_params(e.key.replace("gs://", "")),
+        )
+    yield
+
+
 def on_continue_click(e: me.ClickEvent):
     """Uses the currently selected generated image as the input for a subsequent generation."""
     state = me.state(PageState)
@@ -1296,11 +1385,18 @@ def _generate_and_save(
         else:
             state.generated_image_urls = [create_display_url(uri) for uri in gcs_uris]
             state.generated_image_captions = captions
+            state.selected_image_url = state.generated_image_urls[0]
+            state.generated_resolution = ""
+            state.c2pa_manifests = {}
+            # Show the image now; the resolution and C2PA reads and the
+            # library save below can take a few seconds.
+            state.is_generating = False
+            yield
+
             # Measure the actual resolution of the first generated image
             state.generated_resolution = get_image_resolution(gcs_uris[0])
 
             # Read C2PA Manifests for all images
-            state.c2pa_manifests = {}
             for i, uri in enumerate(gcs_uris):
                 manifest = c2pa_service.read_manifest(uri)
                 display_url = state.generated_image_urls[i]
@@ -1310,9 +1406,6 @@ def _generate_and_save(
                         analytics_logger.info(
                             "C2PA manifest found and loaded for image 0.",
                         )
-
-            if state.generated_image_urls:
-                state.selected_image_url = state.generated_image_urls[0]
 
             item = MediaItem(
                 gcs_uris=gcs_uris,
@@ -1334,9 +1427,11 @@ def _generate_and_save(
             state.previous_media_item_id = item.id
             _remember_images(state, shown_prompt or final_prompt)
             progress_done(state)
-            state.is_generating = False
+            # No "Automatically saved to library." snackbar: the progress
+            # card's Done step says so, and the snackbar slept 3 s here,
+            # which held the user's next click.
             state.generation_complete = True
-            yield from show_snackbar(state, "Automatically saved to library.")
+            yield
 
     except Exception as ex:
         execution_time = time.time() - start_time
@@ -1445,10 +1540,6 @@ def close_info_dialog(e: me.ClickEvent):
     state = me.state(PageState)
     state.info_dialog_open = False
     yield
-
-
-from components.omni_button.omni_button import omni_button
-from components.veo_button.veo_button import veo_button
 
 
 def on_load(e: me.LoadEvent):

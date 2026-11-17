@@ -127,7 +127,7 @@ class GmResultCard extends LitElement {
         <div class="audio-head">
           <span class="audio-icon" aria-hidden="true">${icon(P.wave)}</span>
           <figcaption>
-            ${this.prompt ? html`<span class="prompt">${this.prompt}</span>` : nothing}
+            ${this.prompt ? html`<span class="prompt" title=${this.prompt}>${this.prompt}</span>` : nothing}
             ${this.meta ? html`<span class="meta">${this.meta}</span>` : nothing}
           </figcaption>
         </div>
@@ -161,7 +161,7 @@ class GmResultCard extends LitElement {
         </div>
         ${this.prompt || this.meta
           ? html`<figcaption>
-              ${this.prompt ? html`<span class="prompt">${this.prompt}</span>` : nothing}
+              ${this.prompt ? html`<span class="prompt" title=${this.prompt}>${this.prompt}</span>` : nothing}
               ${this.meta ? html`<span class="meta">${this.meta}</span>` : nothing}
             </figcaption>`
           : nothing}
