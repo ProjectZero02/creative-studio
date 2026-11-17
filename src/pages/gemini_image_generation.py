@@ -19,10 +19,13 @@ from dataclasses import field
 
 import mesop as me
 
+from common import prompt_settings
 from common.analytics import analytics_logger, log_ui_click
+from common.i18n import t, tr
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, placeholder_image
 from common.prompt_prefill import prefill_prompt
+from common.prompt_settings import SettingLimits
 from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
 from common.utils import create_display_url, https_url_to_gcs_uri
@@ -174,6 +177,10 @@ class PageState:
     history_prompts: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
     history_meta: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
     history_aspects: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call
+    # Settings read from the typed prompt (common/prompt_settings.py)
+    settings_notice: str = ""
+    settings_undo_json: str = ""
+    settings_ignored_json: str = ""
 
 
 on_aspect_ratio_change = get_on_aspect_ratio_change(PageState)
@@ -617,6 +624,10 @@ def gemini_image_gen_page_content():
                 textarea_key=f"img_prompt_{state.prompt_key}",
                 render_top=_render_attachments,
                 on_clear=on_clear_click,
+                notice=state.settings_notice,
+                on_notice_undo=on_image_settings_undo
+                if state.settings_undo_json
+                else None,
             ):
                 _image_chips(state, model_config)
 
@@ -869,7 +880,7 @@ def _remember_images(state: "PageState", prompt: str):
         state.history_aspects.insert(0, state.aspect_ratio)
 
 
-def _mock_image_run(final_prompt: str):
+def _mock_image_run(final_prompt: str, shown_prompt: str | None = None):
     """Dev-only: walk the stages with fake waits and placeholder pictures."""
     state = me.state(PageState)
     start_time = time.time()
@@ -890,7 +901,7 @@ def _mock_image_run(final_prompt: str):
     state.generated_resolution = state.image_size
     state.selected_image_url = state.generated_image_urls[0]
     state.generation_time = time.time() - start_time
-    _remember_images(state, final_prompt)
+    _remember_images(state, shown_prompt or final_prompt)
     progress_done(state)
     yield
 
@@ -974,6 +985,9 @@ def on_clear_click(e: me.ClickEvent):
     state.num_images_to_generate = 0
     state.suggested_transformations = []
     state.prompt_key += 1  # redraw the prompt box empty
+    state.settings_notice = ""
+    state.settings_undo_json = ""
+    state.settings_ignored_json = ""
     progress_clear(state)
     yield
 
@@ -1145,8 +1159,16 @@ def _get_appended_prompt(base_prompt: str, num_images: int) -> str:
     return f"{base_prompt}. {suffix}"
 
 
-def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
-    """Core logic to generate images and save results to Firestore."""
+def _generate_and_save(
+    base_prompt: str,
+    input_gcs_uris: list[str],
+    shown_prompt: str | None = None,
+):
+    """Core logic to generate images and save results to Firestore.
+
+    `shown_prompt` is what the Recent grid shows (the text as typed); it
+    defaults to the prompt sent to the model.
+    """
     state = me.state(PageState)
     app_state = me.state(AppState)
 
@@ -1166,7 +1188,7 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
     start_time = time.time()
     try:
         if mock_enabled():
-            yield from _mock_image_run(final_prompt)
+            yield from _mock_image_run(final_prompt, shown_prompt)
             return
         progress_step(state, 1)
         yield
@@ -1260,7 +1282,7 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
             )
             add_media_item_to_firestore(item)
             state.previous_media_item_id = item.id
-            _remember_images(state, final_prompt)
+            _remember_images(state, shown_prompt or final_prompt)
             progress_done(state)
             state.is_generating = False
             state.generation_complete = True
@@ -1301,10 +1323,64 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
 def generate_images(e: me.ClickEvent):
     """Event handler for the main 'Generate Images' button."""
     state = me.state(PageState)
+    prompt = _apply_typed_settings(state)
     yield from _generate_and_save(
-        base_prompt=state.prompt,
+        base_prompt=prompt,
         input_gcs_uris=state.uploaded_image_gcs_uris,
+        shown_prompt=state.prompt,
     )
+
+
+def _set_image_settings(state: PageState, values: dict):
+    """Write aspect, size and count values (by prompt_settings kind) to state."""
+    if "aspect" in values:
+        state.aspect_ratio = values["aspect"]
+    if "image_size" in values:
+        state.image_size = values["image_size"]
+    if "count" in values:
+        state.num_images_to_generate = int(values["count"])
+
+
+def _apply_typed_settings(state: PageState) -> str:
+    """Use "16:9", "4K" or "2 images" typed in the prompt; return the prompt to send.
+
+    The text wins over the chips when the model supports the value; the
+    notice under the box says what changed and offers Undo.
+    """
+    cfg = get_gemini_image_model_config(state.selected_model)
+    state.settings_notice = ""
+    state.settings_undo_json = ""
+    if not cfg or not state.prompt:
+        return state.prompt
+    run = prompt_settings.apply(
+        state.prompt,
+        prompt_settings.IMAGE_KINDS,
+        SettingLimits.from_image_config(cfg),
+        current={
+            "aspect": state.aspect_ratio,
+            "image_size": state.image_size,
+            "count": max(1, state.num_images_to_generate),
+        },
+        ignored=prompt_settings.ignored_list(state.settings_ignored_json),
+        tr=tr,
+    )
+    _set_image_settings(state, run.changes)
+    state.settings_notice = run.notice
+    state.settings_undo_json = run.undo_json
+    return run.prompt
+
+
+def on_image_settings_undo(e: me.ClickEvent):  # pylint: disable=unused-argument
+    """Undo on the notice: put the chips back and stop applying those words."""
+    state = me.state(PageState)
+    previous, phrases = prompt_settings.read_undo(state.settings_undo_json)
+    _set_image_settings(state, previous)
+    state.settings_ignored_json = prompt_settings.add_ignored(
+        state.settings_ignored_json, phrases
+    )
+    state.settings_undo_json = ""
+    state.settings_notice = t("settings.undone")
+    yield
 
 
 def open_info_dialog(e: me.ClickEvent):
