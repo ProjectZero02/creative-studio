@@ -22,7 +22,6 @@ from components.capability_card.capability_card import capability_card
 from components.home_prompt.home_prompt import home_prompt
 from components.page_scaffold import page_frame, page_scaffold
 from common.i18n import route_key, t, tr
-from components.live_agent.live_agent import live_call_button
 from config.default import Default, get_welcome_page_config
 from state.state import AppState
 
@@ -210,8 +209,6 @@ def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
 def _hero(enabled_routes: set):
     modes = _localized_modes([m for m in PROMPT_MODES if m["route"] in enabled_routes])
     with me.box(classes="gm-home-hero"):
-        with me.box(classes="gm-home-eyebrow"):
-            me.text(t("home.eyebrow", "Google Cloud · Vertex AI"))
         with me.box(classes="gm-title gm-home-title"):
             me.markdown("# " + tr("home.title", "Google's creative AI, in one studio"))
         with me.box(classes="gm-home-lede"):
@@ -221,9 +218,6 @@ def _hero(enabled_routes: set):
                     "Turn one idea into images, video, voice and music, or a finished short film.",
                 )
             )
-        if Default.LIVE_AGENT_ENABLED:
-            with me.box(classes="gm-home-call"):
-                live_call_button()
         if modes:
             with me.box(classes="gm-home-prompt"):
                 home_prompt(
@@ -233,7 +227,9 @@ def _hero(enabled_routes: set):
                         "what": t("home.prompt.what", "What to make"),
                         "describe": t("home.prompt.describe", "Describe your idea"),
                         "try": t("home.prompt.try", "Try:"),
+                        "talk": t("live.talk", "Talk to the studio"),
                     },
+                    live=Default.LIVE_AGENT_ENABLED,
                     on_submit=on_prompt_submit,
                 )
 

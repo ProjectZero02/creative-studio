@@ -33,6 +33,7 @@ class HomePrompt extends LitElement {
     modes: { type: Array }, // [{id, label, action, icon, placeholder, examples: []}]
     strings: { type: Object }, // {what, describe, try} in the page language
     submitEvent: { type: String },
+    live: { type: Boolean, reflect: true }, // show the "Talk to the studio" voice button
     _mode: { state: true },
     _text: { state: true },
   };
@@ -42,8 +43,24 @@ class HomePrompt extends LitElement {
     this.modes = [];
     this.strings = {};
     this.submitEvent = '';
+    this.live = false;
     this._mode = '';
     this._text = '';
+  }
+
+  // The floating "Talk" launcher hides while this box shows its own button.
+  connectedCallback() {
+    super.connectedCallback();
+    setTimeout(() => window.gmLive && window.gmLive.refreshLauncher(), 50);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    setTimeout(() => window.gmLive && window.gmLive.refreshLauncher(), 50);
+  }
+
+  _talk() {
+    if (window.gmLive) window.gmLive.toggle();
   }
 
   get _current() {
@@ -200,26 +217,50 @@ class HomePrompt extends LitElement {
     textarea::placeholder { color: var(--sys-on-surface-variant, #5f6673); opacity: 1; }
     textarea:focus { outline: none; }
     textarea:focus-visible { outline: 2px solid var(--gm-focus, #1a5fd8); outline-offset: 0; }
+    .actions {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .talk {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 44px;
+      padding: 0 18px 0 14px;
+      border: 1px solid var(--gm-glass-border, rgba(255, 255, 255, 0.7));
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      white-space: nowrap;
+      color: var(--sys-on-surface, #15171c);
+      background: var(--gm-glass-well, rgba(15, 20, 40, 0.06));
+      transition: background 160ms ease;
+    }
+    .talk:hover { background: var(--gm-glass-chip, #fff); }
+    .talk svg { width: 20px; height: 20px; fill: currentColor; flex-shrink: 0; }
+    .talk:focus-visible { outline: 2px solid var(--gm-focus, #1a5fd8); outline-offset: 2px; }
+    /* Send: a round icon button, the arrow centred. */
     .go {
       flex-shrink: 0;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      height: 52px;
-      padding: 0 22px 0 18px;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      padding: 0;
       border: 0;
-      border-radius: 999px;
+      border-radius: 50%;
       cursor: pointer;
-      font: inherit;
-      font-size: 15px;
-      font-weight: 600;
       color: #fff;
       background: linear-gradient(135deg, #1a5fd8 0%, #6a3de8 100%);
       box-shadow: 0 6px 20px rgba(60, 70, 220, 0.35);
       transition: transform 160ms ease, box-shadow 160ms ease;
     }
-    /* Right-to-left: the arrow points the reading way. */
-    .go:dir(rtl) .ico { transform: scaleX(-1); }
+    .go .ico { font-size: 24px; width: 24px; height: 24px; display: block; }
     .go:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(60, 70, 220, 0.42); }
 
     .examples {
@@ -266,13 +307,13 @@ class HomePrompt extends LitElement {
       .mode .lbl { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
       .row { flex-direction: column; align-items: stretch; padding: 4px; }
       textarea { font-size: 16px; padding: 12px 8px 6px; }
-      .go { justify-content: center; height: 48px; }
+      .actions { justify-content: flex-end; }
     }
     @media (max-width: 420px) {
       .mode .ico { display: none; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .mode, .go, .ex { transition: none; }
+      .mode, .go, .ex, .talk { transition: none; }
       .go:hover, .ex:hover { transform: none; }
     }
   `;
@@ -280,6 +321,7 @@ class HomePrompt extends LitElement {
   render() {
     const cur = this._current;
     const examples = cur.examples || [];
+    const sendLabel = cur.action || 'Create ' + (cur.label || '').toLowerCase();
     return html`
       <div class="panel">
         <div class="modes" role="radiogroup" aria-label=${this.strings.what || 'What to make'}>
@@ -308,10 +350,17 @@ class HomePrompt extends LitElement {
             @input=${this._onInput}
             @keydown=${this._onKey}
           ></textarea>
-          <button type="button" class="go" @click=${this._submit}>
-            <span class="ico" aria-hidden="true">arrow_forward</span>
-            ${cur.action || 'Create ' + (cur.label || '').toLowerCase()}
-          </button>
+          <div class="actions">
+            ${this.live
+              ? html`<button type="button" class="talk" @click=${this._talk}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
+                  ${this.strings.talk || 'Talk to the studio'}
+                </button>`
+              : ''}
+            <button type="button" class="go" title=${sendLabel} aria-label=${sendLabel} @click=${this._submit}>
+              <span class="ico" aria-hidden="true">arrow_upward</span>
+            </button>
+          </div>
         </div>
       </div>
       ${examples.length

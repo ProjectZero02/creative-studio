@@ -23,13 +23,17 @@ def home_prompt(
     *,
     modes: list[dict],
     strings: dict | None = None,
+    live: bool = False,
     on_submit: typing.Callable[[me.WebEvent], None] | None = None,
     key: str | None = None,
 ):
-    """One prompt box with a mode switch. Sends {prompt, mode} on submit."""
+    """One prompt box with a mode switch. Sends {prompt, mode} on submit.
+
+    `live` adds the "Talk to the studio" voice button left of send.
+    """
     return me.insert_web_component(
         key=key,
         name="home-prompt",
-        properties={"modes": modes, "strings": strings or {}},
+        properties={"modes": modes, "strings": strings or {}, "live": live},
         events={"submitEvent": on_submit},
     )
