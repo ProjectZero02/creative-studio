@@ -729,15 +729,36 @@ def gemini_image_gen_page_content():
             on_close=on_close_image_lightbox,
         ):
             if state.lightbox_url:
-                me.image(
-                    src=state.lightbox_url,
-                    alt="Generated image, full size",
+                lightbox_prompt = _prompt_for_image(state, state.lightbox_url)
+                with me.box(
                     style=me.Style(
-                        width="100%",
-                        height="100%",
-                        object_fit="contain",
+                        display="flex",
+                        flex_direction="column",
+                        gap=12,
                     ),
-                )
+                ):
+                    # Leave room under the image for the full prompt.
+                    me.image(
+                        src=state.lightbox_url,
+                        alt="Generated image, full size",
+                        style=me.Style(
+                            width="100%",
+                            max_height="62vh" if lightbox_prompt else "80vh",
+                            object_fit="contain",
+                        ),
+                    )
+                    if lightbox_prompt:
+                        me.text(
+                            lightbox_prompt,
+                            style=me.Style(
+                                max_height="16vh",
+                                overflow_y="auto",
+                                white_space="pre-wrap",
+                                font_size=14,
+                                line_height="1.5",
+                                color=me.theme_var("on-surface-variant"),
+                            ),
+                        )
 
         snackbar(is_visible=state.show_snackbar, label=state.snackbar_message)
 
@@ -857,6 +878,15 @@ def on_open_latest(e: me.ClickEvent):
     """Open the latest image in the lightbox."""
     me.state(PageState).lightbox_url = e.key
     yield
+
+
+def _prompt_for_image(state: "PageState", url: str) -> str:
+    """The prompt an image was made from: its Recent entry, else the last run."""
+    if url in state.history_urls:
+        i = state.history_urls.index(url)
+        if i < len(state.history_prompts):
+            return state.history_prompts[i]
+    return state.last_prompt
 
 
 def on_close_image_lightbox(e: me.ClickEvent):  # pylint: disable=unused-argument
