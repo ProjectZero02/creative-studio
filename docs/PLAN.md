@@ -26,7 +26,7 @@
    - Tune the Dockerfile: smaller layers, `uv sync --frozen --no-dev`, and cached dependency layers.
 5. **Cloud Run, ready to deploy** (`deploy/quickstart/`). One script for Cloud Shell. It turns on the APIs, creates the bucket, the Firestore database and a service account, then runs `gcloud run deploy --source .` with session affinity, CPU boost, `--timeout=3600`, scale-to-zero by default, and an optional IAP flag. It ships with a README. Nothing is deployed in this session.
 6. **Audit.** Website Maker `audit_page` on home, a generation page (Imagen/Veo) and the library, at 1440 and 390 in light and dark. Fix the top items, re-audit, and record before → after counts below.
-7. **Ship.** One commit per logical change, pushed to `ProjectZero02/genmedia-studio`.
+7. **Ship.** One commit per logical change, pushed to `ProjectZero02/creative-studio`.
 
 ## Phase 2: features that sell (researched 2026-11-15)
 

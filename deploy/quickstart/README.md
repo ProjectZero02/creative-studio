@@ -12,8 +12,8 @@ It is safe to re-run; each step checks before it creates anything.
 ## Deploy
 
 ```bash
-git clone https://github.com/ProjectZero02/genmedia-studio.git
-cd genmedia-studio
+git clone https://github.com/ProjectZero02/creative-studio.git
+cd creative-studio
 bash deploy/quickstart/deploy.sh --project YOUR_PROJECT --admin-email you@company.com
 ```
 

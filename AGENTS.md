@@ -231,9 +231,9 @@ Everything this project needs to sign in or connect to comes from Core (https://
 - Deploy secrets: pipe, never paste, e.g. `core get NAME | gcloud secrets create NAME --data-file=-`.
 - AI in the app: this app uses Vertex AI through Google Cloud credentials (Application Default Credentials / the Cloud Run service account), never API keys in code.
 - GitHub: `core use github`, then `core git-setup` once. Missing permission (e.g. workflows): `core use github --permission workflows:write --reason "what GitHub said"`; don't change GitHub App or repo settings yourself.
-- Library: when this app gets a live link or changes status, run `core app set --url … --repo ProjectZero02/genmedia-studio --status live|building|idea|paused`.
+- Library: when this app gets a live link or changes status, run `core app set --url … --repo ProjectZero02/creative-studio --status live|building|idea|paused`.
 
-## This fork (ProjectZero02/genmedia-studio)
+## This fork (ProjectZero02/creative-studio)
 - Public fork of `GoogleCloudPlatform/genmedia-creative-studio` (remote `upstream`), for client demos on Cloud Run. Keep the Apache-2.0 LICENSE and copyright headers.
 - Layout: the core app lives in `src/` (all paths in this file such as `common/`, `pages/`, `config/default.py` are under `src/`). `src/main.py` chdirs to `src/` so relative `config/` and `assets/` paths work; tests get the same via `test/conftest.py`. Run locally with `uv run src/main.py`. Build files are `deploy/cloudbuild.yaml` and `deploy/scripts/build.sh`; env docs are `docs/environment_variables.md`. When merging upstream, git follows the renames; check `git status` for new upstream files left outside `src/` and move them in.
 - Goal: nicer look and feel and faster pages without breaking upstream features, so upstream fixes can still be merged (`git fetch upstream && git merge upstream/main`). Prefer changes in shared places (theme layer, scaffold, nav, home) over editing every page.

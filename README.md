@@ -56,8 +56,8 @@ Industry demos: **Fashion** try-on, **Product 360** turntables, **Interiors** fr
 You need [`uv`](https://docs.astral.sh/uv/). Mock mode needs no Google Cloud account: it returns placeholder media so you can click through every page for free.
 
 ```bash
-git clone https://github.com/ProjectZero02/genmedia-studio.git
-cd genmedia-studio
+git clone https://github.com/ProjectZero02/creative-studio.git
+cd creative-studio
 uv sync
 APP_ENV=local GENMEDIA_MOCK_GENERATION=true STORY_STUDIO_MOCK=true uv run src/main.py
 ```
