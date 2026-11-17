@@ -61,6 +61,7 @@ class VoiceState:
     show_style_notes: bool = False
 
     is_generating: bool = False
+    is_enhancing: bool = False
 
     # Results this session (newest first)
     history_urls: list[str] = field(default_factory=list)  # pylint: disable=invalid-field-call

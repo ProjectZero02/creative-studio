@@ -71,6 +71,17 @@ Rewrite the following prompt:
 
 Your response should be a single, rewritten prompt and nothing else.
 """
+SPEECH_REWRITER = """You are a voice director and script editor. Rewrite the script below so it sounds natural and engaging when read aloud by a text-to-speech voice.
+
+Rules:
+- Keep the same language, meaning, facts and names. Do not add new claims.
+- Keep about the same length (at most 20% longer).
+- Use short, spoken sentences and punctuation that guides the pauses.
+- Keep any speaker labels at the start of a line (like "Host:") and any tags in square brackets (like [laughing]) exactly as they are.
+- Return only the rewritten script, with no title, notes or quotes.
+
+Script:
+"""
 LYRICS_GENERATOR = """
 You are a professional, highly creative lyricist. Based on the provided prompt
 and any seed ideas, write a short, punchy song structure (Verse, Chorus, etc).

@@ -268,3 +268,40 @@ def test_mock_audio_is_a_short_wav(monkeypatch):
     monkeypatch.setenv("GENMEDIA_MOCK_GENERATION", "true")
     monkeypatch.setenv("APP_ENV", "production")
     assert not mock_generation.mock_enabled()
+
+
+def test_enhance_rewrites_the_script_with_gemini(monkeypatch):
+    from pages import voice as voice_page
+    from state.voice_state import VoiceState
+
+    state = VoiceState()
+    state.text = "hello there friends"
+    monkeypatch.setattr(voice_page.me, "state", lambda _cls: state)
+    monkeypatch.setattr(voice_page, "mock_enabled", lambda: False)
+    calls = []
+
+    def fake_rewriter(text, prompt):
+        calls.append((text, prompt))
+        return "  Hello there, friends!  "
+
+    monkeypatch.setattr(voice_page, "rewriter", fake_rewriter)
+    list(voice_page.on_click_enhance(None))
+    assert calls == [("hello there friends", voice_page.SPEECH_REWRITER)]
+    assert state.text == "Hello there, friends!"
+    assert state.text_key == 1
+    assert not state.is_enhancing
+
+
+def test_enhance_with_an_empty_script_explains_instead(monkeypatch):
+    from pages import voice as voice_page
+    from state.voice_state import VoiceState
+
+    state = VoiceState()
+    state.text = "   "
+    monkeypatch.setattr(voice_page.me, "state", lambda _cls: state)
+    monkeypatch.setattr(
+        voice_page, "rewriter", lambda *a: pytest.fail("rewriter must not run")
+    )
+    list(voice_page.on_click_enhance(None))
+    assert state.progress_status == "error"
+    assert "Write a script first" in state.progress_error

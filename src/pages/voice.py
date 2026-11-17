@@ -52,6 +52,7 @@ from components.result_grid.result_card import (
     result_card,
     result_grid,
 )
+from config.rewriters import SPEECH_REWRITER
 from config.voice import (
     DEFAULT_DIALOGUE,
     DEFAULT_LANGUAGE,
@@ -67,6 +68,7 @@ from config.voice import (
     is_known_engine,
     languages_for,
 )
+from models.gemini import rewriter
 from models.voice import VoiceRequest, describe, synthesize_voice, validate
 from state.state import AppState
 from state.voice_state import VoiceState
@@ -130,6 +132,9 @@ def voice_content():
                 on_submit=on_text_enter,
                 on_click_send=on_click_generate,
                 busy=state.is_generating,
+                on_enhance=on_click_enhance,
+                enhance_label="Enhance script",
+                enhancing=state.is_enhancing,
                 send_label="Generate speech",
                 textarea_key=f"voice_text_{state.text_key}",
                 hint=(
@@ -722,6 +727,37 @@ def on_result_action(e: me.WebEvent):
         if i < len(state.history_texts):
             state.text = state.history_texts[i]
             state.text_key += 1
+    yield
+
+
+def on_click_enhance(e: me.ClickEvent):  # pylint: disable=unused-argument
+    """Rewrite the script with Gemini so it reads well aloud (same as Image Studio)."""
+    state = me.state(VoiceState)
+    if state.is_generating or state.is_enhancing:
+        yield
+        return
+    if not state.text.strip():
+        progress_start(state, ["Enhancing script"])
+        progress_fail(state, "Write a script first, then enhance it.")
+        yield
+        return
+    progress_clear(state)
+    state.is_enhancing = True
+    yield
+    try:
+        if mock_enabled():
+            time.sleep(0.6)
+            rewritten = state.text
+        else:
+            rewritten = rewriter(state.text, SPEECH_REWRITER).strip()
+        if rewritten:
+            state.text = rewritten
+            state.text_key += 1
+    except Exception as ex:  # pylint: disable=broad-except
+        logger.error(f"Voice script enhancement failed: {ex}")
+        progress_start(state, ["Enhancing script"])
+        progress_fail(state, f"Couldn't enhance the script. {friendly_error(ex)}")
+    state.is_enhancing = False
     yield
 
 
