@@ -1129,6 +1129,30 @@ def show_snackbar(state: PageState, message: str):
     # The snackbar will be hidden on the next interaction.
 
 
+def _requested_count(state: PageState) -> int:
+    """Images this run asks for: 1 when the model makes one at a time.
+
+    Otherwise the count chip's value (0 means "Auto").
+    """
+    cfg = get_gemini_image_model_config(state.selected_model)
+    if cfg and cfg.max_output_images <= 1:
+        return 1
+    return state.num_images_to_generate
+
+
+def _keep_requested(
+    gcs_uris: list[str], captions: list[str], requested: int
+) -> tuple[list[str], list[str]]:
+    """Drop images beyond the requested count, keeping the last (final) ones."""
+    if not requested or len(gcs_uris) <= requested:
+        return gcs_uris, captions
+    analytics_logger.warning(
+        f"Model returned {len(gcs_uris)} images for {requested} requested; "
+        f"keeping the last {requested}."
+    )
+    return gcs_uris[-requested:], list(captions)[-requested:]
+
+
 def _get_appended_prompt(base_prompt: str, num_images: int) -> str:
     """Appends the number of images prompt to the base prompt."""
     if num_images <= 1:
@@ -1153,6 +1177,7 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
     # Clear previous suggestions before generating new ones
     state.suggested_transformations = []
 
+    state.num_images_to_generate = _requested_count(state)
     final_prompt = _get_appended_prompt(base_prompt, state.num_images_to_generate)
     # final_prompt = base_prompt
 
@@ -1191,6 +1216,9 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
 
         progress_step(state, 3)
         yield
+        gcs_uris, captions = _keep_requested(
+            gcs_uris, captions, state.num_images_to_generate
+        )
         state.generation_time = execution_time
         state.grounding_info = json.dumps(grounding_info) if grounding_info else ""
         state.thoughts = all_thoughts[0] if all_thoughts else ""
