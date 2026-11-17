@@ -438,29 +438,52 @@ html body .gm-title p { margin: 0; }
 }
 
 /* ---------- Studio pages (Image Studio, Video Studio): composer layout ---------- */
-/* Hero: icon above a centred title and one-line purpose. */
+/* Hero: icon to the left of a centred title, then the one-line purpose with
+   the info button right after it (docs/COMPOSER_FORMAT_PLAN.md). */
 html body .gm-header-hero {
-  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 10px;
+  gap: 8px;
   margin: 8px auto 24px;
   max-width: 760px;
-  padding: 0 48px;
+}
+html body .gm-hero-titlerow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  max-width: 100%;
+}
+html body .gm-hero-titlerow .gm-title-studio { min-width: 0; }
+html body .gm-hero-titlerow .gm-title-studio h1 { margin: 0; }
+html body .gm-hero-purpose-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  max-width: 100%;
 }
 html body .gm-hero-icon {
-  width: 52px; height: 52px; border-radius: 16px;
+  flex: none;
+  width: 48px; height: 48px; border-radius: 14px;
   display: flex; align-items: center; justify-content: center;
   background: var(--sys-primary-container);
   color: var(--sys-on-primary-container);
 }
+/* Centre whatever the icon is (Material icon or the 22px svg_icon box). */
+html body .gm-hero-icon > :not([style*="display: none"]),
 html body .gm-hero-icon .mat-icon,
-html body .gm-hero-icon svg { width: 26px !important; height: 26px !important; font-size: 26px !important; }
+html body .gm-hero-icon svg-icon,
+html body .gm-hero-icon svg {
+  display: flex !important; align-items: center; justify-content: center;
+  width: 26px !important; height: 26px !important; font-size: 26px !important;
+  line-height: 26px !important; margin: 0 !important;
+}
 html body .gm-title-studio h1 { font-size: clamp(28px, 3vw, 38px); line-height: 1.15; letter-spacing: -0.025em; }
 html body .gm-hero-purpose { font-size: 16px; line-height: 1.5; color: var(--sys-on-surface-variant); max-width: 560px; }
-html body .gm-hero-info { position: absolute; top: 0; right: 0; }
+html body .gm-hero-info { flex: none; display: flex; align-items: center; }
 
 html body .gm-studio {
   width: 100%;
@@ -509,11 +532,76 @@ html body .gm-composer-tools {
 }
 html body .gm-composer-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 html body .gm-composer-attach { display: flex; align-items: center; gap: 2px; }
+html body .gm-composer-add { flex: none; display: flex; align-items: center; align-self: flex-end; }
+html body .gm-composer-mic { display: flex; align-items: center; }
+/* "+" add menu: opens while focus is inside it (no page state needed). The
+   popover hides with visibility, not display, so the library dialog that
+   lives inside it can still show. */
+html body .gm-add-menu { position: relative; display: flex; }
+html body .gm-add-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  min-width: 232px;
+  padding: 6px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--sys-surface-container-lowest);
+  border: 1px solid var(--gm-border);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.22);
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity var(--gm-fast) var(--gm-ease), transform var(--gm-fast) var(--gm-ease), visibility 0s linear var(--gm-fast);
+}
+html body .gm-add-menu:not(.gm-disabled):focus-within .gm-add-pop {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--gm-fast) var(--gm-ease), transform var(--gm-fast) var(--gm-ease);
+}
+/* While the library dialog (a position: fixed overlay) is open, keep its menu
+   open and drop the composer blur: backdrop-filter would make the card the
+   containing block and trap the dialog inside it. */
+html body .gm-add-menu:has(.gm-add-pop [style*="position: fixed"][style*="display: block"]) .gm-add-pop {
+  visibility: visible; opacity: 1; transform: none;
+}
+html body .gm-composer:has([style*="position: fixed"][style*="display: block"]) {
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}
+html body .gm-add-pop [style*="position: fixed"] { visibility: visible; }
+html body .gm-add-item,
+html body .gm-add-item > *,
+html body .gm-add-item .mat-mdc-button-base,
+html body .gm-add-item button { width: 100%; }
+html body .gm-add-item .mat-mdc-button-base {
+  justify-content: flex-start !important;
+  height: 44px !important;
+  padding: 0 14px !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  color: var(--sys-on-surface) !important;
+  font-weight: 500;
+}
+html body .gm-add-item .mat-mdc-button-base:hover:not(:disabled) { background: var(--gm-hover) !important; }
+html body .gm-add-item .mdc-button__label { width: 100%; }
+html body .gm-add-item .mat-icon { color: var(--sys-on-surface-variant); }
+html body .gm-add-trigger .mat-icon { font-size: 26px !important; width: 26px !important; height: 26px !important; }
 html body .gm-composer-btn .mat-mdc-icon-button,
 html body .gm-composer-btn .mdc-icon-button {
-  width: 40px !important; height: 40px !important; padding: 8px !important;
+  width: 40px !important; height: 40px !important; padding: 0 !important;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--sys-on-surface-variant);
+}
+/* Icons sit dead centre in every round composer button. */
+html body .gm-composer-btn .mat-mdc-icon-button .mat-icon,
+html body .gm-empty-icon .mat-icon {
+  display: flex !important; align-items: center; justify-content: center;
+  width: 24px !important; height: 24px !important; font-size: 24px !important;
+  line-height: 24px !important; margin: 0 !important;
 }
 html body .gm-composer-btn .mat-mdc-icon-button:hover:not(:disabled) { background: var(--gm-hover); color: var(--sys-on-surface); }
 html body .gm-composer-send .mat-mdc-icon-button,
@@ -645,7 +733,7 @@ html body .gm-empty {
   display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px;
   padding: 40px 24px;
   border-radius: 20px;
-  border: 1px dashed var(--sys-outline-variant);
+  border: 0;
   color: var(--sys-on-surface);
 }
 html body .gm-empty-icon {
@@ -655,7 +743,9 @@ html body .gm-empty-icon {
 }
 
 @media (max-width: 600px) {
-  html body .gm-header-hero { padding: 0 44px; margin-bottom: 18px; }
+  html body .gm-header-hero { margin-bottom: 18px; }
+  html body .gm-hero-titlerow { gap: 10px; }
+  html body .gm-hero-icon { width: 40px; height: 40px; border-radius: 12px; }
   html body .gm-hero-purpose { font-size: 15px; }
   html body .gm-composer { padding: 14px 12px 10px 14px; border-radius: 20px; }
   html body .gm-composer-tools { flex-basis: 100%; }
@@ -784,17 +874,6 @@ html body .gm-home-hero {
   gap: 18px;
   padding: clamp(24px, 4vw, 72px) 0 0;
 }
-html body .gm-home-eyebrow {
-  display: inline-flex;
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--sys-primary);
-  background: var(--gm-glass-solid);
-  border: 1px solid var(--gm-glass-border);
-}
 html body .gm-home-title h1 {
   margin: 0;
   max-width: 14em;
@@ -819,8 +898,6 @@ html body .gm-home-lede {
   text-wrap: balance;
 }
 html body .gm-home-prompt { width: 100%; max-width: 880px; margin-top: 10px; }
-/* Voice agent call button (components/live_agent). */
-html body .gm-home-call { margin-top: 18px; display: flex; flex-direction: column; align-items: center; text-align: center; }
 
 /* Sections */
 html body .gm-home-section { display: flex; flex-direction: column; gap: 18px; }
@@ -891,7 +968,7 @@ html body .gm-composer.gm-busy { box-shadow: var(--gm-glass-shadow); }
 html body .gm-composer:focus-within { border-color: color-mix(in srgb, var(--sys-primary) 45%, var(--gm-glass-border)); }
 html body .gm-empty {
   background: var(--gm-glass-well);
-  border: 1px dashed color-mix(in srgb, var(--sys-outline-variant) 70%, transparent);
+  border: 0;
 }
 html body .gm-segmented .mat-button-toggle-group {
   background: var(--gm-glass-fill);
@@ -935,6 +1012,9 @@ html body .gm-composer-actions { flex: none; }
 @media (max-width: 600px) {
   html body .gm-composer-bar { flex-wrap: wrap; }
   html body .gm-composer-tools { flex: 1 1 100%; }
+  /* Phone: chips on top; "+" bottom left on the same row as mic and send. */
+  html body .gm-composer-tools { order: -1; }
+  html body .gm-composer-add { align-self: center; }
 }
 
 /* Demo pages (Fashion, Product 360, Interiors, Brand kit) and Story Studio use

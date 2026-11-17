@@ -186,11 +186,7 @@ def voice_content():
                             on_action=on_result_action,
                         )
             elif not state.is_generating and state.progress_status != "error":
-                empty_results(
-                    "graphic_eq",
-                    "Your audio will show up here",
-                    "Pick a voice and language, write a script, then press Enter.",
-                )
+                empty_results("graphic_eq", "Your audio will show up here")
 
     info = _ABOUT.get("chirp-3hd" if chirp else "gemini-tts")
     with dialog(is_open=state.info_dialog_open):  # pylint: disable=not-context-manager

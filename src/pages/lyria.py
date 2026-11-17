@@ -27,7 +27,11 @@ from common.prompt_prefill import prefill_prompt
 from common.prompt_settings import SettingLimits
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
-from components.composer.composer import composer, composer_attachment
+from components.composer.composer import (
+    composer,
+    composer_add_menu,
+    composer_attachment,
+)
 from components.content_credentials.content_credentials import (
     content_credentials_viewer,
 )
@@ -43,7 +47,6 @@ from components.generation_progress.generation_progress import (
 )
 from components.header import header
 from components.library.events import LibrarySelectionChangeEvent
-from components.library.library_chooser_button import library_chooser_button
 from components.lyria.audio_critic import audio_critic
 from components.lyria.technical_metrics import technical_metrics
 from components.page_scaffold import (
@@ -152,6 +155,7 @@ def lyria_content(app_state: me.state):
                 send_label="Generate music",
                 textarea_key=f"music_prompt_{pagestate.music_prompt_textarea_key}",
                 render_top=_render_music_references if supports_images else None,
+                render_add=_music_add_menu if supports_images else None,
                 on_clear=clear_music,
                 clear_label="Clear prompt, lyrics and results",
                 notice=pagestate.settings_notice,
@@ -190,11 +194,7 @@ def lyria_content(app_state: me.state):
                         )
                 _latest_extras(pagestate)
             elif not pagestate.is_loading and pagestate.progress_status != "error":
-                empty_results(
-                    "music_note",
-                    "Your music will show up here",
-                    "Describe a sound or a song, then press Enter.",
-                )
+                empty_results("music_note", "Your music will show up here")
 
             older = pagestate.history_urls[
                 len(pagestate.music_display_urls) if has_latest else 0 :
@@ -317,31 +317,19 @@ def _music_chips(pagestate: PageState, model_config):
             checked=pagestate.show_lyrics,
             on_change=on_chip_music_lyrics,
         )
-    if model_config and model_config.supports_images:
-        busy = pagestate.is_loading or pagestate.is_analyzing
-        with me.box(classes="gm-composer-attach"):
-            with me.box(classes="gm-composer-btn"):
-                with (
-                    me.tooltip(message="Attach a reference image"),
-                    me.content_uploader(
-                        on_upload=on_upload_lyria_image,
-                        multiple=True,
-                        accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                        disabled=busy,
-                        type="icon",
-                        key="music_attach",
-                    ),
-                ):
-                    me.icon("add_photo_alternate")
-                    with me.box(classes="gm-sr-only"):
-                        me.text("Attach a reference image")
-            with me.box(classes="gm-composer-btn"):
-                library_chooser_button(
-                    on_library_select=on_library_select,
-                    button_type="icon",
-                    disabled=busy,
-                    key="music_library",
-                )
+
+
+def _music_add_menu():
+    """The "+" menu at the bottom left: a reference image to score."""
+    pagestate = me.state(PageState)
+    composer_add_menu(
+        on_upload=on_upload_lyria_image,
+        on_library_select=on_library_select,
+        accepted_file_types=["image/jpeg", "image/png", "image/webp"],
+        disabled=pagestate.is_loading or pagestate.is_analyzing,
+        key="music_add",
+        label="Add a reference image",
+    )
 
 
 def _lyrics_panel(pagestate: PageState):

@@ -13,9 +13,11 @@
 # limitations under the License.
 """Prompt composer: a big rounded prompt card with settings chips inside it.
 
-Layout (like Krea, Google Flow and Firefly): optional reference tiles on top,
-the prompt textarea, then one row with the page's chips on the left (passed as
-children) and the enhance + send buttons on the right.
+Layout (like ChatGPT, Gemini and Claude): optional reference tiles on top, the
+prompt textarea, then one row: a single "+" add menu at the bottom left
+(`render_add`, usually `composer_add_menu`), the page's chips (passed as
+children), and on the right clear, enhance, the dictation mic and a round send
+button. See docs/COMPOSER_FORMAT_PLAN.md.
 
 Enter generates, Shift+Enter adds a new line. Every icon button has a
 screen-reader name and a tooltip; buttons are 44px tall on phones (CSS in
@@ -29,6 +31,76 @@ import mesop as me
 from common.i18n import t, tx
 
 ENTER = me.Shortcut(key="Enter")
+
+
+@me.web_component(path="./dictation.js")
+def composer_dictation(*, key: str | None = None):
+    """Mic button: browser speech-to-text into the composer's prompt box."""
+    return me.insert_web_component(
+        key=key,
+        name="gm-dictation",
+        properties={
+            "label": t("composer.dictate"),
+            "stopLabel": t("composer.dictate_stop"),
+        },
+    )
+
+
+@me.component
+def composer_add_menu(
+    *,
+    on_upload: typing.Callable[[me.UploadEvent], typing.Any],
+    on_library_select: typing.Callable[..., typing.Any] | None = None,
+    accepted_file_types: list[str] | None = None,
+    multiple: bool = True,
+    disabled: bool = False,
+    key: str = "composer_add",
+    library_media_type: list[str] | None = None,
+    label: str | None = None,
+):
+    """One "+" button that opens Upload / Choose from library.
+
+    The menu is pure CSS (shown while focus is inside it), so the file picker
+    and the library dialog keep working without extra page state.
+    """
+    from components.library.library_chooser_button import (  # pylint: disable=import-outside-toplevel
+        library_chooser_button,
+    )
+
+    label = tx(label) if label else t("composer.add")
+    with me.box(classes="gm-add-menu" + (" gm-disabled" if disabled else "")):
+        with me.box(classes="gm-composer-btn gm-add-trigger"):
+            with (
+                me.tooltip(message=label),
+                me.content_button(type="icon", disabled=disabled, key=f"{key}_open"),
+            ):
+                me.icon("add")
+                with me.box(classes="gm-sr-only"):
+                    me.text(label)
+        with me.box(classes="gm-add-pop"):
+            with me.box(classes="gm-add-item"):
+                with me.content_uploader(
+                    on_upload=on_upload,
+                    multiple=multiple,
+                    accepted_file_types=accepted_file_types
+                    or ["image/jpeg", "image/png", "image/webp"],
+                    disabled=disabled,
+                    type="flat",
+                    key=f"{key}_upload",
+                ):
+                    with me.box(classes="gm-btn-row"):
+                        me.icon("upload")
+                        me.text(t("composer.upload"))
+            if on_library_select:
+                with me.box(classes="gm-add-item"):
+                    library_chooser_button(
+                        on_library_select=on_library_select,
+                        button_label=t("composer.library"),
+                        button_type="flat",
+                        media_type=library_media_type,
+                        disabled=disabled,
+                        key=f"{key}_library",
+                    )
 
 
 @me.component
@@ -75,6 +147,8 @@ def composer(
     textarea_key: str = "composer_prompt",
     hint: str | None = None,
     render_top: typing.Callable[[], None] | None = None,
+    render_add: typing.Callable[[], None] | None = None,
+    dictation: bool = True,
     on_clear: typing.Callable[[me.ClickEvent], typing.Any] | None = None,
     clear_label: str | None = None,
     notice: str = "",
@@ -84,7 +158,8 @@ def composer(
 
     `on_submit` receives the textarea value on Enter, so the page can store it
     and start generating in one step. `render_top` draws reference images
-    above the prompt (uploads, first/last frame...).
+    above the prompt (uploads, first/last frame...). `render_add` draws the
+    "+" add menu at the bottom left. `dictation` shows the mic next to send.
 
     Text left as None uses the shared wording in the current language; English
     text a page passes is translated when common/i18n.py knows it (`tx`).
@@ -128,6 +203,9 @@ def composer(
                 ),
             )
         with me.box(classes="gm-composer-bar"):
+            if render_add:
+                with me.box(classes="gm-composer-add"):
+                    render_add()
             with me.box(classes="gm-composer-tools"):
                 me.slot()
             with me.box(classes="gm-composer-actions"):
@@ -158,6 +236,9 @@ def composer(
                             on_click=on_enhance,
                             disabled=busy,
                         )
+                if dictation:
+                    with me.box(classes="gm-composer-mic"):
+                        composer_dictation(key="composer_mic")
                 if busy:
                     with me.box(
                         classes="gm-composer-btn gm-composer-send gm-composer-wait",

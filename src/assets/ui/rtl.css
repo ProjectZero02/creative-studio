@@ -130,7 +130,6 @@ html:lang(ar) body .gm-nav [style*="text-transform: uppercase"] {
 }
 
 /* ---------- Studio chrome ---------- */
-html[dir="rtl"] body .gm-hero-info { right: auto; left: 0; }
 html[dir="rtl"] body .gm-composer-actions { margin-left: 0; margin-right: auto; }
 html[dir="rtl"] body .gm-attach-remove { right: auto; left: 2px; }
 html[dir="rtl"] body .gm-segmented .mat-button-toggle + .mat-button-toggle { border-right: none !important; }
