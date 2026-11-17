@@ -77,6 +77,8 @@ def composer(
     render_top: typing.Callable[[], None] | None = None,
     on_clear: typing.Callable[[me.ClickEvent], typing.Any] | None = None,
     clear_label: str | None = None,
+    notice: str = "",
+    on_notice_undo: typing.Callable[[me.ClickEvent], typing.Any] | None = None,
 ):
     """Render the composer card. Children are rendered in the chip row.
 
@@ -87,6 +89,10 @@ def composer(
     Text left as None uses the shared wording in the current language; English
     text a page passes is translated when common/i18n.py knows it (`tx`).
     No hint line shows unless a page passes `hint`.
+
+    `notice` is a one-line status under the prompt (for example the settings
+    read from the typed prompt); `on_notice_undo` adds an Undo button to it.
+    Both are off by default, so pages that don't pass them look the same.
     """
     placeholder = (
         tx(placeholder) if placeholder is not None else t("composer.placeholder")
@@ -166,9 +172,33 @@ def composer(
                         on_click=on_click_send,
                         primary=True,
                     )
-        if hint:
+        if notice:
+            composer_notice(text=notice, on_undo=on_notice_undo)
+        elif hint:
             with me.box(classes="gm-composer-hint"):
                 me.text(hint)
+
+
+@me.component
+def composer_notice(
+    *,
+    text: str,
+    on_undo: typing.Callable[[me.ClickEvent], typing.Any] | None = None,
+):
+    """A small status chip under the prompt, with an optional Undo button."""
+    with me.box(classes="gm-composer-notice"):
+        with me.box(classes="gm-composer-notice-icon"):
+            me.icon("tune")
+        with me.box(classes="gm-composer-notice-text"):
+            me.text(text)
+        if on_undo:
+            with me.tooltip(message=t("composer.undo_hint")):
+                me.button(
+                    t("composer.undo"),
+                    on_click=on_undo,
+                    type="stroked",
+                    key="composer_notice_undo",
+                )
 
 
 @me.component
