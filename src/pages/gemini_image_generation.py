@@ -1313,11 +1313,18 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
         else:
             state.generated_image_urls = [create_display_url(uri) for uri in gcs_uris]
             state.generated_image_captions = captions
+            state.selected_image_url = state.generated_image_urls[0]
+            state.generated_resolution = ""
+            state.c2pa_manifests = {}
+            # Show the image now; the resolution and C2PA reads and the
+            # library save below can take a few seconds.
+            state.is_generating = False
+            yield
+
             # Measure the actual resolution of the first generated image
             state.generated_resolution = get_image_resolution(gcs_uris[0])
 
             # Read C2PA Manifests for all images
-            state.c2pa_manifests = {}
             for i, uri in enumerate(gcs_uris):
                 manifest = c2pa_service.read_manifest(uri)
                 display_url = state.generated_image_urls[i]
@@ -1327,9 +1334,6 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
                         analytics_logger.info(
                             "C2PA manifest found and loaded for image 0.",
                         )
-
-            if state.generated_image_urls:
-                state.selected_image_url = state.generated_image_urls[0]
 
             item = MediaItem(
                 gcs_uris=gcs_uris,
@@ -1351,9 +1355,11 @@ def _generate_and_save(base_prompt: str, input_gcs_uris: list[str]):
             state.previous_media_item_id = item.id
             _remember_images(state, final_prompt)
             progress_done(state)
-            state.is_generating = False
+            # No "Automatically saved to library." snackbar: the progress
+            # card's Done step says so, and the snackbar slept 3 s here,
+            # which held the user's next click.
             state.generation_complete = True
-            yield from show_snackbar(state, "Automatically saved to library.")
+            yield
 
     except Exception as ex:
         execution_time = time.time() - start_time
