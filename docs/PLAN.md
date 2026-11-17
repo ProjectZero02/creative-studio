@@ -65,10 +65,14 @@ Phase 2 needs a GCP project to test against real Vertex AI. The code can be buil
 ## First live test (after the owner deploys)
 
 1. Sign in as the bootstrap admin, add a user, sign out and in as that user.
-2. Image Studio: generate, edit with a reference image, send to Video Studio.
+2. Image Studio: set the aspect chip to 16:9 and generate (the image comes back 16:9), edit with a reference image, send to Video Studio with "Make a video".
 3. Video Studio: text, image, first + last frame and references modes; extend.
 4. Story Studio, real mode: a 3-scene film end to end (Gemini scenario, storyboard frames, Veo clips, Lyria, voiceover, stitch, library).
 5. Library shows everything; the credential-dependent tests pass with ADC.
+6. Typed settings, one run per studio. Leave the chips at their defaults and put the setting in the prompt. The run must use it, the chip must move, and a notice under the prompt must name the change with Undo:
+   - Image Studio: "a red bicycle at 16:9 in 4K" gives a 16:9, 4K image. Undo puts the chips back for the next run.
+   - Video Studio (Omni 1.2 Flash): "a fox in the snow, 12 seconds, 9:16" gives a 9:16, 10 s clip with "goes up to 10 s" in the notice. The Sound chip reads "always on".
+   - Music: "warm lofi beat, instrumental, 2 tracks" gives instrumental tracks with the Lyrics chip off.
 
 ## Follow-ups
 
