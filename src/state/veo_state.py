@@ -113,6 +113,10 @@ class PageState:
     history_prompts: list[str] = field(default_factory=list)
     history_meta: list[str] = field(default_factory=list)
     history_aspects: list[str] = field(default_factory=list)
+    # Settings read from the typed prompt (common/prompt_settings.py)
+    settings_notice: str = ""
+    settings_undo_json: str = ""
+    settings_ignored_json: str = ""
 
     # Gemini Omni: the input video for edit, extend and upscale
     reference_video_gcs: str = ""
