@@ -68,7 +68,7 @@ from components.pill import pill
 from components.search_entry_point.search_entry_point import search_entry_point
 from components.snackbar import snackbar
 from components.svg_icon.svg_icon import svg_icon
-from config.banana_presets import IMAGE_ACTION_PRESETS
+from config.banana_presets import CORE_CREATIVE_KEYS, IMAGE_ACTION_PRESETS
 from config.gemini_image_models import get_gemini_image_model_config
 from config.rewriters import REWRITER_PROMPT
 from models.gemini import (
@@ -118,6 +118,41 @@ def get_all_image_presets():
         analytics_logger.error(f"Error loading dynamic prompt templates: {e}")
 
     return all_presets
+
+
+def split_presets(all_presets: dict) -> tuple[dict, list]:
+    """Split presets into the inline core set and the "More styles" rest.
+
+    Edit actions and the short creative set (``CORE_CREATIVE_KEYS``) stay
+    inline. Everything else, and every preset tagged ``subject: person``,
+    goes behind the expander, because it rarely fits an arbitrary image.
+    """
+    core: dict = {}
+    more: list = []
+    for category, presets in all_presets.items():
+        for preset in presets:
+            is_person = preset.get("subject") == "person"
+            is_core = category == "edit" or (
+                category == "creative" and preset["key"] in CORE_CREATIVE_KEYS
+            )
+            if is_core and not is_person:
+                core.setdefault(category, []).append(preset)
+            else:
+                more.append(preset)
+    return core, more
+
+
+def _preset_chips(presets: list) -> None:
+    with me.box(classes="gm-preset-row"):
+        for preset in presets:
+            label = preset.get("label") or preset["key"]
+            me.button(
+                label,
+                on_click=on_image_action_click,
+                type="stroked",
+                key=preset["key"],
+                style=CHIP_STYLE,
+            )
 
 
 @me.stateclass
@@ -514,10 +549,8 @@ def _render_next_steps(state: "PageState"):
 
         # Image presets
         if state.generated_image_urls or state.uploaded_image_gcs_uris:
-            all_presets = get_all_image_presets()
-            for category_name, presets in all_presets.items():
-                if not presets:
-                    continue
+            core, more = split_presets(get_all_image_presets())
+            for category_name, presets in core.items():
                 me.text(
                     f"{category_name.capitalize()} actions",
                     style=me.Style(
@@ -527,16 +560,15 @@ def _render_next_steps(state: "PageState"):
                         margin=me.Margin(top=8),
                     ),
                 )
-                with me.box(classes="gm-preset-row"):
-                    for preset in presets:
-                        label = preset.get("label") or preset["key"]
-                        me.button(
-                            label,
-                            on_click=on_image_action_click,
-                            type="stroked",
-                            key=preset["key"],
-                            style=CHIP_STYLE,
-                        )
+                _preset_chips(presets)
+            if more:
+                with me.box(style=me.Style(margin=me.Margin(top=12))):
+                    with me.expansion_panel(
+                        title=f"More styles ({len(more)})",
+                        icon="palette",
+                        key="more_styles",
+                    ):
+                        _preset_chips(more)
 
         # Suggest transformations button
         if (
