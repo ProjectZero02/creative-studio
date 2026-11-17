@@ -1,6 +1,30 @@
 # Live Agent: a voice orchestrator on the home page
 
-Status: plan only (2026-11-17). Nothing built yet.
+Status (2026-11-17): **v1 built.** It passes the unit tests and an offline browser run of the full demo script. It has not been tried against real Gemini Live yet; that happens on Cloud Run.
+
+## What v1 is (lean cut of the design below)
+
+To keep the build short, v1 drops two things from the full plan:
+- **No changes to studio pages.** The agent's jobs run in a new job service and show in their own job tray and result viewer, drawn over the page. The studios' own Generate buttons work exactly as before.
+- **Images and videos only.** Music and voice are left for later.
+
+| File | What it does |
+|---|---|
+| `src/services/live_jobs.py` | Runs each job in its own thread, so jobs run side by side and survive page changes. Jobs have spoken names ("image 1", "video 1"), a limit of 4 running per person, and save to GCS and the Library like the studios. Mock mode gives instant placeholders. |
+| `src/services/live_agent.py` | The tools, the agent's instructions, the per-call tool logic, and a typed offline agent for demos without a model. |
+| `src/routers/live_router.py` | `WebSocket /api/live`. Holds the Gemini Live session on Vertex with the app's own credentials. Relays audio and transcripts. Job tools are `NON_BLOCKING`, and each result is sent back at the next pause (`WHEN_IDLE`). Reconnects with session resumption. Checks identity and origin itself. Falls back to the typed offline agent if Live can't be reached. |
+| `src/components/live_agent/` | `window.gmLive`, attached to `document.body`, so the call survives `me.navigate`. It runs the mic (16 kHz) and speaker (24 kHz), the call dock with mute, typed requests and hang-up, live captions, the job tray, the result viewer with Download, and the on-screen cursor that types the prompt into the studio's box and points at Generate. One invisible bridge per page (`page_scaffold.py`) handles navigation. The big **Talk to the studio** button is on Home. |
+| `test/test_live_agent.py` | 24 offline tests: parallel jobs, the job limit, handles, every tool, the WebSocket route in offline mode, and a fake Live session that checks the `WHEN_IDLE` reply. |
+
+Settings are in `docs/environment_variables.md` under "Live voice agent". Try it without a model: add `?live=offline` to any page URL and type requests.
+
+### First run on Cloud Run (checklist)
+
+1. Deploy as usual. No new APIs are needed (`aiplatform.googleapis.com` is already on), and the deploy already sets a 60-minute timeout and session affinity, which WebSockets need.
+2. Open Home, click **Talk to the studio**, and allow the microphone.
+3. Say the demo lines from the top of this doc and watch the tray.
+4. If the call drops straight into "Offline mode", the Live model isn't reachable. The Cloud Run logs say why. Usual fixes: set `LIVE_MODEL` to a Live model the project can use (for example `gemini-live-2.5-flash-native-audio`) or change `LIVE_LOCATION`.
+5. If the agent goes quiet while a job runs and only speaks when it's done, set `LIVE_ASYNC_TOOLS=false`.
 
 ## The demo we are building
 

@@ -58,6 +58,18 @@ Controls which versions of the Gemini models are used for various tasks.
 | **`CHARACTER_CONSISTENCY_GEMINI_MODEL`** | `MODEL_ID` | The model used for Character Consistency tasks. |
 | **`CHARACTER_CONSISTENCY_GEMINI_LOCATION`** | `global` | The region for the Character Consistency Gemini model. |
 
+## 🎙️ Live voice agent
+The "Talk to the studio" call: a Gemini Live session (held by the server at `/api/live`) that makes images and videos in the background and moves around the app. See `docs/LIVE_AGENT_PLAN.md`.
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| **`LIVE_AGENT_ENABLED`** | `true` | Shows the call button and opens `/api/live`. Set `false` to hide the feature. |
+| **`LIVE_MODEL`** | `gemini-3.8-live` | Gemini Live model on Vertex AI. |
+| **`LIVE_LOCATION`** | `us-central1` | Region for the Live model. |
+| **`LIVE_VOICE`** | `Aoede` | The agent's voice (a Gemini Live prebuilt voice name). |
+| **`LIVE_ASYNC_TOOLS`** | `true` | Job tools are `NON_BLOCKING` and their results arrive at the next pause (`WHEN_IDLE`). Set `false` for Live models that only support blocking tools; results then arrive as text updates. |
+| **`LIVE_AGENT_OFFLINE`** | `false` | Use the typed offline agent (no model) instead of Gemini Live. Add `?live=offline` to a page URL to try it for one call. |
+
 ## 🎞️ Gemini Omni (Video Generation & Editing)
 Configuration for the Gemini Omni Flash multimodal video interaction model.
 
