@@ -37,3 +37,11 @@ def test_chip_menu_can_open_upwards():
     js = pathlib.Path("components/composer/chip_menu.js").read_text(encoding="utf-8")
     assert "_placeVertically(menu)" in js
     assert "menu.style.bottom = `calc(100% + ${gap}px)`" in js
+
+
+def test_phone_pages_leave_room_for_the_mic_button():
+    body = _rule(r"html body:has\(\[data-gm-live\]\) \.gm-page")
+    assert "padding-bottom" in body
+    js = pathlib.Path("components/live_agent/live_agent.js").read_text(encoding="utf-8")
+    assert "@media (max-width: 600px)" in js
+    assert ".gml-launch span { display: none; }" in js
