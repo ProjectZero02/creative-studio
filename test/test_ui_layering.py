@@ -30,3 +30,10 @@ def test_composer_sits_above_results():
     assert "position: relative" in body
     assert int(re.search(r"z-index:\s*(\d+)", body).group(1)) > 1
 
+
+
+def test_chip_menu_can_open_upwards():
+    """Near the bottom of a phone screen the menu flips above the chip."""
+    js = pathlib.Path("components/composer/chip_menu.js").read_text(encoding="utf-8")
+    assert "_placeVertically(menu)" in js
+    assert "menu.style.bottom = `calc(100% + ${gap}px)`" in js

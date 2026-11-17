@@ -135,8 +135,28 @@ class GmChipMenu extends LitElement {
         menu.style.left = 'auto';
         menu.style.right = '0';
       }
+      if (menu) this._placeVertically(menu);
       this._focusActive();
     });
+  }
+
+  // Open upwards when the menu would run off the bottom of the window and
+  // there is more room above the chip (a chip low on a phone screen), and
+  // cap its height to the room it has, so every option stays reachable.
+  _placeVertically(menu) {
+    const gap = 6;
+    const margin = 8;
+    const chip = this.renderRoot.querySelector('.chip').getBoundingClientRect();
+    const below = window.innerHeight - chip.bottom - gap - margin;
+    const above = chip.top - gap - margin;
+    const height = menu.getBoundingClientRect().height;
+    if (height <= below) return;
+    const up = above > below;
+    if (up) {
+      menu.style.top = 'auto';
+      menu.style.bottom = `calc(100% + ${gap}px)`;
+    }
+    menu.style.maxHeight = `${Math.max(120, Math.floor(up ? above : below))}px`;
   }
 
   _close(refocus) {
