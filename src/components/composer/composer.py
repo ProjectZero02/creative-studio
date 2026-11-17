@@ -86,7 +86,7 @@ def composer(
 
     Text left as None uses the shared wording in the current language; English
     text a page passes is translated when common/i18n.py knows it (`tx`).
-    Pass hint="" to hide the hint.
+    No hint line shows unless a page passes `hint`.
     """
     placeholder = (
         tx(placeholder) if placeholder is not None else t("composer.placeholder")
@@ -95,7 +95,7 @@ def composer(
         tx(enhance_label) if enhance_label is not None else t("composer.enhance")
     )
     send_label = tx(send_label) if send_label is not None else t("composer.send")
-    hint = tx(hint) if hint is not None else t("composer.hint")
+    hint = tx(hint) if hint else ""
     clear_label = tx(clear_label) if clear_label is not None else t("composer.clear")
     with me.box(classes="gm-composer" + (" gm-busy" if busy else "")):
         if render_top:

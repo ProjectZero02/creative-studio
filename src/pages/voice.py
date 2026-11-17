@@ -133,10 +133,9 @@ def voice_content():
                 send_label="Generate speech",
                 textarea_key=f"voice_text_{state.text_key}",
                 hint=(
-                    f"Start each line with {state.speaker_a}: or {state.speaker_b}: · "
-                    "Enter to generate"
+                    f"Start each line with {state.speaker_a}: or {state.speaker_b}:"
                     if dialogue
-                    else "Enter to generate · Shift+Enter for a new line"
+                    else None
                 ),
                 on_clear=on_click_clear,
                 clear_label="Clear script and results",

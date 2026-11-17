@@ -136,8 +136,6 @@ EN: dict[str, str] = {
     "composer.placeholder": "Describe what you want to create…",
     "composer.enhance": "Enhance prompt",
     "composer.send": "Generate",
-    "composer.hint": "Enter to generate · Shift+Enter for a new line",
-    "composer.hint_short": "Enter to generate",
     "composer.clear": "Clear prompt and results",
     "composer.generating": "Generating",
     "composer.remove": "Remove {label}",
@@ -394,8 +392,6 @@ AR: dict[str, str] = {
     "composer.placeholder": "صِف ما تريد إنشاءه…",
     "composer.enhance": "تحسين الوصف",
     "composer.send": "إنشاء",
-    "composer.hint": "Enter للإنشاء · Shift+Enter لسطر جديد",
-    "composer.hint_short": "Enter للإنشاء",
     "composer.clear": "مسح الوصف والنتائج",
     "composer.generating": "جارٍ الإنشاء",
     "composer.remove": "إزالة {label}",
@@ -588,8 +584,6 @@ AR_TEXT: dict[str, str] = {
     "Clear script and results": "مسح النص والنتائج",
     "Clear prompt, lyrics and results": "مسح الوصف والكلمات والنتائج",
     "Clear prompt and results": "مسح الوصف والنتائج",
-    "Enter to generate · Shift+Enter for a new line": "Enter للإنشاء · Shift+Enter لسطر جديد",
-    "Enter to generate": "Enter للإنشاء",
     # Empty states
     "Your images will show up here": "ستظهر صورك هنا",
     "Describe a picture, or attach your own to edit, then press Enter.": "صِف صورة أو أرفق صورتك لتعديلها، ثم اضغط Enter.",
@@ -637,8 +631,8 @@ AR_TEXT: dict[str, str] = {
 _AR_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^Sending to (.+)$"), "الإرسال إلى {0}"),
     (
-        re.compile(r"^Start each line with (.+): or (.+): · Enter to generate$"),
-        "ابدأ كل سطر بـ {0}: أو {1}: · Enter للإنشاء",
+        re.compile(r"^Start each line with (.+): or (.+):$"),
+        "ابدأ كل سطر بـ {0}: أو {1}:",
     ),
 )
 
