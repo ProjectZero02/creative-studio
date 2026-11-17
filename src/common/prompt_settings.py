@@ -365,6 +365,9 @@ def _parse_image_size(text: str) -> list[Match]:
 def _parse_resolution(text: str) -> list[Match]:
     out = []
     for m in _P_RE.finditer(text):
+        # "in 1080p" or "1080p video", never "a 1080p monitor".
+        if not _standalone(text, m.start(), m.end(), _SIZE_LEAD, _SIZE_TRAIL):
+            continue
         value = "4k" if m.group(1) == "2160" else f"{m.group(1)}p"
         span = _extend(text, m.start(), m.end(), _SIZE_LEAD_RE, _SIZE_TRAIL_RE)
         out.append(Match(RESOLUTION, value, span, m.group(0)))
@@ -384,20 +387,27 @@ _DURATION_RE = re.compile(
 )
 
 
+_DURATION_LEAD = {"for", "lasting"}
+_DURATION_TRAIL = {"long", "clip", "duration"}
+
+
 def _parse_duration(text: str) -> list[Match]:
     out = []
     for m in _DURATION_RE.finditer(text):
         value = int(m.group(1))
         if value == 0:
             continue
+        bare_s = m.group(2).lower() == "s"
         # "the 80s" is a decade, not a length.
-        if m.group(2).lower() == "s" and _before(text, m.start())[1] in {
-            "the",
-            "late",
-            "early",
-            "mid",
-        }:
+        if bare_s and _before(text, m.start())[1] in {"the", "late", "early", "mid"}:
             continue
+        # "a 90s hip-hop video", "retro 60s diner": a bare "s" after 10, 20 ... 90
+        # is a decade unless a length cue sits next to it ("for 30s", "30s long").
+        if bare_s and value % 10 == 0 and 10 <= value <= 90:
+            cue_before = _before(text, m.start())[1] in _DURATION_LEAD
+            cue_after = _after(text, m.end())[1] in _DURATION_TRAIL
+            if not (cue_before or cue_after):
+                continue
         span = _extend(text, m.start(), m.end(), r"\b(?:for|lasting)", r"-?\s*long\b")
         out.append(Match(DURATION, value, span, m.group(0)))
     return out
@@ -475,6 +485,17 @@ def _parse_instrumental(text: str) -> list[Match]:
     ]
 
 
+# "...", curly quotes, or '...' that is not an apostrophe (don't, the 90's).
+_QUOTED_RE = re.compile(
+    r"\"[^\"]*\"|“[^”]*”|‘[^’]*’|(?<!\w)'[^']*'(?!\w)"
+)
+
+
+def _quoted_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of text inside double, curly or single quotes."""
+    return [m.span() for m in _QUOTED_RE.finditer(text)]
+
+
 def parse(text: str, kinds: Iterable[str], count_noun: str = "image") -> list[Match]:
     """Find setting phrases of the given kinds, in text order, no overlaps."""
     if not text:
@@ -492,6 +513,10 @@ def parse(text: str, kinds: Iterable[str], count_noun: str = "image") -> list[Ma
     for kind in set(kinds):
         if kind in parsers:
             found += parsers[kind](text)
+    # Quoted text is dialogue or on-screen words ("You have 30 seconds"), not
+    # a setting: leave it alone.
+    quoted = _quoted_spans(text)
+    found = [m for m in found if not any(a <= m.span[0] < b for a, b in quoted)]
     # Longest first at each start, then drop anything overlapping a kept span.
     found.sort(key=lambda m: (m.span[0], -(m.span[1] - m.span[0])))
     kept: list[Match] = []

@@ -133,6 +133,36 @@ def test_duration_needs_a_unit(text):
     assert [k for k, _ in _values(text, ps.VIDEO_KINDS, "video")] == []
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A 90s hip-hop music video",
+        "Retro 60s diner at night",
+        "A ref says 'You have 30 seconds' and blows the whistle",
+        'The narrator says "8 seconds to impact"',
+        "A 1080p monitor on a desk",
+    ],
+)
+def test_review_false_positives_are_left_alone(text):
+    """Decades, quoted dialogue and product names are not settings."""
+    assert _values(text, ps.VIDEO_KINDS, "video") == []
+    assert ps.strip(text, ps.parse(text, ps.VIDEO_KINDS, "video")) == text
+
+
+@pytest.mark.parametrize(
+    "text,value",
+    [("a fox for 30s", 30), ("a 20s clip of waves", 20), ("waves, 10s long", 10)],
+)
+def test_decade_like_lengths_with_a_cue_still_count(text, value):
+    assert _values(text, ps.VIDEO_KINDS, "video") == [("duration", value)]
+
+
+def test_apostrophes_are_not_quotes():
+    assert _values("don't stop, 8 seconds", ps.VIDEO_KINDS, "video") == [
+        ("duration", 8),
+    ]
+
+
 # --- counts ------------------------------------------------------------------
 
 
