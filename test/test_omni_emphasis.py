@@ -30,7 +30,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
     "module_name",
     [
         "pages.banana_studio",
-        "pages.gemini_image_generation",
+        # Image Studio has one "Make a video" button instead
+        # (test_image_studio_make_video.py).
         "pages.vto",
         "components.interior_design.design_studio",
         "components.library.image_details",

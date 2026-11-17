@@ -71,6 +71,7 @@ from components.svg_icon.svg_icon import svg_icon
 from config.banana_presets import CORE_CREATIVE_KEYS, IMAGE_ACTION_PRESETS
 from config.gemini_image_models import get_gemini_image_model_config
 from config.rewriters import REWRITER_PROMPT
+from config.video_studio_models import VIDEO_STUDIO_PATH, omni_link_params
 from models.gemini import (
     generate_image_from_prompt_and_images,
     generate_transformation_prompts,
@@ -544,8 +545,14 @@ def _render_next_steps(state: "PageState"):
                     with me.box(classes="gm-btn-row"):
                         me.icon("edit")
                         me.text("Edit this image")
-                omni_button(gcs_uri=https_url_to_gcs_uri(state.selected_image_url))
-                veo_button(gcs_uri=https_url_to_gcs_uri(state.selected_image_url))
+                with me.content_button(
+                    on_click=on_make_video_click,
+                    type="stroked",
+                    key=https_url_to_gcs_uri(state.selected_image_url),
+                ):
+                    with me.box(classes="gm-btn-row"):
+                        me.icon("movie")
+                        me.text("Make a video")
 
         # Image presets
         if state.generated_image_urls or state.uploaded_image_gcs_uris:
@@ -1128,6 +1135,26 @@ def on_image_action_click(e: me.ClickEvent):
     )
 
 
+def on_make_video_click(e: me.ClickEvent):
+    """Open Video Studio with this image as the first frame.
+
+    Uses Video Studio's default model, so there is one "Make a video" button
+    instead of separate "Omni" and "Veo" buttons that both went to /veo.
+    """
+    app_state = me.state(AppState)
+    log_ui_click(
+        element_id="image_studio_make_video",
+        page_name=app_state.current_page,
+        session_id=app_state.session_id,
+    )
+    if e.key:
+        me.navigate(
+            url=VIDEO_STUDIO_PATH,
+            query_params=omni_link_params(e.key.replace("gs://", "")),
+        )
+    yield
+
+
 def on_continue_click(e: me.ClickEvent):
     """Uses the currently selected generated image as the input for a subsequent generation."""
     state = me.state(PageState)
@@ -1351,10 +1378,6 @@ def close_info_dialog(e: me.ClickEvent):
     state = me.state(PageState)
     state.info_dialog_open = False
     yield
-
-
-from components.omni_button.omni_button import omni_button
-from components.veo_button.veo_button import veo_button
 
 
 def on_load(e: me.LoadEvent):
