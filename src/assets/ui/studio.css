@@ -530,6 +530,23 @@ html body .gm-composer-wait {
 }
 html body .gm-composer.gm-busy { box-shadow: var(--gm-card-shadow); }
 
+/* Notice under the prompt: settings read from the typed text, with Undo */
+html body .gm-composer-notice {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  margin-top: 6px; padding: 6px 6px 6px 12px; border-radius: 14px;
+  background: color-mix(in srgb, var(--sys-primary) 9%, transparent);
+  color: var(--sys-on-surface); font-size: 13px; line-height: 1.45;
+}
+html body .gm-composer-notice-icon { display: flex; color: var(--sys-primary); }
+html body .gm-composer-notice-icon .mat-icon { font-size: 18px; width: 18px; height: 18px; }
+html body .gm-composer-notice-text { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+html body .gm-composer-notice .mat-mdc-outlined-button {
+  height: 32px; border-radius: 16px; padding: 0 14px; font-size: 13px;
+}
+@media (max-width: 600px) {
+  html body .gm-composer-notice .mat-mdc-outlined-button { height: 44px; border-radius: 22px; }
+}
+
 /* Reference images inside the composer */
 html body .gm-attach-row { display: flex; flex-wrap: wrap; gap: 10px; padding-bottom: 4px; }
 html body .gm-attach {

@@ -45,6 +45,10 @@ class PageState:
     history_urls: list[str] = field(default_factory=list)
     history_prompts: list[str] = field(default_factory=list)
     history_meta: list[str] = field(default_factory=list)
+    # Settings read from the typed prompt (common/prompt_settings.py)
+    settings_notice: str = ""
+    settings_undo_json: str = ""
+    settings_ignored_json: str = ""
 
     # components/generation_progress fields
     progress_stages: list[str] = field(default_factory=list)

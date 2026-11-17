@@ -24,7 +24,8 @@ import mesop as me
 
 from common.analytics import log_ui_click, track_click
 from common.error_handling import AsyncVeoPollingFailedError, GenerationError
-from common.i18n import t
+from common import prompt_settings
+from common.i18n import t, tr
 from common.metadata import (
     MediaItem,
     add_media_item_to_firestore,
@@ -39,6 +40,7 @@ from common.utils import (
 from common.veo_utils import start_async_veo_job
 from common.mock_generation import fake_wait, mock_enabled, sample_video
 from common.prompt_prefill import prefill_prompt
+from common.prompt_settings import SettingLimits
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
 from components.dialog import dialog, dialog_actions
@@ -328,6 +330,10 @@ def veo_content(app_state: me.state):
                 textarea_key=f"veo_prompt_{state.veo_prompt_textarea_key}",
                 render_top=_render_veo_references if state.veo_mode != "t2v" else None,
                 on_clear=on_click_clear,
+                notice=state.settings_notice,
+                on_notice_undo=on_veo_settings_undo
+                if state.settings_undo_json
+                else None,
             ):
                 _veo_chips(state)
 
@@ -579,6 +585,18 @@ def _veo_chips(state: PageState):
                 for i in range(1, lim.max_samples + 1)
             ),
             on_change=on_chip_veo_count,
+        )
+    if is_omni(state.veo_model):
+        # Omni has no audio setting but always makes sound: say so on a chip
+        # that can't be switched off, so "with sound" isn't left a mystery.
+        chip_menu(
+            key="veo_chip_sound_omni",
+            label="Gemini Omni always adds sound",
+            icon="audio",
+            kind="toggle",
+            value="Sound: always on",
+            checked=True,
+            disabled=True,
         )
     if not lim.supports_advanced:
         # Gemini Omni always makes sound and has no seed or negative prompt.
@@ -990,6 +1008,9 @@ def on_click_clear(e: me.ClickEvent):  # pylint: disable=unused-argument
     state.r2v_reference_mime_types = []
     state.r2v_style_image = None
     state.r2v_style_image_mime_type = None
+    state.settings_notice = ""
+    state.settings_undo_json = ""
+    state.settings_ignored_json = ""
     progress_clear(state)
     yield
 
@@ -1080,6 +1101,9 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
             yield
             return
 
+    # Settings typed in the prompt ("16:9", "8 seconds") move the chips.
+    send_prompt = _apply_typed_settings(state)
+
     # --- Reset State for New Generation ---
     state.is_loading = True
     state.error_message = ""
@@ -1091,7 +1115,7 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
     state.last_action = "generate"
 
     if omni:
-        yield from _generate_with_omni(state, app_state)
+        yield from _generate_with_omni(state, app_state, send_prompt)
         return
 
     model_config = get_veo_model_config(state.veo_model)
@@ -1121,7 +1145,7 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
     # --- Prepare Request Data ---
     # (Logic copied from original to maintain parity)
     request = VideoGenerationRequest(
-        prompt=state.veo_prompt_input,
+        prompt=send_prompt,
         negative_prompt=state.negative_prompt,
         model_version_id=state.veo_model,
         aspect_ratio=state.aspect_ratio,
@@ -1170,6 +1194,63 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
     )
 
 
+_VIDEO_SETTING_FIELDS = {
+    "aspect": "aspect_ratio",
+    "resolution": "resolution",
+    "duration": "video_length",
+    "count": "video_count",
+    "audio": "generate_audio",
+}
+
+
+def _apply_typed_settings(state: PageState) -> str:
+    """Use aspect, resolution, length, count and sound typed in the prompt.
+
+    Returns the prompt to send (setting words removed). The text wins over
+    the chips when the model supports the value; the notice under the box
+    says what changed and offers Undo.
+    """
+    state.settings_notice = ""
+    state.settings_undo_json = ""
+    prompt = state.veo_prompt_input or ""
+    lim = limits(state.veo_model, state.veo_mode)
+    if not lim or not prompt:
+        return prompt
+    current = {kind: getattr(state, f) for kind, f in _VIDEO_SETTING_FIELDS.items()}
+    run = prompt_settings.apply(
+        prompt,
+        prompt_settings.VIDEO_KINDS,
+        SettingLimits.from_studio_limits(
+            lim,
+            model_display_name(state.veo_model),
+            always_sound=is_omni(state.veo_model),
+        ),
+        current=current,
+        ignored=prompt_settings.ignored_list(state.settings_ignored_json),
+        tr=tr,
+    )
+    for kind, value in run.changes.items():
+        setattr(state, _VIDEO_SETTING_FIELDS[kind], value)
+    state.settings_notice = run.notice
+    state.settings_undo_json = run.undo_json
+    return run.prompt
+
+
+def on_veo_settings_undo(e: me.ClickEvent):  # pylint: disable=unused-argument
+    """Undo on the notice: put the chips back and stop applying those words."""
+    state = me.state(PageState)
+    previous, phrases = prompt_settings.read_undo(state.settings_undo_json)
+    for kind, value in previous.items():
+        if kind in _VIDEO_SETTING_FIELDS:
+            setattr(state, _VIDEO_SETTING_FIELDS[kind], value)
+    state.settings_ignored_json = prompt_settings.add_ignored(
+        state.settings_ignored_json, phrases
+    )
+    state.settings_undo_json = ""
+    state.settings_notice = t("settings.undone")
+    yield
+
+
 def _omni_missing_media(state: PageState) -> str | None:
     """What the current Omni mode still needs (models.omni is the authority)."""
     return find_missing_required_media(
@@ -1181,12 +1262,18 @@ def _omni_missing_media(state: PageState) -> str | None:
     )
 
 
-def build_omni_request(state: PageState) -> OmniVideoGenerationRequest:
-    """Map Video Studio state onto a Gemini Omni request for the current mode."""
+def build_omni_request(
+    state: PageState, prompt: str | None = None
+) -> OmniVideoGenerationRequest:
+    """Map Video Studio state onto a Gemini Omni request for the current mode.
+
+    `prompt` is the text to send (settings already stripped); it defaults to
+    the prompt box.
+    """
     mode = omni_mode(state.veo_mode)
     uses_image = mode in ("i2v", "first_last", "edit")
     return OmniVideoGenerationRequest(
-        prompt=state.veo_prompt_input or "",
+        prompt=(state.veo_prompt_input if prompt is None else prompt) or "",
         duration_seconds=state.video_length,
         aspect_ratio=state.aspect_ratio,
         resolution=state.resolution,
@@ -1226,7 +1313,9 @@ _OMNI_WORK_LABELS = {
 }
 
 
-def _generate_with_omni(state: PageState, app_state: AppState):
+def _generate_with_omni(
+    state: PageState, app_state: AppState, send_prompt: str | None = None
+):
     """Run one Gemini Omni generation with the shared progress card."""
     start_time = time.time()
     progress_start(
@@ -1251,7 +1340,7 @@ def _generate_with_omni(state: PageState, app_state: AppState):
 
     prompt = state.veo_prompt_input or ""
     try:
-        request = build_omni_request(state)
+        request = build_omni_request(state, send_prompt)
         progress_step(state, 1)
         yield
         # generate_omni_video blocks until the clip is ready, so run it on a
