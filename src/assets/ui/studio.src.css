@@ -463,6 +463,11 @@ html body .gm-composer {
   background: var(--sys-surface-container-lowest);
   box-shadow: var(--gm-card-shadow-hover);
   transition: border-color var(--gm-fast) var(--gm-ease), box-shadow var(--gm-fast) var(--gm-ease);
+  /* The glass backdrop-filter makes the composer its own stacking context, so
+     its chip menus can't rise above it: lift the whole box over the results
+     that follow it (Latest, Keep going, Recent). */
+  position: relative;
+  z-index: 5;
 }
 html body .gm-composer:focus-within { border-color: color-mix(in srgb, var(--sys-primary) 55%, var(--gm-border)); }
 html body .gm-composer textarea { resize: none; }
