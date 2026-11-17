@@ -59,7 +59,8 @@ def test_typed_ratio_and_size_win_over_chips(app_state_factory):
 def test_unsupported_count_is_explained_not_applied(app_state_factory):
     state = PageState(prompt="2 images of a cat")
     seen = _generate(state, app_state_factory())
-    assert state.num_images_to_generate == 0
+    # Still one image (0 is "Auto"; the Image Studio P1 fix pins it to 1).
+    assert max(1, state.num_images_to_generate) == 1
     assert seen["sent"] == "a cat"
     assert "one image at a time" in state.settings_notice
     assert state.settings_undo_json == ""  # nothing to undo
