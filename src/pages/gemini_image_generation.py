@@ -1044,8 +1044,12 @@ def on_suggest_transformations_click(e: me.ClickEvent):
     yield
 
     try:
-        # Use the first generated image to get suggestions
-        gcs_uri = f"gs://{state.generated_image_urls[0].replace('/media/', '')}"
+        # Suggest edits for the selected image (the first one if none is
+        # selected). https_url_to_gcs_uri handles both the /media/ proxy and
+        # signed storage.googleapis.com URLs.
+        gcs_uri = https_url_to_gcs_uri(
+            state.selected_image_url or state.generated_image_urls[0]
+        )
         raw_transformations = generate_transformation_prompts(image_uris=[gcs_uri])
         # Convert Pydantic objects to dicts for state
         state.suggested_transformations = [t.model_dump() for t in raw_transformations]

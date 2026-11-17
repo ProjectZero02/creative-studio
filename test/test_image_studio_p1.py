@@ -87,3 +87,34 @@ def test_presets_are_cached_between_renders(monkeypatch):
     clock[0] += page._PRESETS_TTL_SECONDS + 1
     page.get_all_image_presets()
     assert len(loads) == 2
+
+
+@pytest.mark.parametrize(
+    "selected,expected",
+    [
+        # Signed URL (USE_MEDIA_PROXY off): used to become "gs://https://...".
+        (
+            "https://storage.googleapis.com/bkt/img/2.png?X-Goog-Signature=abc",
+            "gs://bkt/img/2.png",
+        ),
+        ("/media/bkt/img/2.png", "gs://bkt/img/2.png"),
+        ("", "gs://bkt/img/1.png"),  # nothing selected: the first image
+    ],
+)
+def test_suggest_edits_uses_the_selected_images_gcs_uri(
+    monkeypatch, selected, expected
+):
+    state = page.PageState(
+        generated_image_urls=["/media/bkt/img/1.png", "/media/bkt/img/2.png"],
+        selected_image_url=selected,
+    )
+    monkeypatch.setattr(page.me, "state", lambda _cls: state)
+    seen = []
+
+    def fake_suggest(image_uris):
+        seen.extend(image_uris)
+        return []
+
+    monkeypatch.setattr(page, "generate_transformation_prompts", fake_suggest)
+    list(page.on_suggest_transformations_click(MagicMock()))
+    assert seen == [expected]
