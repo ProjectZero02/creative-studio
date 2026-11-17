@@ -81,7 +81,6 @@ html:lang(ar) body .gm-title h2 {
   line-height: 1.35 !important;
 }
 html:lang(ar) body .gm-hero-purpose,
-html:lang(ar) body .gm-composer-hint { line-height: 1.6; }
 /* Nav group labels are uppercase + tracked in English; neither suits Arabic. */
 html:lang(ar) body .gm-nav .mat-mdc-button-base ~ *,
 html:lang(ar) body .gm-nav { letter-spacing: 0; }

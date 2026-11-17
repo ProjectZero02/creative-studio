@@ -486,7 +486,6 @@ html body .gm-composer-wait {
   display: flex; align-items: center; justify-content: center;
   background: var(--sys-primary-container);
 }
-html body .gm-composer-hint { font-size: 12px; color: var(--sys-on-surface-variant); padding: 0 2px; }
 html body .gm-composer.gm-busy { box-shadow: var(--gm-card-shadow); }
 
 /* Reference images inside the composer */
@@ -604,7 +603,6 @@ html body .gm-empty-icon {
   html body .gm-composer-btn .mat-mdc-icon-button,
   html body .gm-composer-btn .mdc-icon-button,
   html body .gm-hero-info .mat-mdc-icon-button { width: 44px !important; height: 44px !important; padding: 10px !important; }
-  html body .gm-composer-hint { display: none; }
   /* Four modes do not fit one row on a phone: a 2 x 2 grid with 44px rows. */
   html body .gm-segmented .mat-button-toggle-group {
     display: grid !important;
@@ -635,19 +633,36 @@ html body .gm-empty-icon {
    big empty band on the right. */
 html body .gm-frame { margin-inline: auto; width: 100%; }
 
-html body .gm-home {
-  /* Glass tokens, read by .gm-home children and the home web components. */
+/* Glass tokens for every page (home, studios, web components). The border is
+   the same width all round: no inset top highlight, which read as a thicker
+   top edge. --gm-glass-highlight stays defined for older components. */
+html body {
   --gm-glass-fill: rgba(255, 255, 255, 0.55);
   --gm-glass-solid: rgba(255, 255, 255, 0.95);
-  --gm-glass-border: rgba(255, 255, 255, 0.75);
-  --gm-glass-highlight: inset 0 1.5px 0 rgba(255, 255, 255, 0.85);
+  --gm-glass-border: rgba(20, 24, 40, 0.08);
+  --gm-glass-highlight: 0 0 0 0 transparent;
   --gm-glass-shadow: 0 8px 32px rgba(20, 20, 60, 0.10);
-  --gm-card-shadow-hover: 0 18px 48px rgba(20, 20, 60, 0.18);
+  --gm-glass-blur: blur(20px) saturate(170%);
   --gm-glass-well: rgba(15, 20, 40, 0.06);
   --gm-glass-chip: #fff;
   --gm-aurora-1: rgba(138, 180, 248, 0.55);
   --gm-aurora-2: rgba(197, 138, 249, 0.42);
   --gm-aurora-3: rgba(120, 217, 236, 0.45);
+  --gm-accent-gradient: linear-gradient(135deg, #1a73e8 0%, #6a4cf0 100%);
+}
+html body.dark-theme {
+  --gm-glass-fill: rgba(30, 33, 48, 0.50);
+  --gm-glass-solid: rgba(24, 26, 38, 0.94);
+  --gm-glass-border: rgba(255, 255, 255, 0.10);
+  --gm-glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --gm-glass-well: rgba(255, 255, 255, 0.06);
+  --gm-glass-chip: rgba(255, 255, 255, 0.14);
+  --gm-aurora-1: rgba(26, 115, 232, 0.32);
+  --gm-aurora-2: rgba(147, 52, 230, 0.26);
+  --gm-aurora-3: rgba(18, 181, 203, 0.20);
+}
+html body .gm-home {
+  --gm-card-shadow-hover: 0 18px 48px rgba(20, 20, 60, 0.18);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -655,17 +670,7 @@ html body .gm-home {
   padding-bottom: 24px;
 }
 html body.dark-theme .gm-home {
-  --gm-glass-fill: rgba(30, 33, 48, 0.50);
-  --gm-glass-solid: rgba(24, 26, 38, 0.94);
-  --gm-glass-border: rgba(255, 255, 255, 0.12);
-  --gm-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16);
-  --gm-glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   --gm-card-shadow-hover: 0 20px 56px rgba(0, 0, 0, 0.55);
-  --gm-glass-well: rgba(255, 255, 255, 0.06);
-  --gm-glass-chip: rgba(255, 255, 255, 0.14);
-  --gm-aurora-1: rgba(26, 115, 232, 0.32);
-  --gm-aurora-2: rgba(147, 52, 230, 0.26);
-  --gm-aurora-3: rgba(18, 181, 203, 0.20);
 }
 
 /* Soft colour fields behind the page. Radial gradients (no filter blur) keep
@@ -706,7 +711,10 @@ html body .gm-aurora-c {
 @media (prefers-reduced-motion: reduce) {
   html body .gm-aurora > * { animation: none; }
 }
-html body .gm-home > :not(.gm-aurora) { position: relative; z-index: 1; }
+/* The colour fields sit behind every page (page_scaffold draws them first). */
+html body .gm-page { position: relative; }
+html body .gm-page > :not(.gm-aurora) { position: relative; z-index: 1; }
+html body .gm-page > .gm-topbar { z-index: 3; }
 
 /* Hero: centred headline, one line of copy, the prompt box. */
 html body .gm-home-hero {
@@ -727,7 +735,6 @@ html body .gm-home-eyebrow {
   color: var(--sys-primary);
   background: var(--gm-glass-solid);
   border: 1px solid var(--gm-glass-border);
-  box-shadow: var(--gm-glass-highlight);
 }
 html body .gm-home-title h1 {
   margin: 0;
@@ -795,4 +802,94 @@ html body .gm-demos {
 /* Very large monitors: let the content column grow a little. */
 @media (min-width: 2200px) {
   html body .gm-frame { max-width: 1840px !important; }
+}
+
+/* ---------- Studio pages: the home page's glass look ---------- */
+/* One family of surfaces on every studio: translucent fill over the colour
+   fields, a hairline border of even width, a soft shadow. */
+html body .gm-composer,
+html body .gm-advanced,
+html body .gm-next {
+  background: var(--gm-glass-solid);
+  border-color: var(--gm-glass-border);
+  box-shadow: var(--gm-glass-shadow);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (prefers-reduced-transparency: no-preference) {
+    html body .gm-composer,
+    html body .gm-advanced,
+    html body .gm-next {
+      background: var(--gm-glass-fill);
+      -webkit-backdrop-filter: var(--gm-glass-blur);
+      backdrop-filter: var(--gm-glass-blur);
+    }
+  }
+}
+html body .gm-composer { border-radius: 28px; }
+html body .gm-composer.gm-busy { box-shadow: var(--gm-glass-shadow); }
+html body .gm-composer:focus-within { border-color: color-mix(in srgb, var(--sys-primary) 45%, var(--gm-glass-border)); }
+html body .gm-empty {
+  background: var(--gm-glass-well);
+  border: 1px dashed color-mix(in srgb, var(--sys-outline-variant) 70%, transparent);
+}
+html body .gm-segmented .mat-button-toggle-group {
+  background: var(--gm-glass-fill);
+  border-color: var(--gm-glass-border) !important;
+}
+/* Hero: gradient icon tile and a gradient title, like the home headline. */
+html body .gm-hero-icon {
+  background: var(--gm-accent-gradient);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(60, 70, 220, 0.30);
+}
+html body .gm-title-studio h1 {
+  font-size: clamp(32px, 1.6rem + 1.6vw, 48px);
+  letter-spacing: -0.03em;
+  background: linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 45%, #1a5fd8 80%, #7b3fe4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+html body.dark-theme .gm-title-studio h1 {
+  background-image: linear-gradient(100deg, #fff 0%, #fff 45%, #8ab4f8 80%, #c58af9 100%);
+}
+/* Send button: the same blue-to-violet pill as the home page's Create button. */
+html body .gm-composer-send .mat-mdc-icon-button,
+html body .gm-composer-send .mdc-icon-button {
+  background: var(--gm-accent-gradient) !important;
+  color: #fff !important;
+  box-shadow: 0 6px 20px rgba(60, 70, 220, 0.35);
+}
+html body .gm-composer-send .mat-mdc-icon-button:hover { background: var(--gm-accent-gradient) !important; filter: brightness(1.08); }
+html body .gm-composer-send .mat-mdc-icon-button:disabled { box-shadow: none; filter: grayscale(0.6) opacity(0.6); }
+@media (forced-colors: active) {
+  html body .gm-title-studio h1 { color: CanvasText; background: none; }
+}
+
+/* Composer row: options wrap on the left, the buttons stay at the bottom right
+   (they used to drop onto a row of their own when a page has many chips). */
+html body .gm-composer-bar { flex-wrap: nowrap; align-items: flex-end; }
+html body .gm-composer-tools { flex: 1 1 0; }
+html body .gm-composer-actions { flex: none; }
+@media (max-width: 600px) {
+  html body .gm-composer-bar { flex-wrap: wrap; }
+  html body .gm-composer-tools { flex: 1 1 100%; }
+}
+
+/* Demo pages (Fashion, Product 360, Interiors, Brand kit) and Story Studio use
+   their own panel classes; give them the same glass. `html:root` outranks the
+   page stylesheets, which load after this one. */
+html:root body :is(.gm-demo-card, .gm-demo-settings, .gm-demo-result, .ss-card, .ss-stepper, .ss-story, .ss-panel) {
+  background: var(--gm-glass-solid);
+  border-color: var(--gm-glass-border);
+  box-shadow: var(--gm-glass-shadow);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (prefers-reduced-transparency: no-preference) {
+    html:root body :is(.gm-demo-card, .gm-demo-settings, .ss-card, .ss-stepper, .ss-panel) {
+      background: var(--gm-glass-fill);
+      -webkit-backdrop-filter: var(--gm-glass-blur);
+      backdrop-filter: var(--gm-glass-blur);
+    }
+  }
 }

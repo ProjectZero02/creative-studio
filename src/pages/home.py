@@ -195,13 +195,8 @@ def home_page_content(app_state: me.state):  # pylint: disable=unused-argument
         if page_data.get("group") and page_data.get("align") != "bottom":
             grouped[page_data["group"]].append(page_data)
 
+    # The colour fields behind the glass come from page_scaffold (every page).
     with me.box(classes="gm-home"):
-        # Soft colour behind the glass (decorative; frozen for reduced motion).
-        with me.box(classes="gm-aurora"):
-            me.box(classes="gm-aurora-a")
-            me.box(classes="gm-aurora-b")
-            me.box(classes="gm-aurora-c")
-
         _hero(enabled_routes)
 
         for group_name in GROUP_ORDER:

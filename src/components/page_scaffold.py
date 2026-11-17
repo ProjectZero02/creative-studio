@@ -73,6 +73,12 @@ def page_scaffold(page_name: str):
                 overflow_y="auto",
             ),
         ):
+            # Soft colour fields behind every page (CSS .gm-aurora), the same
+            # backdrop the home page has (decorative; still for reduced motion).
+            with me.box(classes="gm-aurora"):
+                me.box(classes="gm-aurora-a")
+                me.box(classes="gm-aurora-b")
+                me.box(classes="gm-aurora-c")
             user_menu_bar()
             me.slot()
 
