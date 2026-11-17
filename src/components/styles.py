@@ -42,21 +42,16 @@ _BOX_STYLE = me.Style(
 MAIN_COLUMN_STYLE = me.Style(
     display="flex",
     flex_direction="column",
-    height="100%",
 )
 
-PAGE_BACKGROUND_STYLE = me.Style(
-    background=me.theme_var("background"),
-    height="100%",
-    overflow_y="auto",
-)
+# Only .gm-page (page_scaffold) scrolls. A second scrolling box here showed a
+# second scrollbar next to it on every page.
+PAGE_BACKGROUND_STYLE = me.Style()
 
 PAGE_BACKGROUND_PADDING_STYLE = me.Style(
-    background=me.theme_var("background"),
     padding=me.Padding(top=28, left=32, right=32, bottom=40),
     display="flex",
     flex_direction="column",
-    height="inherit",
     max_width=1600,
     box_sizing="border-box",
 )
