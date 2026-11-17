@@ -260,6 +260,16 @@ def generate_image_from_prompt_and_images(
                     current_text_buffer += part.text
 
                 if hasattr(part, "inline_data") and part.inline_data:
+                    is_thought = bool(getattr(part, "thought", False))
+                    analytics_logger.info(
+                        f"generate_image_from_prompt_and_images: image part {i}"
+                        f" thought={is_thought}",
+                    )
+                    if is_thought:
+                        # Gemini 3 image models can send interim "thinking"
+                        # drafts before the final image. Saving them made two
+                        # near-identical results per run, so skip them.
+                        continue
                     # Default to "image/png" if mime_type is missing
                     mime_type = "image/png"
                     if (
