@@ -107,7 +107,7 @@ def header(
 
     `description` defaults to the page's line in config/navigation.json, so
     every page says what it is for without per-page edits. Pass "" to hide it.
-    `centered` renders the studio hero (icon above a centred title), used by
+    `centered` renders the studio hero (icon left of a centred title), used by
     the composer pages (Image Studio, Video Studio).
     """
     purpose = (
@@ -121,23 +121,29 @@ def header(
     about = t("header.about")
 
     if centered:
+        info = show_info_button and on_info_click
         with me.box(classes="gm-header gm-header-hero"):
-            with me.box(classes="gm-hero-icon"):
-                _render_icon(icon)
-            with me.box(classes="gm-title gm-title-studio"):
-                me.markdown("# " + _md_escape(title))
-            if purpose:
-                with me.box(classes="gm-hero-purpose"):
-                    me.text(purpose)
-            if show_info_button and on_info_click:
-                with me.box(classes="gm-hero-info"):
-                    with (
-                        me.content_button(type="icon", on_click=on_info_click),
-                        me.tooltip(message=about),
-                    ):
-                        me.icon(icon="info_outline")
-                        with me.box(classes="gm-sr-only"):
-                            me.text(about)
+            # Icon to the left of the title, then the purpose with the info
+            # button right after it.
+            with me.box(classes="gm-hero-titlerow"):
+                with me.box(classes="gm-hero-icon"):
+                    _render_icon(icon)
+                with me.box(classes="gm-title gm-title-studio"):
+                    me.markdown("# " + _md_escape(title))
+            if purpose or info:
+                with me.box(classes="gm-hero-purpose-row"):
+                    if purpose:
+                        with me.box(classes="gm-hero-purpose"):
+                            me.text(purpose)
+                    if info:
+                        with me.box(classes="gm-hero-info"):
+                            with (
+                                me.content_button(type="icon", on_click=on_info_click),
+                                me.tooltip(message=about),
+                            ):
+                                me.icon(icon="info_outline")
+                                with me.box(classes="gm-sr-only"):
+                                    me.text(about)
         return
 
     with me.box(

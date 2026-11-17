@@ -276,7 +276,7 @@ class GmLive {
   }
 
   _heroVisible() {
-    return !!document.querySelector('live-call-button');
+    return !!document.querySelector('live-call-button, home-prompt[live]');
   }
 
   refreshLauncher() { this._renderState(); }
@@ -703,8 +703,7 @@ class LiveCallButton extends LitElement {
       <button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
         ${s.talk}
-      </button>
-      <p>${s.hint}</p>`;
+      </button>`;
   }
 }
 

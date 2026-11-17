@@ -364,11 +364,7 @@ def veo_content(app_state: me.state):
                 and not state.history_urls
                 and state.progress_status != "error"
             ):
-                empty_results(
-                    "movie",
-                    "Your videos will show up here",
-                    "Pick a mode, describe the shot, then press Enter.",
-                )
+                empty_results("movie", "Your videos will show up here")
 
             if state.history_urls:
                 card_actions = _recent_card_actions(state.veo_model, model_config)

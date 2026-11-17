@@ -30,7 +30,11 @@ from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
 from common.utils import create_display_url, https_url_to_gcs_uri
 from components.composer.chip_menu import change_value, chip_menu, chip_options
-from components.composer.composer import composer, composer_attachment
+from components.composer.composer import (
+    composer,
+    composer_add_menu,
+    composer_attachment,
+)
 from components.content_credentials.content_credentials import (
     content_credentials_viewer,
 )
@@ -65,7 +69,6 @@ from components.gemini_image.events import (
 )
 from components.header import header
 from components.library.events import LibrarySelectionChangeEvent
-from components.library.library_chooser_button import library_chooser_button
 from components.page_scaffold import page_frame, page_scaffold
 from components.pill import pill
 from components.search_entry_point.search_entry_point import search_entry_point
@@ -200,7 +203,8 @@ class PageState:
     num_images_to_generate: int = 0
     suggested_transformations: list[dict] = field(default_factory=list)  # pylint: disable=invalid-field-call
     is_suggesting_transformations: bool = False
-    use_search: bool = False
+    # Search grounding is always on for models that support it (no chip).
+    use_search: bool = True
     use_image_search: bool = False
     include_thoughts: bool = False
     thinking_level: str = "HIGH"
@@ -407,44 +411,23 @@ def _image_chips(state: "PageState", model_config):
             ),
             on_change=on_chip_image_count,
         )
-    if model_config and model_config.supports_search:
-        chip_menu(
-            key="img_chip_search",
-            label="Ground with Google Search",
-            icon="search",
-            kind="toggle",
-            value="Search",
-            checked=state.use_search,
-            on_change=on_chip_image_search,
-        )
 
+
+def _image_add_menu():
+    """The "+" menu at the bottom left: upload or pick from the library."""
+    state = me.state(PageState)
+    model_config = get_gemini_image_model_config(state.selected_model)
     max_input_images = model_config.max_input_images if model_config else 3
-    upload_disabled = len(state.uploaded_image_gcs_uris) >= max_input_images
-    with me.box(classes="gm-composer-attach"):
-        with me.box(classes="gm-composer-btn"):
-            with (
-                me.tooltip(message="Attach reference images or files"),
-                me.content_uploader(
-                    on_upload=on_upload,
-                    multiple=True,
-                    accepted_file_types=model_config.supported_input_mime_types
-                    if model_config
-                    else ["image/jpeg", "image/png", "image/webp", "application/pdf"],
-                    disabled=upload_disabled,
-                    type="icon",
-                    key="img_attach",
-                ),
-            ):
-                me.icon("attach_file")
-                with me.box(classes="gm-sr-only"):
-                    me.text("Attach reference images or files")
-        with me.box(classes="gm-composer-btn"):
-            library_chooser_button(
-                on_library_select=on_library_select,
-                button_type="icon",
-                disabled=upload_disabled,
-                key="img_library",
-            )
+    composer_add_menu(
+        on_upload=on_upload,
+        on_library_select=on_library_select,
+        accepted_file_types=model_config.supported_input_mime_types
+        if model_config
+        else ["image/jpeg", "image/png", "image/webp", "application/pdf"],
+        disabled=len(state.uploaded_image_gcs_uris) >= max_input_images,
+        key="img_add",
+        label="Add reference images or files",
+    )
 
 
 def _render_latest(state: "PageState", app_state):
@@ -680,6 +663,7 @@ def gemini_image_gen_page_content():
                 send_label="Generate image",
                 textarea_key=f"img_prompt_{state.prompt_key}",
                 render_top=_render_attachments,
+                render_add=_image_add_menu,
                 on_clear=on_clear_click,
                 notice=state.settings_notice,
                 on_notice_undo=on_image_settings_undo
@@ -726,11 +710,7 @@ def gemini_image_gen_page_content():
                 and not state.history_urls
                 and state.progress_status != "error"
             ):
-                empty_results(
-                    "image",
-                    "Your images will show up here",
-                    "Describe a picture, or attach your own to edit, then press Enter.",
-                )
+                empty_results("image", "Your images will show up here")
 
             if state.history_urls:
                 with result_grid(title="Recent", count=len(state.history_urls)):
@@ -807,8 +787,7 @@ def on_chip_image_model(e: me.WebEvent):
         state.image_size = (
             "1K" if "1K" in cfg.supported_image_sizes else cfg.supported_image_sizes[0]
         )
-    if not cfg.supports_search:
-        state.use_search = False
+    state.use_search = cfg.supports_search
     yield
 
 
@@ -827,12 +806,6 @@ def on_chip_image_size(e: me.WebEvent):
 def on_chip_image_count(e: me.WebEvent):
     """Number-of-images chip."""
     me.state(PageState).num_images_to_generate = int(change_value(e) or 0)
-    yield
-
-
-def on_chip_image_search(e: me.WebEvent):
-    """Search grounding toggle chip."""
-    me.state(PageState).use_search = change_value(e) == "true"
     yield
 
 
@@ -1312,6 +1285,7 @@ def _generate_and_save(
 
     state.num_images_to_generate = _requested_count(state)
     final_prompt = _get_appended_prompt(base_prompt, state.num_images_to_generate)
+    model_config_for_run = get_gemini_image_model_config(state.selected_model)
     # final_prompt = base_prompt
 
     state.is_generating = True
@@ -1339,7 +1313,8 @@ def _generate_and_save(
                 file_prefix="gemini_image",
                 candidate_count=1,
                 image_size=state.image_size,
-                use_search=state.use_search,
+                use_search=state.use_search
+                and bool(model_config_for_run and model_config_for_run.supports_search),
                 use_image_search=state.use_image_search,
                 thinking_level=state.thinking_level,
                 include_thoughts=state.include_thoughts,
