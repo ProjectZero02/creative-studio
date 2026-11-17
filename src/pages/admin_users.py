@@ -572,6 +572,7 @@ def admin_users_content():
             "Users",
             "group",
             description="Add people, set their role and reset passwords. Only admins see this page.",
+            centered=True,
         )
         if admin is None:
             _banner(t("admin.only_admins"), error=True)

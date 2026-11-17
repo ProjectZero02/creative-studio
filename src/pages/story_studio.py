@@ -135,7 +135,7 @@ def _prefill_idea() -> None:
 def page():
     with page_scaffold(page_name="story"):
         with page_frame():
-            header("Story Studio", "auto_stories")
+            header("Story Studio", "auto_stories", centered=True)
             story_studio_content()
 
 
