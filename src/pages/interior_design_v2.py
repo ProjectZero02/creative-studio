@@ -29,7 +29,12 @@ from common.analytics import log_ui_click, track_click
 from common.metadata import MediaItem, add_media_item_to_firestore, save_storyboard
 from common.storage import store_to_gcs
 from common.utils import create_display_url
-from components.demo_flow.demo_flow import DEMO_STYLESHEETS, demo_progress, demo_steps
+from components.demo_flow.demo_flow import (
+    DEMO_STYLESHEETS,
+    demo_card_head,
+    demo_progress,
+    demo_steps,
+)
 from components.dialog import dialog
 from components.generation_progress.generation_progress import friendly_error
 from components.header import header
@@ -185,36 +190,42 @@ def page_content():
         _interior_progress(state)
         # Input and Output Area
         with me.box(classes="gm-demo-pair"):
-            with me.box(classes="gm-demo-card gm-demo-upstream"):
+            with me.box(classes="gm-demo-card"):
                 floor_plan_uploader(
                     storyboard=state.storyboard,
                     on_upload=on_upload_floor_plan_safe,
                     on_library_select=on_select_floor_plan,
                 )
-            with me.box(classes="gm-demo-card gm-demo-upstream"):
+            with me.box(classes="gm-demo-card"):
                 generated_3d_view(
                     storyboard=state.storyboard,
                     is_generating=state.is_generating,
-                    on_generate=on_generate_3d_view_click,
                 )
+        with me.box(classes="gm-demo-bar"):
+            with me.box(classes="gm-demo-bar-actions"):
+                with me.box(classes="gm-demo-primary"):
+                    me.button(
+                        "Regenerate 3D view"
+                        if state.storyboard and state.storyboard.get("generated_3d_view_uri")
+                        else "Generate 3D view",
+                        on_click=on_generate_3d_view_click,
+                        type="flat",
+                        disabled=not (
+                            state.storyboard
+                            and state.storyboard.get("original_floor_plan_uri")
+                        )
+                        or state.is_generating,
+                    )
 
         if state.storyboard and state.storyboard.get("room_names"):
-            with me.box(
-                style=me.Style(
-                    display="flex",
-                    flex_direction="column",
-                    align_items="center",
-                    gap=10,
-                )
-            ):
-                me.text("Identified Rooms", type="headline-6")
+            with me.box(classes="gm-demo-card"):
+                demo_card_head("3", "Rooms", "Pick a room to see it close up and restyle it.")
                 with me.box(
                     style=me.Style(
                         display="flex",
                         flex_direction="row",
-                        gap=10,
+                        gap=8,
                         flex_wrap="wrap",
-                        justify_content="center",
                     )
                 ):
                     for room in state.storyboard["room_names"]:
