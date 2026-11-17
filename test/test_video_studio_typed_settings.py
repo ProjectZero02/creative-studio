@@ -125,3 +125,26 @@ def test_build_omni_request_defaults_to_the_box():
     state = PageState(veo_prompt_input="a fox, 16:9", veo_model=OMNI)
     assert build_omni_request(state).prompt == "a fox, 16:9"
     assert build_omni_request(state, "a fox").prompt == "a fox"
+
+
+def _chips(model_id):
+    """The chip_menu calls _veo_chips makes for a model, by key."""
+    from pages import veo
+
+    state = PageState(veo_model=model_id)
+    with patch.object(veo, "chip_menu") as chip:
+        veo._veo_chips(state)
+    return {c.kwargs["key"]: c.kwargs for c in chip.call_args_list}
+
+
+def test_omni_shows_sound_always_on():
+    chip = _chips(OMNI)["veo_chip_sound_omni"]
+    assert chip["checked"] is True and chip["disabled"] is True
+    assert chip["value"] == "Sound: always on"
+    assert "veo_chip_audio" not in _chips(OMNI)
+
+
+def test_veo_keeps_its_audio_toggle():
+    chips = _chips(VEO)
+    assert "veo_chip_audio" in chips
+    assert "veo_chip_sound_omni" not in chips

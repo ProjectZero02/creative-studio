@@ -586,6 +586,18 @@ def _veo_chips(state: PageState):
             ),
             on_change=on_chip_veo_count,
         )
+    if is_omni(state.veo_model):
+        # Omni has no audio setting but always makes sound: say so on a chip
+        # that can't be switched off, so "with sound" isn't left a mystery.
+        chip_menu(
+            key="veo_chip_sound_omni",
+            label="Gemini Omni always adds sound",
+            icon="audio",
+            kind="toggle",
+            value="Sound: always on",
+            checked=True,
+            disabled=True,
+        )
     if not lim.supports_advanced:
         # Gemini Omni always makes sound and has no seed or negative prompt.
         return
