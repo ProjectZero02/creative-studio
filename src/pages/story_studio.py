@@ -1941,18 +1941,107 @@ def on_to_video(e: me.ClickEvent):
 
 
 def _media_map(story: Story) -> dict[str, str]:
-    """Browser URL for every file the timeline plays."""
+    """Browser URL for every file the timeline plays, plus scene thumbnails.
+
+    `thumb:<scene index>` is the scene's still frame, drawn on its video clip.
+    """
     tl = timeline_mod.normalize(story.timeline_json)
     srcs = {c["src"] for t in tl["tracks"] for c in t["clips"] if c.get("src")}
-    return {src: display_url(src) for src in srcs}
+    media = {src: display_url(src) for src in srcs}
+    for i, sc in enumerate(story.scenes):
+        if sc.frame_uri:
+            media[f"thumb:{i}"] = display_url(sc.frame_uri)
+    return media
 
 
 def edit_view(story: Story) -> None:
     """The film as an editable timeline, with export and music."""
+    s = me.state(StoryState)
     busy = _job_active_for("export", "music", "video")
     exporting = _job_active_for("export")
+    making_music = _job_active_for("music")
+    # A finished job is reported by the notice; keep only running or failed panels.
+    job_open = (_job() or {}).get("status") not in (None, "done")
     tl = timeline_mod.normalize(story.timeline_json)
     with me.box(classes="ss-video"):
+        with me.box(classes="ss-card ss-edit-head"):
+            with me.box(classes="ss-edit-name"):
+                me.text(
+                    story.title or "Your film",
+                    style=me.Style(font_size=18, font_weight=600),
+                )
+                me.text(
+                    f"{_fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}",
+                    style=me.Style(
+                        font_size=13, color=me.theme_var("on-surface-variant")
+                    ),
+                )
+            with me.box(classes="ss-edit-tools"):
+                me.button(
+                    "Scenes",
+                    type="stroked",
+                    disabled=busy,
+                    on_click=on_back_editor,
+                    key="ss-back-scenes",
+                )
+                me.button(
+                    "Music",
+                    type="stroked",
+                    disabled=busy and not making_music,
+                    on_click=on_toggle_edit_music,
+                    key="ss-music-toggle",
+                )
+                with me.box(
+                    classes="ss-edit-dl"
+                    + ("" if story.final_uri and not exporting else " is-off")
+                ):
+                    if story.final_uri and not exporting:
+                        me.link(
+                            text="Download",
+                            url=display_url(story.final_uri),
+                            open_in_new_tab=True,
+                        )
+                    else:
+                        me.text("Download")
+                me.button(
+                    "Exporting…" if exporting else "Export",
+                    type="flat",
+                    color="primary",
+                    disabled=busy,
+                    on_click=on_export,
+                    key="ss-export",
+                )
+        if s.edit_music_open or making_music:
+            with me.box(classes="ss-card ss-edit-music"):
+                with me.box(classes="ss-edit-music-input"):
+                    me.input(
+                        placeholder="Describe the music",
+                        value=story.music_prompt or default_music_prompt(story),
+                        appearance="outline",
+                        disabled=busy,
+                        on_blur=on_music_prompt,
+                        style=me.Style(width="100%"),
+                        key="ss-edit-music",
+                    )
+                me.button(
+                    "Making…" if making_music else "Make music",
+                    type="stroked",
+                    disabled=busy,
+                    on_click=on_make_music,
+                    key="ss-make-music",
+                )
+                me.uploader(
+                    label="Upload",
+                    accepted_file_types=AUDIO_MIME_TYPES,
+                    type="stroked",
+                    disabled=busy,
+                    on_upload=on_upload_music,
+                    key="ss-upload-music",
+                )
+            if job_open:
+                progress_panel("Making music", ("music",))
+        if job_open:
+            progress_panel("Exporting", ("export",))
         with me.box(classes="ss-card ss-edit-main"):
             story_timeline(
                 timeline_json=story.timeline_json,
@@ -1962,79 +2051,6 @@ def edit_view(story: Story) -> None:
                 on_change=on_timeline_change,
                 key="ss-timeline",
             )
-        with me.box(classes="ss-edit-actions"):
-            with me.box(classes="ss-card ss-summary"):
-                me.text(
-                    story.title or "Your film",
-                    style=me.Style(font_size=18, font_weight=600),
-                )
-                me.text(
-                    f"{_fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio} · "
-                    f"{len(timeline_mod.track(tl, 'text')['clips'])} titles",
-                    style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
-                )
-                me.button(
-                    "Exporting…" if exporting else "Export video",
-                    type="flat",
-                    color="primary",
-                    disabled=busy,
-                    on_click=on_export,
-                    style=me.Style(width="100%", height=48, font_size=15),
-                    key="ss-export",
-                )
-                me.text(
-                    "Renders your edit to an MP4 and saves it to your library. "
-                    "Sound is levelled and the music dips under speech.",
-                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-                )
-                if story.final_uri and not exporting:
-                    with me.box(classes="ss-player-actions"):
-                        me.markdown(f"[Download last export]({display_url(story.final_uri)})")
-                        if not is_mock_mode():
-                            me.markdown("[Open library](/library)")
-                progress_panel("Exporting your edit", ("export",))
-                me.button(
-                    "Change scenes and render again",
-                    type="stroked",
-                    disabled=busy,
-                    on_click=on_back_editor,
-                    style=me.Style(width="100%"),
-                    key="ss-back-scenes",
-                )
-            with me.box(classes="ss-card ss-summary"):
-                me.text("Music", style=me.Style(font_size=16, font_weight=600))
-                me.text(
-                    "Make a new score with Lyria, or upload your own track. It "
-                    "replaces the music on the timeline.",
-                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-                )
-                me.textarea(
-                    label="Music prompt",
-                    value=story.music_prompt or default_music_prompt(story),
-                    rows=3,
-                    appearance="outline",
-                    disabled=busy,
-                    on_blur=on_music_prompt,
-                    style=me.Style(width="100%"),
-                    key="ss-edit-music",
-                )
-                with me.box(classes="ss-edit-buttons"):
-                    me.button(
-                        "Making music…" if _job_active_for("music") else "Make music (Lyria)",
-                        type="stroked",
-                        disabled=busy,
-                        on_click=on_make_music,
-                        key="ss-make-music",
-                    )
-                    me.uploader(
-                        label="Upload music",
-                        accepted_file_types=AUDIO_MIME_TYPES,
-                        type="stroked",
-                        disabled=busy,
-                        on_upload=on_upload_music,
-                        key="ss-upload-music",
-                    )
-                progress_panel("Making music", ("music",))
         if story.final_alt_uri:
             with me.box(classes="ss-card ss-player"):
                 _alt_film(story)
@@ -2084,6 +2100,11 @@ def on_upload_music(e: me.UploadEvent):
         return
     _set_story(story)
     s.notice = "Your music is on the timeline."
+
+
+def on_toggle_edit_music(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.edit_music_open = not s.edit_music_open
 
 
 def video_step(story: Story) -> None:

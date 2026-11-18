@@ -59,3 +59,4 @@ class StoryState:
     error: str = ""
     notice: str = ""
     confirm_delete_id: str = ""
+    edit_music_open: bool = False  # Edit step: music row shown
