@@ -13,11 +13,24 @@
 # limitations under the License.
 """Story Studio Sets: model, owner-only stores, migration, auto-build, jobs, refs."""
 
+import json
+
 import pytest
 
 from config.default import Default
 from services import story_jobs, story_sets, story_store
-from services.story_models import Scene, Story
+from services.story_models import (
+    SET_MAX_CHARACTERS,
+    SET_MAX_LOCATIONS,
+    SET_MAX_PROPS,
+    ScenarioError,
+    Scene,
+    Story,
+    parse_scene_links,
+    parse_set_build,
+    scenario_prompt,
+    set_build_prompt,
+)
 from services.story_sets import (
     Character,
     LocalSetStore,
@@ -347,3 +360,188 @@ def test_ensure_set_leaves_plain_stories_alone(stores):
     story = story_db.save(Story(idea="no cast details"), OWNER)
     assert story_jobs.ensure_set(story.id, OWNER).set_id == ""
     assert set_db.list(OWNER) == []
+
+
+# ---------------------------------------------------------------------------
+# Auto-build prompt and parser
+# ---------------------------------------------------------------------------
+
+BUILD_JSON = {
+    "name": "Night shift",
+    "characters": [
+        {
+            "key": "c1",
+            "name": "Maya",
+            "description": "woman, early 30s, short black hair",
+            "outfit": "green scrubs",
+            "voice": {
+                "tts_voice": "Aoede",
+                "style": "calm",
+                "description": "a female voice, early 30s, soft Irish accent",
+            },
+        },
+        {
+            "key": "c2",
+            "name": "Dr Okafor",
+            "description": "man, 50s",
+            "voice": {"tts_voice": "Nobody"},
+        },
+        {"key": "c3", "name": ""},
+    ],
+    "narrator": {"tts_voice": "Charon", "style": "low and slow"},
+    "locations": [
+        {
+            "key": "l1",
+            "name": "Ward 7",
+            "description": "dim hospital ward",
+            "time_of_day": "night",
+        }
+    ],
+    "props": [{"key": "p1", "name": "Clipboard", "description": "worn blue clipboard"}],
+    "scenes": [
+        {"cast": ["c1"], "location": "l1", "props": ["p1"], "speaker": "c1"},
+        {
+            "cast": ["c1", "c2", "ghost"],
+            "location": "Ward 7",
+            "props": [],
+            "speaker": "",
+        },
+        {"cast": "c2", "location": "nowhere", "props": "p1", "speaker": "c2"},
+    ],
+}
+
+
+def _three_scene_story() -> Story:
+    return Story(
+        idea="A nurse on a night shift",
+        style="anime",
+        voice_name="Kore",
+        scenes=[
+            Scene(spoken=True, narration="I'm Maya.", visual="Maya at the desk"),
+            Scene(narration="The night was long.", visual="The ward at night"),
+            Scene(spoken=True, narration="Go home.", visual="Okafor talks"),
+        ],
+    )
+
+
+def test_parse_set_build_makes_assets_and_links():
+    story = _three_scene_story()
+    made = parse_set_build("```json\n" + json.dumps(BUILD_JSON) + "\n```", story)
+    assert made.created_from == "auto" and made.style == "anime"
+    names = [c.name for c in made.characters]
+    assert names == ["Maya", "Dr Okafor", "Narrator"]  # nameless one dropped
+    maya, okafor, narrator = made.characters
+    assert maya.voice.description.startswith("a female voice")
+    assert okafor.voice.tts_voice in story_sets.VOICES  # bad voice replaced
+    assert narrator.narrator and narrator.voice.tts_voice == "Charon"
+    assert [i.view for i in maya.images] == story_sets.CHARACTER_VIEWS
+    assert [i.view for i in made.locations[0].images] == story_sets.LOCATION_VIEWS
+    ward, clip = made.locations[0], made.props[0]
+    s1, s2, s3 = story.scenes
+    assert (s1.cast, s1.location_id, s1.prop_ids, s1.speaker_id) == (
+        [maya.id],
+        ward.id,
+        [clip.id],
+        maya.id,
+    )
+    # Unknown cast dropped, location matched by name, narrated scene has no speaker.
+    assert (s2.cast, s2.location_id, s2.speaker_id) == (
+        [maya.id, okafor.id],
+        ward.id,
+        "",
+    )
+    # Single strings accepted, unknown location blank.
+    assert (s3.cast, s3.location_id, s3.prop_ids, s3.speaker_id) == (
+        [okafor.id],
+        "",
+        [clip.id],
+        okafor.id,
+    )
+
+
+def test_parse_set_build_caps_counts():
+    data = dict(BUILD_JSON)
+    data["characters"] = [{"name": f"P{i}"} for i in range(9)]
+    data["locations"] = [{"name": f"L{i}"} for i in range(9)]
+    data["props"] = [{"name": f"X{i}"} for i in range(9)]
+    made = parse_set_build(json.dumps(data), _three_scene_story())
+    assert len(made.on_screen()) == SET_MAX_CHARACTERS
+    assert len(made.locations) == SET_MAX_LOCATIONS
+    assert len(made.props) == SET_MAX_PROPS
+
+
+def test_parse_set_build_no_narrator_without_narrated_lines():
+    story = _three_scene_story()
+    for sc in story.scenes:
+        sc.spoken = True
+    made = parse_set_build(json.dumps(BUILD_JSON), story)
+    assert made.narrator() is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "not json",
+        "[1, 2]",
+        json.dumps({"characters": [], "locations": []}),
+        json.dumps({"props": [{"name": "x"}]}),
+    ],
+)
+def test_parse_set_build_rejects_unusable(text):
+    with pytest.raises(ScenarioError):
+        parse_set_build(text, _three_scene_story())
+
+
+def test_spoken_scene_without_speaker_gets_first_cast_member():
+    story = _three_scene_story()
+    made = parse_set_build(json.dumps(BUILD_JSON), story)
+    links = {"scenes": [{"cast": ["Dr Okafor"], "speaker": "nobody"}]}
+    parse_scene_links(json.dumps(links), made, story.scenes)
+    assert story.scenes[0].speaker_id == made.characters[1].id
+
+
+def test_scene_links_match_names_and_ignore_bad_json():
+    story = _three_scene_story()
+    made = _sample_set()
+    parse_scene_links(
+        json.dumps(
+            {
+                "scenes": [
+                    {
+                        "cast": ["MAYA", "Narrator"],
+                        "location": "the café",
+                        "speaker": "Maya",
+                    }
+                ]
+            }
+        ),
+        made,
+        story.scenes,
+    )
+    sc = story.scenes[0]
+    assert sc.cast == ["maya"]  # the narrator is never on screen
+    assert sc.location_id == "cafe" and sc.speaker_id == "maya"
+    before = [s.cast for s in story.scenes]
+    parse_scene_links("garbage", made, story.scenes)
+    assert [s.cast for s in story.scenes] == before
+
+
+def test_set_build_prompt_lists_scenes_and_voices():
+    prompt = set_build_prompt(_three_scene_story())
+    assert "1. [spoken on camera] Maya at the desk" in prompt
+    assert "2. [narrator]" in prompt
+    assert "Aoede (female)" in prompt
+    assert '"scenes": [{"cast": [str]' in prompt
+
+
+def test_scenario_prompt_uses_saved_set():
+    story = _three_scene_story()
+    plain = scenario_prompt(story)
+    assert "Use this cast" not in plain and '"cast"' not in plain
+    with_set = scenario_prompt(story, _sample_set())
+    assert (
+        "Character Maya: Maya (woman in her 30s, short black hair, red coat)."
+        in with_set
+    )
+    assert "Location The café" in with_set
+    assert '"speaker": str' in with_set

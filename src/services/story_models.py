@@ -626,6 +626,201 @@ def parse_single_scene(
 
 
 # ---------------------------------------------------------------------------
+# Sets: auto-build parser and scene links (models in services/story_sets.py)
+# ---------------------------------------------------------------------------
+
+# Cost guardrails for an auto-built set (about 4 images per character, 2 per
+# location and 1 per prop).
+SET_MAX_CHARACTERS = 4
+SET_MAX_LOCATIONS = 3
+SET_MAX_PROPS = 3
+
+
+def _text(raw, limit: int = 400) -> str:
+    return str(raw or "").strip()[:limit]
+
+
+def _as_list(raw) -> list:
+    if isinstance(raw, str):
+        return [raw]
+    return raw if isinstance(raw, list) else []
+
+
+def _resolver(story_set) -> dict[str, dict[str, str]]:
+    """Lower-case id and name of every asset -> its id, per kind."""
+    out: dict[str, dict[str, str]] = {"character": {}, "location": {}, "prop": {}}
+    for kind, table in out.items():
+        for a in story_set.assets(kind):
+            for alias in (a.id, a.name):
+                if alias:
+                    table.setdefault(alias.strip().lower(), a.id)
+    return out
+
+
+def _resolve(table: dict[str, str], value) -> str:
+    return table.get(str(value or "").strip().lower(), "")
+
+
+def parse_scene_links(text: str, story_set, scenes: list[Scene], keys=None) -> None:
+    """Tag `scenes` with set ids from the model's per-scene "cast",
+    "location", "props" and "speaker" (each a key, an id or a name).
+
+    Unknown names are dropped. A spoken scene whose speaker is unknown gets
+    its first cast member. Scenes the JSON leaves out keep what they have.
+    `keys` maps the model's own keys (e.g. "c1") to asset ids, per kind.
+    """
+    try:
+        data = json.loads(_strip_fences(text))
+    except ValueError:
+        return
+    rows = data.get("scenes") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return
+    table = _resolver(story_set)
+    for kind, mapping in (keys or {}).items():
+        for key, asset_id in mapping.items():
+            table[kind][key.strip().lower()] = asset_id
+    on_screen = {c.id for c in story_set.on_screen()}
+    for sc, raw in zip(scenes, rows, strict=False):
+        if not isinstance(raw, dict):
+            continue
+        cast: list[str] = []
+        for c in _as_list(raw.get("cast")):
+            cid = _resolve(table["character"], c)
+            if cid in on_screen and cid not in cast:
+                cast.append(cid)
+        props: list[str] = []
+        for pr in _as_list(raw.get("props") or raw.get("prop_ids")):
+            pid = _resolve(table["prop"], pr)
+            if pid and pid not in props:
+                props.append(pid)
+        sc.cast = cast
+        sc.location_id = _resolve(
+            table["location"], raw.get("location") or raw.get("location_id")
+        )
+        sc.prop_ids = props
+        sc.speaker_id = ""
+        if sc.spoken:
+            speaker = _resolve(table["character"], raw.get("speaker"))
+            if speaker not in on_screen:
+                speaker = cast[0] if cast else ""
+            if speaker and speaker not in sc.cast:
+                sc.cast.insert(0, speaker)
+            sc.speaker_id = speaker
+
+
+def parse_set_build(text: str, story: Story):
+    """Parse the auto-build JSON into a new StorySet (no images yet) and tag
+    the story's scenes with its ids. Raises ScenarioError when unusable.
+
+    Expected shape: {"name", "characters": [{"key", "name", "description",
+    "outfit", "voice": {"tts_voice", "style", "description"}}], "narrator":
+    {"tts_voice", "style"} | null, "locations": [{"key", "name",
+    "description", "time_of_day"}], "props": [{"key", "name", "description"}],
+    "scenes": [{"cast": [key], "location": key, "props": [key], "speaker": key}]}.
+    """
+    from services.story_sets import (
+        Character,
+        Location,
+        Prop,
+        StorySet,
+        Voice,
+        ensure_views,
+    )
+
+    try:
+        data = json.loads(_strip_fences(text))
+    except ValueError as exc:
+        raise ScenarioError("The set was not valid JSON.") from exc
+    if not isinstance(data, dict):
+        raise ScenarioError("The set must be a JSON object.")
+    keys: dict[str, dict[str, str]] = {"character": {}, "location": {}, "prop": {}}
+
+    def rows(name: str, limit: int) -> list[dict]:
+        return [r for r in _as_list(data.get(name)) if isinstance(r, dict)][:limit]
+
+    def remember(kind: str, raw: dict, asset_id: str) -> None:
+        for alias in (raw.get("key"), raw.get("id")):
+            if alias:
+                keys[kind][_text(alias, 60).lower()] = asset_id
+
+    characters = []
+    for i, raw in enumerate(rows("characters", SET_MAX_CHARACTERS)):
+        name = _text(raw.get("name"), 60)
+        if not name:
+            continue
+        v = raw.get("voice") if isinstance(raw.get("voice"), dict) else {}
+        voice = Voice(
+            tts_voice=_text(v.get("tts_voice"), 20),
+            style=_text(v.get("style"), 200),
+            description=_text(
+                v.get("description") or raw.get("voice_description"), 200
+            ),
+        )
+        if voice.tts_voice not in VOICES:
+            voice.tts_voice = VOICES[i % len(VOICES)]
+        c = Character(
+            name=name,
+            description=_text(raw.get("description") or raw.get("look")),
+            outfit=_text(raw.get("outfit"), 200),
+            voice=voice,
+        )
+        ensure_views(c)
+        remember("character", raw, c.id)
+        characters.append(c)
+    narrator = data.get("narrator")
+    if isinstance(narrator, dict) and any(
+        sc.narration.strip() and not sc.spoken for sc in story.scenes
+    ):
+        tts = _text(narrator.get("tts_voice"), 20)
+        characters.append(
+            Character(
+                name="Narrator",
+                narrator=True,
+                voice=Voice(
+                    tts_voice=tts if tts in VOICES else story.voice_name,
+                    style=_text(narrator.get("style"), 200)
+                    or "Narrate warmly and clearly, like a short film voiceover.",
+                ),
+            )
+        )
+    locations = []
+    for raw in rows("locations", SET_MAX_LOCATIONS):
+        name = _text(raw.get("name"), 60)
+        if not name:
+            continue
+        loc = Location(
+            name=name,
+            description=_text(raw.get("description")),
+            time_of_day=_text(raw.get("time_of_day"), 40),
+        )
+        ensure_views(loc)
+        remember("location", raw, loc.id)
+        locations.append(loc)
+    props = []
+    for raw in rows("props", SET_MAX_PROPS):
+        name = _text(raw.get("name"), 60)
+        if not name:
+            continue
+        prop = Prop(name=name, description=_text(raw.get("description")))
+        ensure_views(prop)
+        remember("prop", raw, prop.id)
+        props.append(prop)
+    if not any(not c.narrator for c in characters) and not locations:
+        raise ScenarioError("The set has no characters or locations.")
+    story_set = StorySet(
+        name=_text(data.get("name"), 60) or f"{story.title or 'Story'} set",
+        style=story.style,
+        characters=characters,
+        locations=locations,
+        props=props,
+        created_from="auto",
+    )
+    parse_scene_links(text, story_set, story.scenes, keys)
+    return story_set
+
+
+# ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
@@ -672,13 +867,37 @@ def _speech_rules(story: Story) -> str:
     )
 
 
-def scenario_prompt(story: Story) -> str:
+def _set_cast_rules(story_set) -> str:
+    """Scenario rules that make the story use a saved set's cast and places."""
+    if story_set is None:
+        return ""
+    lines = ["- Use this cast and these places. Describe them as written here."]
+    for c in story_set.on_screen():
+        lines.append(f"  Character {c.name}: {c.look()}.")
+    for loc in story_set.locations:
+        lines.append(f"  Location {loc.name}: {loc.look()}.")
+    for p in story_set.props:
+        lines.append(f"  Prop {p.name}: {p.look()}.")
+    lines.append(
+        '- For each scene also give "cast" (names of the characters on screen), '
+        '"location" (a location name or ""), "props" (prop names) and '
+        '"speaker" (who says a spoken line, or "").'
+    )
+    return "\n" + "\n".join(lines)
+
+
+def scenario_prompt(story: Story, story_set=None) -> str:
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cams = ", ".join(CAMERA_IDS)
     cam_rule = (
         f'Use the camera move "{story.camera}" for every scene.'
         if story.camera in CAMERA_IDS
         else f"Pick the best camera move for each scene from: {cams}."
+    )
+    links = (
+        ', "cast": [str], "location": str, "props": [str], "speaker": str'
+        if story_set is not None
+        else ""
     )
     return f"""You are a film director and screenwriter.
 Turn the idea below into a short film of exactly {story.scene_count} scenes,
@@ -696,9 +915,50 @@ Rules:
   (subject, action, setting, lighting). Keep the main character's look
   identical in every scene and describe it each time. Write visuals in English.
 - {cam_rule}
-- Build a clear beginning, middle and end.
+- Build a clear beginning, middle and end.{_set_cast_rules(story_set)}
 
-Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str}}]}}"""
+Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str{links}}}]}}"""
+
+
+def set_build_prompt(story: Story) -> str:
+    """Ask Gemini for the story's cast, places and props, with a fixed look
+    and voice for each, and which of them appear in every scene."""
+    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    voices = ", ".join(f"{v} ({VOICE_GENDER.get(v, '')})" for v in VOICES)
+    scenes = "\n".join(
+        f"{i + 1}. [{'spoken on camera' if sc.spoken else 'narrator'}] "
+        f"{sc.visual} | Line: {sc.narration}"
+        for i, sc in enumerate(story.scenes)
+    )
+    return f"""You are a casting director and production designer.
+Read this short film and list everything that must look and sound the same
+in every shot. Visual style: {style["label"]}.
+
+Idea: \"\"\"{story.idea.strip()}\"\"\"
+Scenes:
+{scenes}
+
+Rules:
+- Characters: the people (or creatures) who appear on screen, at most
+  {SET_MAX_CHARACTERS}. "description": age, build, face, skin, hair; fixed
+  wording, no actions. "outfit": what they wear in every scene.
+- Each character's "voice": "tts_voice" is one of {voices} and matches
+  their gender; "style" is a short delivery note (e.g. "warm, unhurried");
+  "description" is one fixed English line that starts with gender, then age,
+  accent, pace and timbre (e.g. "a female voice, early 30s, soft Irish
+  accent, unhurried, warm alto").
+- "narrator": {{"tts_voice", "style"}} for the off-screen narrator if any
+  line is narrated, else null.
+- Locations: the places scenes happen in, at most {SET_MAX_LOCATIONS}.
+  "description": the empty place (no people), materials, light, colours.
+- Props: objects that matter to the story and recur, at most
+  {SET_MAX_PROPS}. Often none.
+- Give every item a short "key" (c1, c2, l1, p1 ...). In "scenes", one entry
+  per scene in order: "cast" (keys on screen), "location" (key or ""),
+  "props" (keys), "speaker" (key of who says a spoken line, else "").
+- Write everything in English.
+
+Return only JSON: {{"name": str, "characters": [{{"key": str, "name": str, "description": str, "outfit": str, "voice": {{"tts_voice": str, "style": str, "description": str}}}}], "narrator": {{"tts_voice": str, "style": str}} | null, "locations": [{{"key": str, "name": str, "description": str, "time_of_day": str}}], "props": [{{"key": str, "name": str, "description": str}}], "scenes": [{{"cast": [str], "location": str, "props": [str], "speaker": str}}]}}"""
 
 
 def scene_regen_prompt(story: Story, index: int) -> str:
