@@ -277,6 +277,9 @@ class Story:
     owner: str = ""
     title: str = ""
     idea: str = ""
+    # Gemini's fuller film brief written from the idea (on the first
+    # scenario); later scenario rewrites work from it. Editable.
+    brief: str = ""
     language: str = "English"
     scene_count: int = 4
     duration: int = 6
@@ -623,6 +626,17 @@ def _spoken(raw, narration: str, speech_mode: str) -> bool:
     return bool(raw)
 
 
+def parse_brief(text: str) -> str:
+    """The scenario's improved "brief" of the idea, or "" if missing."""
+    try:
+        data = json.loads(_strip_fences(text))
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("brief") or "").strip()[:1500]
+
+
 def parse_voice(text: str) -> str:
     """The scenario's "voice" (the on-screen speaker), or "" if missing."""
     try:
@@ -934,11 +948,16 @@ def scenario_prompt(story: Story, story_set=None) -> str:
         if story_set is not None
         else ""
     )
+    brief = (
+        f'\nBrief (from an earlier pass; improve it, keep what the user edited): """{story.brief.strip()}"""'
+        if story.brief.strip()
+        else ""
+    )
     return f"""You are a film director and screenwriter.
 Turn the idea below into a short film of exactly {story.scene_count} scenes,
 each about {story.duration} seconds long. Visual style: {style["label"]}.
 
-Idea: \"\"\"{story.idea.strip()}\"\"\"
+Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}
 
 Rules:
 - Write the title and every narration line in {story.language}.
@@ -952,8 +971,12 @@ Rules:
   identical in every scene and describe it each time. Write visuals in English.
 - {cam_rule}
 - Build a clear beginning, middle and end.{_set_cast_rules(story_set)}
+- "brief": first, rewrite the idea as a clear, vivid film brief in English
+  (3 to 5 sentences: subject, audience, tone, arc, setting and look). Keep
+  everything the idea asks for and add nothing that contradicts it. Then
+  write the scenes from the brief.
 
-Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str{links}}}]}}"""
+Return only JSON: {{"brief": str, "title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str{links}}}]}}"""
 
 
 def set_build_prompt(story: Story) -> str:

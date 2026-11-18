@@ -141,6 +141,7 @@ class StoryBackend(Protocol):
     name: str
 
     def write_scenario(self, story: Story, story_set=None) -> str: ...
+    def live_settings(self, idea: str) -> dict: ...
     def write_set(self, story: Story) -> str: ...
     def generate_set_image(
         self, story_set, prompt: str, refs: list[str], aspect_ratio: str = "1:1"
@@ -520,6 +521,14 @@ class MockStoryBackend:
             title = f"{title} {w}".strip()
         title = (title or "Untitled story")[0].upper() + (title or "Untitled story")[1:]
         voice = "a warm, confident voice, mid-30s" if spoken else ""
+        style_label = STYLE_BY_ID.get(story.style, {"label": "cinematic"})[
+            "label"
+        ].lower()
+        brief = (
+            f"{story.idea.strip().rstrip('.')}. A {n}-scene {style_label} short film "
+            f"about the {hero}, warm and hopeful in tone, with a clear beginning, "
+            "middle and end, for a general audience."
+        )
         if story_set is not None:  # a saved set: cast it in every scene
             lead = story_set.on_screen()[:1]
             places = story_set.locations
@@ -529,7 +538,15 @@ class MockStoryBackend:
                 sc["speaker"] = lead[0].name if lead and sc["spoken"] else ""
                 if lead:
                     sc["visual"] = sc["visual"].replace(f"The {hero}", lead[0].name, 1)
-        return json.dumps({"title": title, "voice": voice, "scenes": scenes})
+        return json.dumps(
+            {"brief": brief, "title": title, "voice": voice, "scenes": scenes}
+        )
+
+    def live_settings(self, idea: str) -> dict:
+        """Demo stand-in for the live settings model: the rules pass."""
+        from services.story_autoset import infer_settings
+
+        return infer_settings(idea)
 
     def rewrite_scene(self, story: Story, index: int) -> str:
         self._sleep(1.0, 1.8)
@@ -1238,14 +1255,18 @@ class VertexStoryBackend:
         )
 
     def _json_text(
-        self, prompt: str, temperature: float = 0.8, task: str = "story_scenario"
+        self,
+        prompt: str,
+        temperature: float = 0.8,
+        task: str = "story_scenario",
+        model: str = "",
     ) -> str:
         from google.genai import types
 
         from common.analytics import track_model_call
         from models.gemini import client
 
-        model = self.cfg.STORY_SCENARIO_MODEL_ID
+        model = model or self.cfg.STORY_SCENARIO_MODEL_ID
         with track_model_call(model_name=model, task=task):
             response = client.models.generate_content(
                 model=model,
@@ -1261,6 +1282,26 @@ class VertexStoryBackend:
 
     def write_scenario(self, story: Story, story_set=None) -> str:
         return self._json_text(scenario_prompt(story, story_set))
+
+    def live_settings(self, idea: str) -> dict:
+        """Film settings a small Gemini model reads out of the idea (one
+        short JSON call per typing pause). {} when turned off or on error."""
+        from services.story_autoset import live_settings_prompt, parse_live_settings
+
+        model = getattr(self.cfg, "STORY_LIVE_SETTINGS_MODEL", "")
+        if not model:
+            return {}
+        try:
+            text = self._json_text(
+                live_settings_prompt(idea),
+                temperature=0.0,
+                task="story_live_settings",
+                model=model,
+            )
+        except Exception:
+            logger.exception("Story Studio: live settings model failed")
+            return {}
+        return parse_live_settings(text)
 
     def write_set(self, story: Story) -> str:
         return self._json_text(
