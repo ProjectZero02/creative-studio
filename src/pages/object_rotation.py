@@ -137,6 +137,7 @@ from components.generation_progress.generation_progress import friendly_error
 from models.object_rotation import generate_product_views, save_object_rotation_project
 from state.state import AppState
 from config.default import Default as cfg
+from config.video_studio_models import engine_name
 
 
 @me.stateclass
@@ -290,7 +291,7 @@ def _rotation_progress(state: PageState):
         demo_progress(
             stages=[
                 "Preparing the four views",
-                "Making the 360 video with Veo",
+                f"Making the 360 video with {engine_name(cfg.OBJECT_ROTATION_VIDEO_MODEL)}",
                 "Saving to your library",
             ],
             current=1,

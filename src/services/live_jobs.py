@@ -314,7 +314,7 @@ def _real_image(job: LiveJob) -> RunResult:
 def _real_video(job: LiveJob) -> RunResult:
     from common.metadata import get_media_item_by_id_system
     from common.utils import create_display_url
-    from config.veo_models import DEFAULT_VEO_VERSION_ID
+    from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID
     from models.requests import VideoGenerationRequest
     from services.veo_service import create_initial_job, process_veo_generation_task
 
@@ -329,12 +329,12 @@ def _real_video(job: LiveJob) -> RunResult:
         resolution="720p",
         enhance_prompt=True,
         generate_audio=True,
-        model_version_id=DEFAULT_VEO_VERSION_ID,
+        model_version_id=DEFAULT_STUDIO_MODEL_ID,  # Gemini Omni by default
         person_generation="Allow (Adults only)",
         reference_image_gcs=from_image,
         reference_image_mime_type="image/png" if from_image else None,
     )
-    # The Veo service saves the job to Firestore (so it shows in the Library)
+    # The video job service saves the job to Firestore (so it shows in the Library)
     # and records failures there; run it inline in this job's thread.
     item_id = create_initial_job(request, job.owner)
     process_veo_generation_task(item_id, request, job.owner)

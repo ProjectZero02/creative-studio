@@ -52,7 +52,7 @@ def page() -> None:
     tiles_data = [
         {"icon": "home", "route": "/home"},
         {"label": "Gemini Omni", "route": "/gemini-omni"},
-        {"label": "Veo", "route": "/veo"},
+        {"label": "Video Studio", "route": "/veo"},
         {"label": "Gemini Image Generation", "icon": "banana", "route": "/nano-banana"},
         {"label": "Lyria", "route": "/lyria"},
         {"label": "Speech", "route": "/home"},

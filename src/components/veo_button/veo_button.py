@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A reusable button for navigating to the Veo page."""
+"""A reusable button that opens an image in Video Studio (Gemini Omni)."""
 
 import mesop as me
 
@@ -20,7 +20,7 @@ from common.analytics import log_ui_click
 from state.state import AppState
 
 def on_send_to_veo(e: me.ClickEvent):
-    """Navigates to the Veo page with the selected image as a query parameter."""
+    """Opens Video Studio with the selected image as the first frame."""
     app_state = me.state(AppState)
     log_ui_click(
         element_id="veo_button",
@@ -41,11 +41,11 @@ def on_send_to_veo(e: me.ClickEvent):
 @me.component
 def veo_button(gcs_uri: str):
     """
-    A reusable button that navigates to the Veo page with the provided
-    image GCS URI.
+    A reusable button that opens Video Studio with the provided image GCS
+    URI as the first frame.
 
     Args:
-        gcs_uri: The Google Cloud Storage URI of the image to send to Veo.
+        gcs_uri: The Google Cloud Storage URI of the image to animate.
     """
     with (
         me.content_button(
@@ -62,4 +62,4 @@ def veo_button(gcs_uri: str):
         ),
     ):
         me.icon("slideshow")
-        me.text("Veo")
+        me.text("Video")

@@ -24,7 +24,14 @@ from common.utils import create_display_url
 from common.veo_utils import start_async_veo_job
 from components.dialog import dialog, dialog_actions
 from config.default import Default
-from config.veo_models import VEO_MODELS, get_veo_model_config
+from config.veo_models import get_veo_model_config
+from config.video_studio_models import (
+    DEFAULT_STUDIO_MODEL_ID,
+    is_omni,
+    model_display_name,
+    studio_model_ids,
+    studio_modes,
+)
 from models.requests import VideoGenerationRequest
 from state.state import AppState
 
@@ -32,12 +39,12 @@ from state.state import AppState
 @me.stateclass
 @dataclass
 class VeoExtendDialogState:
-    """State for the Veo Extend Dialog."""
+    """State for the Extend video dialog (Gemini Omni or Veo)."""
 
     is_open: bool = False
     input_video_uri: str = ""  # GCS URI
     prompt: str = ""
-    model_id: str = "3.1-fast-preview"
+    model_id: str = DEFAULT_STUDIO_MODEL_ID  # Gemini Omni unless set to Veo
     duration: int = 7
     is_loading: bool = False
     loading_message: str = ""
@@ -47,10 +54,24 @@ class VeoExtendDialogState:
     generated_video_uri: str = ""  # GCS URI of result
 
 
+def extension_model_ids(current: str = "") -> list[str]:
+    """Models that can extend a video: Gemini Omni first, Veo when shown."""
+    ids = []
+    for model_id in studio_model_ids(current):
+        if is_omni(model_id):
+            if "extend" in studio_modes(model_id):
+                ids.append(model_id)
+        else:
+            config = get_veo_model_config(model_id)
+            if config and config.supports_video_extension:
+                ids.append(model_id)
+    return ids
+
+
 @me.component
 def extend_dialog(state: VeoExtendDialogState, on_close: Callable):
     """
-    Renders a dialog to extend a Veo video.
+    Renders a dialog to extend a video with Gemini Omni or Veo.
     """
     print(f"DEBUG: Rendering extend_dialog. is_open={state.is_open}")
 
@@ -121,16 +142,11 @@ def extend_dialog(state: VeoExtendDialogState, on_close: Callable):
                 with me.box(
                     style=me.Style(display="flex", flex_direction="row", gap=16)
                 ):
-                    # Filter models that support extension
-                    extension_models = [
-                        m for m in VEO_MODELS if m.supports_video_extension
-                    ]
-
                     me.select(
                         label="Model",
                         options=[
-                            me.SelectOption(label=m.display_name, value=m.version_id)
-                            for m in extension_models
+                            me.SelectOption(label=model_display_name(m), value=m)
+                            for m in extension_model_ids(state.model_id)
                         ],
                         value=state.model_id,
                         on_selection_change=on_model_change,
@@ -138,7 +154,8 @@ def extend_dialog(state: VeoExtendDialogState, on_close: Callable):
                         appearance="outline",
                     )
 
-                    # Durations
+                    # Durations. Gemini Omni sets the extension length
+                    # itself (3-10 s), so the picker is Veo only.
                     current_model_config = get_veo_model_config(state.model_id)
                     durations = (
                         current_model_config.supported_extension_durations
@@ -147,17 +164,18 @@ def extend_dialog(state: VeoExtendDialogState, on_close: Callable):
                         else [7]
                     )
 
-                    me.select(
-                        label="Extension Length",
-                        options=[
-                            me.SelectOption(label=f"{d}s", value=str(d))
-                            for d in durations
-                        ],
-                        value=str(state.duration),
-                        on_selection_change=on_duration_change,
-                        style=me.Style(width="120px"),
-                        appearance="outline",
-                    )
+                    if not is_omni(state.model_id):
+                        me.select(
+                            label="Extension Length",
+                            options=[
+                                me.SelectOption(label=f"{d}s", value=str(d))
+                                for d in durations
+                            ],
+                            value=str(state.duration),
+                            on_selection_change=on_duration_change,
+                            style=me.Style(width="120px"),
+                            appearance="outline",
+                        )
 
                 if state.error_message:
                     me.text(

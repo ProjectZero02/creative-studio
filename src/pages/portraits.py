@@ -43,9 +43,15 @@ from components.page_scaffold import (
 )
 from components.selfie_camera.selfie_camera import selfie_camera
 from config.default import ABOUT_PAGE_CONTENT, Default
-from config.veo_models import VEO_MODELS, get_veo_model_config, DEFAULT_VEO_VERSION_ID
+from config.veo_models import get_veo_model_config
+from config.video_studio_models import (
+    DEFAULT_STUDIO_MODEL_ID,
+    limits,
+    video_model_choices,
+)
 from models.model_setup import GeminiModelSetup, VeoModelSetup
-from models.veo import VideoGenerationRequest, generate_video
+from models.requests import VideoGenerationRequest
+from models.workflow_video import generate_video_any_model
 from models.video_processing import convert_mp4_to_gif
 from pages.styles import (
     _BOX_STYLE_CENTER_DISTRIBUTED,
@@ -87,7 +93,7 @@ class PageState:
     gif_display_url: str = ""
     is_converting_gif: bool = False
 
-    veo_model: str = DEFAULT_VEO_VERSION_ID
+    veo_model: str = DEFAULT_STUDIO_MODEL_ID  # Gemini Omni unless set to Veo
     veo_prompt_input: str = ""
 
     # I2V reference Image
@@ -123,29 +129,17 @@ def motion_portraits_content(app_state: me.state):
 
     state = me.state(PageState)
     # Get current model config
-    selected_model_config = get_veo_model_config(state.veo_model)
-
-    # Ensure video length is valid for the selected model (e.g. initial load)
-    if selected_model_config.supported_durations:
-        if state.video_length not in selected_model_config.supported_durations:
-            state.video_length = selected_model_config.default_duration
-    elif not (
-        selected_model_config.min_duration
-        <= state.video_length
-        <= selected_model_config.max_duration
-    ):
-        state.video_length = selected_model_config.default_duration
+    # Keep the length and aspect valid for the model (e.g. initial load).
+    durations, aspects, supports_enhance = _fit_to_model(state)
 
     # Generate dynamic options
     aspect_ratio_options = [
-        me.SelectOption(label=ratio, value=ratio)
-        for ratio in selected_model_config.supported_aspect_ratios
+        me.SelectOption(label=ratio, value=ratio) for ratio in aspects
     ]
     video_length_options = [
-        me.SelectOption(label=f"{i} seconds", value=str(i))
-        for i in (selected_model_config.supported_durations or range(selected_model_config.min_duration, selected_model_config.max_duration + 1))
+        me.SelectOption(label=f"{i} seconds", value=str(i)) for i in durations
     ]
-    auto_enhance_disabled = not selected_model_config.supports_prompt_enhancement
+    auto_enhance_disabled = not supports_enhance
 
     if state.info_dialog_open:
         with dialog(is_open=state.info_dialog_open):  # pylint: disable=not-context-manager
@@ -153,7 +147,7 @@ def motion_portraits_content(app_state: me.state):
             me.markdown(MOTION_PORTRAITS_INFO["description"])
             me.divider()
             me.text("Current Settings", type="headline-6")
-            me.text(f"Veo Model: {state.veo_model}")
+            me.text(f"Video model: {state.veo_model}")
             me.text(f"Prompt used: {state.veo_prompt_input}")
             with me.box(style=me.Style(margin=me.Margin(top=16))):
                 me.button("Close", on_click=close_info_dialog, type="flat")
@@ -256,10 +250,10 @@ def motion_portraits_content(app_state: me.state):
                             label="model",
                             appearance="outline",
                             options=[
-                                me.SelectOption(
-                                    label=model.display_name, value=model.version_id
+                                me.SelectOption(label=label, value=model_id)
+                                for label, model_id in video_model_choices(
+                                    state.veo_model
                                 )
-                                for model in VEO_MODELS
                             ],
                             value=state.veo_model,
                             on_selection_change=on_model_selection_change,
@@ -575,6 +569,26 @@ def on_click_clear_reference_image(e: me.ClickEvent):
     yield
 
 
+def _fit_to_model(state) -> tuple[list[int], list[str], bool]:
+    """Fix the length and aspect for the selected video model.
+
+    Returns the model's lengths, aspect ratios and whether it offers prompt
+    enhancement (Veo only; Gemini Omni has no such switch).
+    """
+    lim = limits(state.veo_model, "i2v")
+    if not lim:
+        state.veo_model = DEFAULT_STUDIO_MODEL_ID
+        lim = limits(state.veo_model, "i2v")
+    if state.aspect_ratio not in lim.aspect_ratios:
+        state.aspect_ratio = lim.aspect_ratios[0]
+    if state.video_length not in lim.durations:
+        state.video_length = lim.default_duration
+    veo = get_veo_model_config(state.veo_model)
+    return lim.durations, lim.aspect_ratios, bool(
+        veo and veo.supports_prompt_enhancement
+    )
+
+
 def on_model_selection_change(e: me.SelectSelectionChangeEvent):
     """Handles model selection change."""
     app_state = me.state(AppState)
@@ -586,23 +600,7 @@ def on_model_selection_change(e: me.SelectSelectionChangeEvent):
     )
     state = me.state(PageState)
     state.veo_model = e.value
-
-    selected_model_config = get_veo_model_config(state.veo_model)
-
-    # Validate aspect ratio
-    if state.aspect_ratio not in selected_model_config.supported_aspect_ratios:
-        state.aspect_ratio = selected_model_config.supported_aspect_ratios[0]
-
-    # Validate video length
-    if selected_model_config.supported_durations:
-        if state.video_length not in selected_model_config.supported_durations:
-            state.video_length = selected_model_config.default_duration
-    elif not (
-        selected_model_config.min_duration
-        <= state.video_length
-        <= selected_model_config.max_duration
-    ):
-        state.video_length = selected_model_config.default_duration
+    _fit_to_model(state)
 
     yield
 
@@ -838,7 +836,7 @@ Do not describe the frame. There should be no lip movement like speaking, but th
             video_count=1
         )
 
-        gcs_uri, _ = generate_video(request)
+        gcs_uri, _ = generate_video_any_model(request)
 
         end_time = time.time()
         execution_time = end_time - start_time

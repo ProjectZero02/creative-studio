@@ -24,7 +24,7 @@ from common.metadata import (
 from common.tasks import enqueue_thumbnail_task
 from models.gemini import get_best_video_frame_timestamp
 from models.requests import VideoGenerationRequest
-from models.veo import generate_video
+from models.workflow_video import generate_video_any_model
 from config.veo_models import get_veo_model_config
 from models.video_processing import extract_and_upload_thumbnail, get_video_duration
 
@@ -55,7 +55,7 @@ def process_veo_generation_task(
     job_id: str, request_data: VideoGenerationRequest, user_email: str
 ):
     """
-    Background task to process Veo video generation.
+    Background task to process a video job (Gemini Omni or Veo).
     Updates Firestore with status changes.
     """
     logger.info(f"Starting background task for job {job_id}")
@@ -65,7 +65,8 @@ def process_veo_generation_task(
         _update_job_status(job_id, "processing")
 
         # 2. Perform the actual heavy lifting (synchronous call)
-        video_uris, resolution = generate_video(request_data)
+        # Gemini Omni ids run on Omni, Veo ids on Veo.
+        video_uris, resolution = generate_video_any_model(request_data)
 
         # 3. Success! Update Firestore with results.
         # Check if this was an extension request to correct the duration

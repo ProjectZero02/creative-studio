@@ -26,15 +26,55 @@ modes ``first_last`` and ``ref2v``; ``omni_mode`` translates.
 
 from dataclasses import dataclass
 
+from config.default import Default
 from config.omni_models import (
     DEFAULT_OMNI_VERSION_ID,
     get_omni_model_config,
     modes_for_model,
 )
+from config.omni_models import get_version_id_by_model_name as _omni_version_id
 from config.veo_models import VEO_MODELS, get_veo_model_config
+from config.veo_models import get_version_id_by_model_name as _veo_version_id
 
-DEFAULT_STUDIO_MODEL_ID = DEFAULT_OMNI_VERSION_ID
+
+def _default_video_model_id(model_name: str) -> str:
+    """The default video model id for a configured model name.
+
+    ``DEFAULT_VEO_MODEL_NAME`` (kept under its old name so existing deploys
+    still work) now defaults to Gemini Omni. A ``veo-*`` name brings Veo back
+    as the default; an unknown name falls back to the default Omni model.
+    """
+    return (
+        _omni_version_id(model_name)
+        or _veo_version_id(model_name)
+        or DEFAULT_OMNI_VERSION_ID
+    )
+
+
+# The video model every page starts on: Video Studio, Shop the Look, Motion
+# Portraits, Retro Games, the Library's extend dialog and the Live agent.
+DEFAULT_STUDIO_MODEL_ID = _default_video_model_id(Default().DEFAULT_VEO_MODEL_NAME)
 VIDEO_STUDIO_PATH = "/veo"
+
+
+def veo_models_shown() -> bool:
+    """True when Veo is listed in the video model pickers (SHOW_VEO_MODELS)."""
+    return Default().SHOW_VEO_MODELS
+
+
+def visible_veo_models() -> list:
+    """The Veo models the pickers list: all of them, or none when hidden."""
+    return list(VEO_MODELS) if veo_models_shown() else []
+
+
+def video_model_choices(current: str = "") -> list[tuple[str, str]]:
+    """``(label, id)`` pairs for a simple video model picker.
+
+    Gemini Omni (the default) first, then Veo when ``SHOW_VEO_MODELS`` is on.
+    A Veo model that is already selected (a deep link, or ``veo-*`` set as the
+    default) stays listed so the picker can show it.
+    """
+    return [(model_display_name(m), m) for m in studio_model_ids(current)]
 
 
 def omni_link_params(image_path: str | None = None) -> dict[str, str]:
@@ -74,12 +114,16 @@ def is_omni(model_id: str) -> bool:
 
 
 def studio_model_ids(current: str = "") -> list[str]:
-    """Model ids for the model chip: default Omni first, then every Veo model.
+    """Model ids for the model chip: default Omni first, then the Veo models.
 
-    Older Omni previews stay out of the list, but a preview reached through a
-    deep link (``?veo_model=``) is kept so the chip can show it.
+    Veo is listed only when ``SHOW_VEO_MODELS`` is on. Older Omni previews stay
+    out of the list, but a preview or Veo model reached through a deep link
+    (``?veo_model=``) is kept so the chip can show it.
     """
-    ids = [DEFAULT_STUDIO_MODEL_ID] + [m.version_id for m in VEO_MODELS]
+    ids = [DEFAULT_OMNI_VERSION_ID]
+    if DEFAULT_STUDIO_MODEL_ID not in ids:
+        ids.append(DEFAULT_STUDIO_MODEL_ID)
+    ids += [m.version_id for m in visible_veo_models() if m.version_id not in ids]
     if (
         current
         and current not in ids

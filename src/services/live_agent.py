@@ -192,9 +192,9 @@ def page_params(job: LiveJob) -> dict:
     """Query params so the studio shows the same model and input as the job."""
     if job.kind != "video":
         return {}
-    from config.veo_models import DEFAULT_VEO_VERSION_ID
+    from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID
 
-    params = {"veo_model": DEFAULT_VEO_VERSION_ID}
+    params = {"veo_model": DEFAULT_STUDIO_MODEL_ID}
     if job.source_uri.startswith("gs://"):
         params["image_path"] = job.source_uri
     return params

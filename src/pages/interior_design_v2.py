@@ -49,6 +49,7 @@ from components.library.events import LibrarySelectionChangeEvent
 from components.page_scaffold import page_frame, page_scaffold
 from components.snackbar import snackbar
 from config.default import Default as cfg
+from config.video_studio_models import engine_name
 from models.gemini import (
     extract_room_names_from_image,
     generate_image_from_prompt_and_images,
@@ -378,7 +379,10 @@ def _interior_progress(state: PageState):
     elif state.is_generating_video:
         joining = "concatenat" in (state.video_generation_status or "").lower()
         demo_progress(
-            stages=["Animating each room with Veo", "Joining the clips into one tour"],
+            stages=[
+                f"Animating each room with {engine_name(cfg.INTERIOR_DESIGN_VIDEO_MODEL)}",
+                "Joining the clips into one tour",
+            ],
             current=1 if joining else 0, status="running", run_id="interior_video",
             typical_seconds=90, work_stage=0, aspect="16:9", media_label="video tour",
         )

@@ -113,7 +113,8 @@ class Default:
     LIVE_AGENT_OFFLINE: bool = (
         os.environ.get("LIVE_AGENT_OFFLINE", "false").lower() == "true"
     )
-    MODEL_ID: str = os.environ.get("MODEL_ID", "gemini-3.5-flash")
+    # Newest Flash-tier Gemini (3.8 Flash; served from GEMINI_LOCATION=global).
+    MODEL_ID: str = os.environ.get("MODEL_ID", "gemini-3.8-flash")
     INIT_VERTEX: bool = True
     GEMINI_IMAGE_GEN_MODEL: str = os.environ.get(
         "GEMINI_IMAGE_GEN_MODEL",
@@ -129,7 +130,7 @@ class Default:
 
     GEMINI_AUDIO_ANALYSIS_MODEL_ID: str = os.environ.get(
         "GEMINI_AUDIO_ANALYSIS_MODEL_ID",
-        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",  # newest Flash-Lite; takes audio input
     )
     # Gemini Writers Workshop: the model picker offers exactly these models, and
     # GEMINI_WRITERS_WORKSHOP_MODEL_ID is the one preselected (it is added to the
@@ -155,7 +156,7 @@ class Default:
     )
     GEMINI_CRITIQUE_MODEL_ID: str = os.environ.get(
         "GEMINI_CRITIQUE_MODEL_ID",
-        "gemini-3-flash-preview",
+        "gemini-3.8-flash",
     )
     GEMINI_CRITIQUE_LOCATION: str = os.environ.get(
         "GEMINI_CRITIQUE_LOCATION",
@@ -186,9 +187,15 @@ class Default:
     LIBRARY_MEDIA_PER_PAGE: int = int(os.environ.get("LIBRARY_MEDIA_PER_PAGE", 15))
 
     # Veo
+    # Gemini Omni is the default video model everywhere. Veo stays available for
+    # upstream merges: set SHOW_VEO_MODELS=true to list Veo in the video model
+    # pickers again (a ?veo_model= deep link to a Veo model always works).
+    SHOW_VEO_MODELS: bool = os.environ.get("SHOW_VEO_MODELS", "false").lower() == "true"
+    # The default video model for every page (name kept so existing deploys
+    # work). A veo-* name makes Veo the default again.
     DEFAULT_VEO_MODEL_NAME: str = os.environ.get(
         "DEFAULT_VEO_MODEL_NAME",
-        "veo-3.1-fast-generate-001",
+        "gemini-omni-1.2-flash",
     )
     VEO_LOCATION: str = os.environ.get("VEO_LOCATION", "us-central1")
     PREVIEW_LOCATION: str = os.environ.get("PREVIEW_LOCATION", "global")
@@ -250,7 +257,7 @@ class Default:
     # Gemini Image (Nano Banana) adapter, which uses GEMINI_IMAGE_GEN_MODEL.
     CHARACTER_CONSISTENCY_VEO_MODEL: str = os.environ.get(
         "CHARACTER_CONSISTENCY_VEO_MODEL",
-        "veo-3.1-fast-generate-001",
+        "gemini-omni-1.2-flash",  # a veo-* name switches back to Veo
     )
     CHARACTER_CONSISTENCY_GEMINI_MODEL: str = os.environ.get(
         "CHARACTER_CONSISTENCY_GEMINI_MODEL",
@@ -263,7 +270,12 @@ class Default:
 
     # Lyria
     LYRIA_LOCATION: str = os.environ.get("LYRIA_LOCATION", "us-central1")
+    # Endpoint id for the Lyria 2 predict path only (Lyria 3 uses Interactions).
     LYRIA_MODEL_VERSION: str = os.environ.get("LYRIA_MODEL_VERSION", "lyria-002")
+    # The Music page's preselected model (a config.lyria_models version_id).
+    # Lyria 3 Pro is the newest; set 3-clip-preview or 2 if your project lacks
+    # Lyria 3 Pro access.
+    LYRIA_DEFAULT_MODEL: str = os.environ.get("LYRIA_DEFAULT_MODEL", "3-pro-preview")
     LYRIA_PROJECT_ID: str = os.environ.get("LYRIA_PROJECT_ID", PROJECT_ID)
     MEDIA_BUCKET: str = os.environ.get("MEDIA_BUCKET", _BUCKET_BASE)
 

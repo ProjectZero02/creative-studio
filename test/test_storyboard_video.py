@@ -47,14 +47,24 @@ def test_storyboarder_defaults_to_omni_1_2() -> None:
     )
 
 
-def test_video_model_options_lists_omni_first_then_veo() -> None:
+def test_video_model_options_lists_omni_first_then_veo(monkeypatch) -> None:
     """The dropdown is registry driven: i2v Omni models, then every Veo model."""
+    monkeypatch.setattr("config.video_studio_models.veo_models_shown", lambda: True)
     options = video_model_options()
     omni_ids = [m.version_id for m in OMNI_MODELS if "i2v" in m.supported_modes]
     veo_ids = [m.version_id for m in VEO_MODELS]
     assert [value for _, value in options] == omni_ids + veo_ids
     assert options[0] == ("Gemini Omni 1.2 Flash", "gemini-omni-1.2-flash")
     assert len({value for _, value in options}) == len(options)
+
+
+def test_video_model_options_hide_veo_by_default(monkeypatch) -> None:
+    """SHOW_VEO_MODELS off: only Omni, but a selected Veo model stays listed."""
+    monkeypatch.setattr("config.video_studio_models.veo_models_shown", lambda: False)
+    omni_ids = [m.version_id for m in OMNI_MODELS if "i2v" in m.supported_modes]
+    assert [value for _, value in video_model_options()] == omni_ids
+    veo_id = VEO_MODELS[0].version_id
+    assert [value for _, value in video_model_options(veo_id)] == omni_ids + [veo_id]
 
 
 def test_supported_aspect_ratios() -> None:

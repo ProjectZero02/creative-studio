@@ -36,6 +36,10 @@ from models.gemini import (
     select_best_image,
     generate_image_from_prompt_and_images,
 )
+from models.workflow_video import (
+    generate_workflow_image_to_video,
+    is_omni_model_name,
+)
 from .character_consistency_models import (
     BestImage,
     FacialCompositeProfile,
@@ -46,6 +50,9 @@ from .character_consistency_models import (
 cfg = Default()
 
 from typing import Generator
+
+# Clip length for the final video (Veo's 8 s; Omni clamps to its own range).
+CHARACTER_CONSISTENCY_VIDEO_SECONDS = 8
 
 def generate_character_video(
     user_email: str, reference_image_gcs_uris: list[str], scene_prompt: str
@@ -195,17 +202,30 @@ def generate_character_video(
     yield WorkflowStepResult(
         step_name="generate_video",
         status="processing",
-        message="Step 7 of 7: Generating final video with Veo...",
+        message="Step 7 of 7: Generating final video...",
         duration_seconds=0,
         data={},
     )
-    video_bytes, veo_prompt = _generate_video_from_image(outpainted_image_bytes, scene_prompt)
-    video_gcs_uri = store_to_gcs(
-        folder="character_consistency_videos",
-        file_name=f"video_{uuid.uuid4()}.mp4",
-        mime_type="video/mp4",
-        contents=video_bytes,
-    )
+    if is_omni_model_name(cfg.CHARACTER_CONSISTENCY_VEO_MODEL):
+        veo_prompt = _write_video_prompt(outpainted_image_bytes, scene_prompt)
+        video_gcs_uri = generate_workflow_image_to_video(
+            cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
+            outpainted_image_gcs_uri,
+            veo_prompt,
+            CHARACTER_CONSISTENCY_VIDEO_SECONDS,
+        )
+        if not video_gcs_uri:
+            raise RuntimeError("Gemini Omni returned no video.")
+    else:
+        video_bytes, veo_prompt = _generate_video_from_image(
+            outpainted_image_bytes, scene_prompt
+        )
+        video_gcs_uri = store_to_gcs(
+            folder="character_consistency_videos",
+            file_name=f"video_{uuid.uuid4()}.mp4",
+            mime_type="video/mp4",
+            contents=video_bytes,
+        )
     step_duration = time.time() - step_start_time
     yield WorkflowStepResult(
         step_name="generate_video",
@@ -306,29 +326,18 @@ def _generate_gemini_candidates(
     return candidate_image_gcs_uris, candidate_image_bytes_list
 
 
-def _generate_video_from_image(
-    image_bytes: bytes, provided_prompt: str | None = None
-) -> tuple[bytes, str]:
-    """Generates a video from an image."""
+def _write_video_prompt(image_bytes: bytes, provided_prompt: str | None = None) -> str:
+    """Asks Gemini for a detailed video prompt from the image and user prompt."""
     gemini_client = genai.Client(
         vertexai=True,
         project=cfg.PROJECT_ID,
-        location=cfg.LOCATION,
+        # Gemini 3.x is served from the global endpoint, not LOCATION.
+        location=cfg.CHARACTER_CONSISTENCY_GEMINI_LOCATION,
         http_options={"api_version": cfg.VERTEX_API_VERSION},
     )
-    veo_client = genai.Client(
-        vertexai=True,
-        project=cfg.PROJECT_ID,
-        location=cfg.LOCATION,
-        http_options={"api_version": cfg.VERTEX_API_VERSION},
-    )
-
     pil_image = PIL_Image.open(io.BytesIO(image_bytes))
-    width, height = pil_image.size
-    aspect_ratio = "9:16" if height > width else "16:9"
-
     gemini_contents = [
-        "You are an expert Cinematic Prompt Engineer and a creative director for Veo. Your purpose is to transform a user's basic prompt and optional reference image into a masterful, detailed, and technically rich Veo prompt that will guide the model to generate a high-quality video.",
+        "You are an expert Cinematic Prompt Engineer and a creative director for AI video. Your purpose is to transform a user's basic prompt and optional reference image into a masterful, detailed, and technically rich video prompt that will guide the model to generate a high-quality video.",
         pil_image,
     ]
     if provided_prompt:
@@ -343,7 +352,22 @@ def _generate_video_from_image(
             thinking_config=genai.types.ThinkingConfig(thinking_budget=-1)
         ),
     )
-    video_prompt = video_prompt_response.text.strip()
+    return video_prompt_response.text.strip()
+
+
+def _generate_video_from_image(
+    image_bytes: bytes, provided_prompt: str | None = None
+) -> tuple[bytes, str]:
+    """Generates a video from an image with Veo (when the model is a Veo id)."""
+    veo_client = genai.Client(
+        vertexai=True,
+        project=cfg.PROJECT_ID,
+        location=cfg.LOCATION,
+        http_options={"api_version": cfg.VERTEX_API_VERSION},
+    )
+    width, height = PIL_Image.open(io.BytesIO(image_bytes)).size
+    aspect_ratio = "9:16" if height > width else "16:9"
+    video_prompt = _write_video_prompt(image_bytes, provided_prompt)
 
     input_image = genai.types.Image(image_bytes=image_bytes, mime_type="image/png")
 

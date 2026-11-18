@@ -86,6 +86,7 @@ from config.video_studio_models import (
     model_display_name,
     omni_mode,
     studio_model_ids,
+    veo_models_shown,
     studio_modes,
     typical_seconds,
 )
@@ -267,8 +268,12 @@ def veo_content(app_state: me.state):
             me.markdown(
                 "Video Studio uses **Gemini Omni** by default: text, image, "
                 "first + last frame and up to 10 reference images, plus editing, "
-                "extending and upscaling a video, with generated sound. Pick a "
-                "**Veo** model in the Model chip to use Veo instead."
+                "extending and upscaling a video, with generated sound."
+                + (
+                    " Pick a **Veo** model in the Model chip to use Veo instead."
+                    if veo_models_shown()
+                    else ""
+                )
             )
             me.markdown(ABOUT_PAGE_CONTENT["sections"][1]["description"])
             me.divider()
@@ -309,7 +314,7 @@ def veo_content(app_state: me.state):
             "movie",
             show_info_button=True,
             on_info_click=open_info_dialog,
-            description="Make, edit, extend or upscale video clips with Gemini Omni or Veo.",
+            description="Make, edit, extend or upscale video clips with Gemini Omni.",
             centered=True,
         )
         with me.box(classes="gm-studio"):

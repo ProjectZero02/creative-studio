@@ -29,6 +29,7 @@ from components.library.library_chooser_button import library_chooser_button
 from components.page_scaffold import page_frame, page_scaffold
 from components.selfie_camera.selfie_camera import selfie_camera
 from config.default import Default
+from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID, video_model_choices
 from pages.styles import _BOX_STYLE_CENTER_DISTRIBUTED
 from state.state import AppState
 from workflows.retro_games.backend import (
@@ -57,7 +58,7 @@ class PageState:
     # New Configuration Fields
     theme_context: str = ""
     include_bumper: bool = True
-    selected_model: str = "3.1-preview"
+    selected_model: str = DEFAULT_STUDIO_MODEL_ID
     selected_duration: str = "8"  # Stored as string for select component
     selected_scene_count: str = "1" # Stored as string
 
@@ -648,9 +649,9 @@ def retro_games_content():
                             me.select(
                                 label="Model",
                                 options=[
-                                    me.SelectOption(
-                                        label="Veo 3.1 Preview",
-                                        value="3.1-preview",
+                                    me.SelectOption(label=label, value=model_id)
+                                    for label, model_id in video_model_choices(
+                                        state.selected_model
                                     )
                                 ],
                                 value=state.selected_model,

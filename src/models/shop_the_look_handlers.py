@@ -33,13 +33,39 @@ from models.gemini import (
     select_best_image_with_description,
 )
 from models.shop_the_look_models import ProgressionImage, ProgressionImages
+from models.requests import VideoGenerationRequest
 from models.veo import image_to_video
+from models.workflow_video import generate_video_any_model, resolve_omni_model
 from models.vto import generate_vto_image
 from common.utils import create_display_url
 from state.shop_the_look_state import PageState
 from state.state import AppState
 
 config = Default()
+
+
+def _omni_look_video(state: PageState, version_id: str, prompt: str) -> dict:
+    """Animate the try-on image with Gemini Omni.
+
+    Returns the result in the Veo operation shape the handler already reads,
+    so the success and error handling below stays shared.
+    """
+    uris, _ = generate_video_any_model(
+        VideoGenerationRequest(
+            prompt=prompt,
+            duration_seconds=int(state.video_length),
+            video_count=1,
+            aspect_ratio=state.aspect_ratio,
+            resolution="720p",
+            enhance_prompt=False,
+            generate_audio=True,
+            model_version_id=version_id,
+            person_generation="allow_adult",
+            reference_image_gcs=state.result_image_gcs_uri,
+            reference_image_mime_type="image/png",
+        ),
+    )
+    return {"done": True, "response": {"videos": [{"gcsUri": u} for u in uris]}}
 
 
 def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
@@ -51,7 +77,9 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
     state.result_video_gcs_uri = ""
     state.result_video_display_url = ""
     state.timing = ""
-    state.current_status = f"Generating video with Veo {state.veo_model}"
+    omni = resolve_omni_model(state.veo_model)
+    engine = omni.display_name if omni else f"Veo {state.veo_model}"
+    state.current_status = f"Generating video with {engine}"
     yield
 
     print(f"Lights, camera, action!:\n{state.veo_prompt_input}")
@@ -74,17 +102,20 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
         for item in state.catalog:
             if item.look_id == state.look:
                 veo_prompt += f"\n {item.ai_description}"
-        op = image_to_video(
-            veo_prompt,
-            state.result_image_gcs_uri,
-            seed,
-            aspect_ratio,
-            state.veo_sample_count,
-            f"gs://{config.VIDEO_BUCKET}",
-            rewrite_prompt,
-            state.video_length,
-            state.veo_model,
-        )
+        if omni:
+            op = _omni_look_video(state, omni.version_id, veo_prompt)
+        else:
+            op = image_to_video(
+                veo_prompt,
+                state.result_image_gcs_uri,
+                seed,
+                aspect_ratio,
+                state.veo_sample_count,
+                f"gs://{config.VIDEO_BUCKET}",
+                rewrite_prompt,
+                state.video_length,
+                state.veo_model,
+            )
 
         # Check for explicit errors in response
         if op.get("done") and op.get("error"):
