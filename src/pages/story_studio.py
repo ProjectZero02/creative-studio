@@ -39,13 +39,14 @@ from components.story_studio.set_cards import (
     parse_key,
 )
 from components.story_studio.widgets import (
+    story_idea_watch,
     story_stepper,
     story_style_picker,
     story_ticker,
     story_timeline,
 )
 from config.default import Default
-from services import story_jobs
+from services import story_autoset, story_jobs
 from services.story_models import (
     ASPECT_RATIOS,
     CAMERA_IDS,
@@ -297,6 +298,8 @@ def _load_form(story: Story) -> None:
     s.camera = story.camera
     s.reference_uri = story.reference_uri
     s.create_set_id = story.set_id
+    s.auto_json = ""
+    s.pinned_json = "[]"
 
 
 def _open_story(story_id: str) -> None:
@@ -748,6 +751,8 @@ def _start_new_story() -> None:
     s.character = ""
     s.reference_uri = ""
     s.create_set_id = ""
+    s.auto_json = ""
+    s.pinned_json = "[]"
     _put_set(None)
     s.job_id = ""
     s.job_json = ""
@@ -794,16 +799,19 @@ def create_step(story: Story | None) -> None:
                 "What's your story?",
                 "One or two sentences is enough. Gemini writes the scenes.",
             )
-            me.textarea(
-                label="Your idea",
-                value=s.idea,
-                rows=4,
-                appearance="outline",
-                placeholder="A lighthouse keeper befriends a lost baby whale…",
-                on_blur=on_idea_blur,
-                style=me.Style(width="100%"),
-                key="ss-idea",
-            )
+            story_idea_watch(on_idea=on_idea_live, key="ss-idea-watch")
+            with me.box(classes="ss-idea-field"):
+                me.textarea(
+                    label="Your idea",
+                    value=s.idea,
+                    rows=4,
+                    appearance="outline",
+                    placeholder="A lighthouse keeper befriends a lost baby whale…",
+                    on_blur=on_idea_blur,
+                    style=me.Style(width="100%"),
+                    key="ss-idea",
+                )
+            _auto_note()
             with me.box(classes="ss-examples"):
                 me.text(
                     "Try:",
@@ -1036,6 +1044,85 @@ def on_idea_blur(e: me.InputBlurEvent):
     me.state(StoryState).idea = e.value
 
 
+# -- Auto settings: read the film settings out of the idea while typing --
+
+
+def _pinned() -> set[str]:
+    try:
+        return set(json.loads(me.state(StoryState).pinned_json or "[]"))
+    except ValueError:
+        return set()
+
+
+def _pin(field: str) -> None:
+    """The user set this field by hand: auto settings leave it alone."""
+    s = me.state(StoryState)
+    s.pinned_json = json.dumps(sorted(_pinned() | {field}))
+
+
+def _apply_auto(found: dict) -> None:
+    s = me.state(StoryState)
+    s.auto_json = json.dumps(found) if found else ""
+    current = {f: getattr(s, f) for f in story_autoset.FIELDS}
+    for field, value in story_autoset.merge_settings(current, found, _pinned()).items():
+        setattr(s, field, value)
+
+
+def on_idea_live(e: me.WebEvent):
+    """Typing paused in the idea field: update the settings from it. The
+    rules pass is instant and free; then the small live model (if on)
+    refines it. The idea field itself is not touched, so typing goes on."""
+    text = str((e.value or {}).get("value", ""))
+    rules = story_autoset.infer_settings(text)
+    _apply_auto(rules)
+    yield
+    if len(text.strip()) < 20:
+        return
+    try:
+        refined = get_backend().live_settings(text)
+    except Exception:
+        logger.exception("Story Studio: live settings failed")
+        return
+    if refined:
+        _apply_auto({**rules, **refined})
+        yield
+
+
+def on_reset_auto(e: me.ClickEvent):
+    """Let auto settings change every field again."""
+    s = me.state(StoryState)
+    s.pinned_json = "[]"
+    try:
+        found = json.loads(s.auto_json) if s.auto_json else {}
+    except ValueError:
+        found = {}
+    _apply_auto(found)
+
+
+def _auto_note() -> None:
+    s = me.state(StoryState)
+    try:
+        found = json.loads(s.auto_json) if s.auto_json else {}
+    except ValueError:
+        found = {}
+    pinned = _pinned()
+    summary = story_autoset.describe(found)
+    if not summary and not pinned:
+        return
+    with me.box(classes="ss-auto-note", key="ss-auto-note"):
+        me.icon("auto_awesome", style=me.Style(font_size=18, width=18, height=18))
+        me.text(
+            f"Set from your idea: {summary}"
+            if summary
+            else "Settings you picked stay as they are.",
+            style=me.Style(flex_grow=1),
+        )
+        if pinned:
+            me.button(
+                "Use auto", type="stroked", on_click=on_reset_auto, key="ss-auto-reset"
+            )
+
+
 def on_character_blur(e: me.InputBlurEvent):
     me.state(StoryState).character = e.value
 
@@ -1045,37 +1132,46 @@ def on_pick_set(e: me.SelectSelectionChangeEvent):
 
 
 def on_example(e: me.ClickEvent):
-    me.state(StoryState).idea = EXAMPLE_IDEAS[int(e.key.split("-")[1])]
+    idea = EXAMPLE_IDEAS[int(e.key.split("-")[1])]
+    me.state(StoryState).idea = idea
+    _apply_auto(story_autoset.infer_settings(idea))
 
 
 def on_language(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).language = e.value
+    _pin("language")
 
 
 def on_speech_mode(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).speech_mode = e.value
+    _pin("speech_mode")
 
 
 def on_scene_count(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).scene_count = int(e.value)
+    _pin("scene_count")
 
 
 def on_duration(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).duration = int(e.value)
+    _pin("duration")
 
 
 def on_aspect(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).aspect_ratio = e.value
+    _pin("aspect_ratio")
 
 
 def on_camera(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).camera = e.value
+    _pin("camera")
 
 
 def on_style(e: me.WebEvent):
     value = (e.value or {}).get("value", "")
     if value in STYLE_BY_ID:
         me.state(StoryState).style = value
+        _pin("style")
 
 
 def on_upload_reference(e: me.UploadEvent):
@@ -1103,6 +1199,8 @@ def on_generate_scenario(e: me.ClickEvent):
     try:
         existing = get_store().get(s.story_id, owner) if s.story_id else None
         story = existing or Story()
+        if story.idea != idea:
+            story.brief = ""  # a new idea: Gemini writes a new brief
         story.idea = idea
         story.character = s.character.strip()
         story.language = s.language
@@ -1213,6 +1311,23 @@ def scenario_step(story: Story) -> None:
                 me.icon("autorenew", style=me.Style(font_size=18, width=18, height=18))
                 me.text("Rewrite all scenes")
 
+    if story.brief:
+        with me.box(classes="ss-card ss-brief"):
+            me.textarea(
+                label="Brief",
+                value=story.brief,
+                rows=3,
+                appearance="outline",
+                on_blur=on_brief_blur,
+                style=me.Style(width="100%"),
+                key=f"brief-{story.id}",
+            )
+            me.text(
+                "Gemini wrote this fuller brief from your idea. Edit it, then "
+                "Rewrite all scenes.",
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+            )
+
     with me.box(classes="ss-scenes"):
         for i, sc in enumerate(story.scenes):
             rewriting = _job_active_for("scene") and (
@@ -1293,6 +1408,15 @@ def _update_scene(
                     else:
                         setattr(sc, c, "")
                 story.clear_films()
+
+    _edit(apply)
+
+
+def on_brief_blur(e: me.InputBlurEvent):
+    value = e.value.strip()[:1500]
+
+    def apply(story: Story) -> None:
+        story.brief = value
 
     _edit(apply)
 

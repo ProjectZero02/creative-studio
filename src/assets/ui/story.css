@@ -393,3 +393,15 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
   .ss-set-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ss-set-section-head .mat-mdc-button-base { width: 128px; }
 }
+
+/* ---------- Auto settings note (Create) and brief (Scenario) ---------- */
+.ss-auto-note {
+  display: flex; align-items: center; gap: 8px; min-height: 40px;
+  padding: 0 4px 0 12px; border-radius: 12px; font-size: 13px;
+  background: color-mix(in srgb, var(--sys-primary) 10%, transparent);
+  color: var(--sys-on-surface);
+}
+.ss-auto-note .mat-icon { color: var(--sys-primary); flex: none; }
+.ss-auto-note .mat-mdc-button-base { height: 32px; flex: none; }
+.ss-brief { display: flex; flex-direction: column; gap: 4px; }
+.ss-brief .mat-mdc-form-field-subscript-wrapper { display: none; }

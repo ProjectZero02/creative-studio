@@ -44,6 +44,9 @@ class StoryState:
     camera: str = "auto"
     reference_uri: str = ""
     prompt_prefill_seen: str = ""  # last ?prompt= applied on load
+    # Auto settings read from the idea while typing (services/story_autoset).
+    auto_json: str = ""  # what was found, for the note under the idea
+    pinned_json: str = "[]"  # form fields the user set by hand (kept as is)
 
     # Background job being watched.
     job_id: str = ""
