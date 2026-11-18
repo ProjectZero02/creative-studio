@@ -17,11 +17,13 @@ The **Lyria** workspace (`/lyria`) enables creators to generate original instrum
 
 ## Model Capabilities Matrix (`config/lyria_models.py`)
 
+The Music page preselects Lyria 3 Pro, the newest Lyria. Set `LYRIA_DEFAULT_MODEL` to `3-clip-preview` or `2` if your project has no Lyria 3 Pro access.
+
 | Display Name | Model ID | API Backend | Output Format | Custom Lyrics | Image Conditioning | Negative Prompt / Seed / Batch | C2PA Provenance |
 | :--- | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
 | **Lyria 2** | `lyria-002` | Vertex AI `predict` | `audio/wav` (30s) | No | No | Yes (`seed` or `sample_count` 1–4) | No |
 | **Lyria 3 Clip (Preview)** | `lyria-3-clip-preview` | Interactions API (`v1beta1`) | `audio/mpeg` (30s MP3) | Yes | Yes | No | Yes |
-| **Lyria 3 Pro (Preview)** | `lyria-3-pro-preview` | Interactions API (`v1beta1`) | `audio/mpeg` (Full-length MP3) | Yes | Yes | No | Yes |
+| **Lyria 3 Pro (Preview, default)** | `lyria-3-pro-preview` | Interactions API (`v1beta1`) | `audio/mpeg` (Full-length MP3) | Yes | Yes | No | Yes |
 
 ## Dual-Engine Execution Flow (`models/lyria.py`)
 

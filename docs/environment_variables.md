@@ -43,17 +43,17 @@ Controls which versions of the Gemini models are used for various tasks.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| **`MODEL_ID`** | `gemini-3.5-flash` | The primary Gemini model used for general text and reasoning tasks throughout the app. |
+| **`MODEL_ID`** | `gemini-3.8-flash` | The primary Gemini model used for general text and reasoning tasks throughout the app. |
 | **`GEMINI_LOCATION`** | `global` | Region for Gemini 3.x model calls. Gemini 3.x is served only from the `global` endpoint (and the us/eu multi-regions), so this is kept separate from `LOCATION`. |
 | **`GEMINI_TTS_LOCATION`** | `global` | Region for Gemini text-to-speech (TTS) model calls. |
 | **`GEMINI_IMAGE_GEN_MODEL`** | `gemini-nano-banana-2.1` | The default model used for image generation features (supports `gemini-nano-banana-2.1` (default), `gemini-3.1-flash-lite-image`, `gemini-3.1-flash-image`, or `gemini-3-pro-image`). |
 | **`GEMINI_IMAGE_GEN_LOCATION`** | `global` | The region for the Gemini Image Generation API. |
-| **`GEMINI_AUDIO_ANALYSIS_MODEL_ID`** | `gemini-3.1-flash-lite` | The model used specifically for analyzing audio content. |
+| **`GEMINI_AUDIO_ANALYSIS_MODEL_ID`** | `gemini-3.5-flash-lite` | The model used specifically for analyzing audio content. |
 | **`GEMINI_WRITERS_WORKSHOP_MODELS`** | `gemini-4-argon,gemini-3.8-flash` | Comma-separated models offered in the Gemini Writers Workshop model picker. |
 | **`GEMINI_WRITERS_WORKSHOP_MODEL_ID`** | `gemini-4-argon` | The model preselected in the Gemini Writers Workshop picker (added to the picker if not listed in `GEMINI_WRITERS_WORKSHOP_MODELS`). |
 | **`GEMINI_STORYBOARDER_NARRATIVE_MODELS`** | `gemini-3.8-flash,gemini-4-argon,gemini-3.5-flash-lite` | Comma-separated models offered in the Storyboarder "Narrative Writer Model" picker. |
 | **`GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID`** | `gemini-3.8-flash` | The model preselected in the Storyboarder Narrative Writer picker (added to the picker if not listed in `GEMINI_STORYBOARDER_NARRATIVE_MODELS`). |
-| **`GEMINI_CRITIQUE_MODEL_ID`** | `gemini-3-flash-preview` | The specific model used for the Imagen critique functionality. |
+| **`GEMINI_CRITIQUE_MODEL_ID`** | `gemini-3.8-flash` | The specific model used for the Imagen critique functionality. |
 | **`GEMINI_CRITIQUE_LOCATION`** | `global` | The region for the Gemini image critique model. |
 | **`CHARACTER_CONSISTENCY_GEMINI_MODEL`** | `MODEL_ID` | The model used for Character Consistency tasks. |
 | **`CHARACTER_CONSISTENCY_GEMINI_LOCATION`** | `global` | The region for the Character Consistency Gemini model. |
@@ -82,11 +82,13 @@ Configuration for the Gemini Omni Flash multimodal video interaction model.
 | **`OMNI_TIMEOUT_MS`** | `600000` | Client-side HTTP timeout in milliseconds (default 10 minutes) for long-running video generation and editing requests. |
 
 ## 🎥 Veo (Video Generation)
-Configuration for the Veo video generation models.
+Gemini Omni is the default video model on every page (Video Studio, Storyboarder, Shop the Look, Motion Portraits, Retro Games, Character Consistency, the Library's extend dialog and the Live agent). Veo stays available behind these settings; the `VEO_*` model ids below are used only when a Veo model is chosen.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| **`DEFAULT_VEO_MODEL_NAME`** | `veo-3.1-fast-generate-001` | The fallback model name for the UI when a user clears their session or deep links. |
+| **`SHOW_VEO_MODELS`** | `false` | Set `true` to list Veo models in the video model pickers again. A `?veo_model=` deep link to a Veo model works either way. |
+| **`DEFAULT_VEO_MODEL_NAME`** | `gemini-omni-1.2-flash` | The default video model for every page (the name is kept so existing deploys still work). A `veo-*` name, such as `veo-3.1-fast-generate-001`, makes Veo the default again. |
+| **`CHARACTER_CONSISTENCY_VEO_MODEL`** | `gemini-omni-1.2-flash` | Video model for the Character Consistency workflow. A `veo-*` name switches it back to Veo. |
 | **`VEO_LOCATION`** | `us-central1` | Region for GA Veo API calls. |
 | **`PREVIEW_LOCATION`** | `global` | Region for Preview Veo API calls (models with "preview" in their name). |
 | **`VEO_MODEL_ID`** | `veo-3.1-fast-generate-001` | The standard Veo model version. |
@@ -138,7 +140,8 @@ Configuration for the Lyria music generation model.
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | **`LYRIA_LOCATION`** | `us-central1` | Region for Lyria API calls. |
-| **`LYRIA_MODEL_VERSION`** | `lyria-002` | The version of the Lyria model to use. |
+| **`LYRIA_MODEL_VERSION`** | `lyria-002` | The Lyria 2 endpoint id (used only when Lyria 2 is picked; Lyria 3 uses the Interactions API). |
+| **`LYRIA_DEFAULT_MODEL`** | `3-pro-preview` | The Music page's preselected model: `3-pro-preview` (Lyria 3 Pro, newest), `3-clip-preview` (Lyria 3 Clip) or `2` (Lyria 2). |
 | **`LYRIA_PROJECT_ID`** | `PROJECT_ID` | Project ID for Lyria quota. |
 
 ## 💾 Storage & Database (Firebase/GCS)
@@ -186,9 +189,9 @@ These variables are exposed in `variables.tf` and directly map to environment va
 | :--- | :--- | :--- |
 | `project_id` | `PROJECT_ID` | *(Required)* |
 | `region` | `LOCATION` | `us-central1` |
-| `model_id` | `MODEL_ID` | `gemini-3.5-flash` |
-| `gemini_audio_analysis_model_id` | `GEMINI_AUDIO_ANALYSIS_MODEL_ID` | `gemini-3.1-flash-lite` |
-| `gemini_critique_model_id` | `GEMINI_CRITIQUE_MODEL_ID` | `gemini-3-flash-preview` |
+| `model_id` | `MODEL_ID` | `gemini-3.8-flash` |
+| `gemini_audio_analysis_model_id` | `GEMINI_AUDIO_ANALYSIS_MODEL_ID` | `gemini-3.5-flash-lite` |
+| `gemini_critique_model_id` | `GEMINI_CRITIQUE_MODEL_ID` | `gemini-3.8-flash` |
 | `gemini_critique_location` | `GEMINI_CRITIQUE_LOCATION` | `global` |
 | `character_consistency_gemini_location` | `CHARACTER_CONSISTENCY_GEMINI_LOCATION` | `global` |
 | `veo_model_id` | `VEO_MODEL_ID` | `veo-3.1-fast-generate-001` |
@@ -216,7 +219,7 @@ The following variables are **not** explicitly set in the `main.tf` configuratio
 
 *   **Gemini Models:** `GEMINI_IMAGE_GEN_MODEL` (defaults to Nano Banana 2.1 `gemini-nano-banana-2.1`), `GEMINI_IMAGE_GEN_LOCATION`, `GEMINI_AUDIO_ANALYSIS_MODEL_ID`
 *   **Gemini Omni:** `DEFAULT_OMNI_MODEL_NAME`, `OMNI_LOCATION`, `OMNI_MODEL_ID`, `OMNI_PROJECT_ID`, `OMNI_TIMEOUT_MS`
-*   **Veo:** `DEFAULT_VEO_MODEL_NAME`, `PREVIEW_LOCATION`, `VEO_PROJECT_ID`, `VEO_EXP_FAST_MODEL_ID`, `VEO_EXP_PROJECT_ID`
+*   **Veo:** `SHOW_VEO_MODELS`, `DEFAULT_VEO_MODEL_NAME`, `CHARACTER_CONSISTENCY_VEO_MODEL`, `PREVIEW_LOCATION`, `VEO_PROJECT_ID`, `VEO_EXP_FAST_MODEL_ID`, `VEO_EXP_PROJECT_ID`
 *   **VTO (Virtual Try-On):** `VTO_LOCATION`, `VTO_MODEL_ID`, `GENMEDIA_VTO_*` collection names.
 *   **Imagen:** `MODEL_IMAGEN_PRODUCT_RECONTEXT`, `IMAGEN_GENERATED_SUBFOLDER`, `IMAGEN_EDITED_SUBFOLDER`
 *   **Interior Design:** `INTERIOR_DESIGN_VIDEO_MODEL`, `INTERIOR_DESIGN_IMAGE_MODEL`, `INTERIOR_DESIGN_VIDEO_DURATION`
