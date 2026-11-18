@@ -355,6 +355,10 @@ class Default:
     STORIES_COLLECTION_NAME: str = os.environ.get(
         "STORIES_COLLECTION_NAME", "stories"
     )
+    # Sets: reusable characters, voices, locations and props (owner-only).
+    STORY_SETS_COLLECTION_NAME: str = os.environ.get(
+        "STORY_SETS_COLLECTION_NAME", "story_sets"
+    )
     # Cost guardrails: every film is capped by these values.
     STORY_MIN_SCENES: int = 3
     STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 16))
@@ -376,6 +380,10 @@ class Default:
     )
     # Parallel model calls per film (storyboard frames, clips).
     STORY_MAX_PARALLEL: int = int(os.environ.get("STORY_MAX_PARALLEL", 3))
+    # Most reference images per clip with a set (the storyboard frame, cast
+    # faces and fronts, location plate, props). Also capped by the video
+    # model's max_reference_images; Omni's real cap is unconfirmed.
+    STORY_MAX_CLIP_REFERENCES: int = int(os.environ.get("STORY_MAX_CLIP_REFERENCES", 6))
 
     image_modifiers: list[str] = field(
         default_factory=lambda: [
