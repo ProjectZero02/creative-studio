@@ -219,7 +219,7 @@ def page_content():
 
         if state.storyboard and state.storyboard.get("room_names"):
             with me.box(classes="gm-demo-card"):
-                demo_card_head("3", "Rooms", "Pick a room to see it close up and restyle it.")
+                demo_card_head("3", "Rooms", "Pick a room to restyle it.")
                 with me.box(
                     style=me.Style(
                         display="flex",

@@ -39,8 +39,10 @@ from components.demo_flow.demo_flow import (
     cicon,
     ctext,
     demo_alert,
+    demo_card_head,
     demo_segmented,
     demo_steps,
+    demo_upload_button,
 )
 from components.edit_button.edit_button import edit_button
 from components.generation_progress.generation_progress import (
@@ -229,11 +231,9 @@ def _try_on_flow():
                     cicon("person_outline", "gm-demo-drop-icon")
                     ctext("No model yet", "gm-demo-drop-text")
             with me.box(classes="gm-demo-actions"):
-                me.uploader(
-                    label="Upload photo",
-                    on_upload=on_upload_person,
-                    accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                    type="stroked",
+                demo_upload_button(
+                    "Upload photo",
+                    on_upload_person,
                     key="fashion_person_uploader",
                     disabled=busy,
                 )
@@ -244,7 +244,7 @@ def _try_on_flow():
                     disabled=busy,
                 )
                 me.button(
-                    "Create virtual model",
+                    "Generate model",
                     on_click=on_create_virtual_model,
                     type="stroked",
                     disabled=busy or vs.is_generating_person_image,
@@ -262,11 +262,9 @@ def _try_on_flow():
                     cicon("checkroom", "gm-demo-drop-icon")
                     ctext("No clothing yet", "gm-demo-drop-text")
             with me.box(classes="gm-demo-actions"):
-                me.uploader(
-                    label="Upload photo",
-                    on_upload=on_upload_product,
-                    accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                    type="stroked",
+                demo_upload_button(
+                    "Upload photo",
+                    on_upload_product,
                     key="fashion_product_uploader",
                     disabled=busy,
                 )
@@ -351,13 +349,7 @@ def _try_on_flow():
         _try_on_results(vs)
 
 
-@me.component
-def _card_head(number: str, title: str, hint: str):
-    with me.box(classes="gm-demo-card-head"):
-        ctext(number, "gm-demo-card-num")
-        with me.box(classes="gm-demo-card-titles"):
-            ctext(title, "gm-demo-card-title")
-            ctext(hint, "gm-demo-card-hint")
+_card_head = demo_card_head
 
 
 def _try_on_results(vs: vto.PageState):

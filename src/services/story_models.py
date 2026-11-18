@@ -27,7 +27,7 @@ import uuid
 from dataclasses import asdict, dataclass, field, replace
 
 from config.default import Default
-from config.veo_models import get_veo_model_config
+from config.omni_models import get_omni_model_config
 
 # ---------------------------------------------------------------------------
 # Presets
@@ -39,8 +39,8 @@ STEPS: list[tuple[str, str, str]] = [
     ("create", "Create", "edit_note"),
     ("scenario", "Scenario", "description"),
     ("storyboard", "Storyboard", "view_carousel"),
-    ("editor", "Editor", "tune"),
-    ("video", "Video", "movie"),
+    ("editor", "Scenes", "tune"),
+    ("video", "Edit", "movie"),
 ]
 STEP_IDS = [s[0] for s in STEPS]
 
@@ -127,13 +127,8 @@ def voice_label(name: str) -> str:
     return f"{name} ({gender})" if gender else name
 
 
-def tts_voice_for(description: str) -> str:
-    """A fixed TTS voice matching the speaker described by the scenario."""
-    d = (description or "").lower()
-    return "Kore" if ("female" in d or "woman" in d) else "Charon"
-
 # Who speaks each scene's line: a narrator over the picture, or the person on
-# screen (Veo renders the speech with lip sync). "auto" lets Gemini choose per
+# screen (the video model renders the speech with lip sync). "auto" lets Gemini choose per
 # scene from the idea, e.g. a presenter talks on camera.
 SPEECH_MODES: dict[str, str] = {
     "auto": "Auto: Gemini picks per scene",
@@ -157,15 +152,16 @@ def max_words(duration: int | float) -> int:
     return max(1, int(float(duration) * WORDS_PER_SECOND))
 
 
+# Clip lengths offered per scene (seconds), kept inside the model's range.
+SCENE_LENGTHS = (4, 6, 8, 10, 12, 15)
+
+
 def supported_durations() -> list[int]:
-    """Veo-supported clip lengths (seconds) for the configured story model."""
-    cfg = Default()
-    model = get_veo_model_config(cfg.STORY_VEO_MODEL_VERSION)
-    if model and model.supported_durations:
-        return list(model.supported_durations)
-    if model:
-        return list(range(model.min_duration, model.max_duration + 1))
-    return [4, 6, 8]
+    """Clip lengths (seconds) the configured story video model can make."""
+    model = get_omni_model_config(Default().STORY_VIDEO_MODEL)
+    if not model:
+        return [4, 6, 8]
+    return [d for d in SCENE_LENGTHS if model.min_duration <= d <= model.max_duration]
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +194,7 @@ class Scene:
     continues_from: str = ""
     # The same line in the story's second language (see Story.second_on).
     narration_alt: str = ""
-    # True: the person on screen says `narration` to camera (Veo renders the
+    # True: the person on screen says `narration` to camera (the video model renders the
     # speech in the clip). False: a narrator voices it over the picture.
     spoken: bool = False
     # Second-language clip of a spoken scene (the speech is baked into the
@@ -208,6 +204,20 @@ class Scene:
     # Clip whose last frame the second-language clip started from (the
     # previous scene's clip in that film), like continues_from.
     clip_alt_from: str = ""
+    # Continuous take: this clip continues the previous scene's clip in the
+    # same Gemini Omni thread, so it is the same shot, person and voice. If
+    # the model returns the joined video, its first `clip_in` seconds repeat
+    # the previous clip and are cut by the timeline.
+    extends_from: str = ""
+    clip_in: float = 0.0
+    # Gemini Omni interaction that made clip_uri (the next scene of a take
+    # continues from it). Stored interactions expire after about a week.
+    interaction_id: str = ""
+
+    def clear_clip(self) -> None:
+        """Forget the clip and everything made from it (take, Omni thread)."""
+        self.clip_uri = self.extends_from = self.interaction_id = ""
+        self.clip_in = 0.0
 
     def alt_clip_key(self) -> str:
         """What a second-language clip must match to still be current."""
@@ -256,14 +266,19 @@ class Story:
     # the same way in every spoken clip so it stays consistent.
     speech_mode: str = "auto"
     speaker_voice: str = ""
-    # Veo picks a new voice for every clip. With same_voice, spoken lines
-    # are voiced by one fixed TTS voice instead, timed to when the person
-    # on screen talks; the second language is dubbed over the same clips.
-    same_voice: bool = True
+    # Back-to-back spoken scenes continue the previous clip (one Omni thread),
+    # so the person, shot and voice carry on. Those clips render in order.
+    continuous_takes: bool = True
+    # One seed for every clip of the film (0: pick one on first render).
+    seed: int = 0
+    # Music made for the film (kept for the editor and re-exports).
+    music_uri: str = ""
+    # The editable film (services/story_timeline.py), written by the render
+    # and changed in the Edit step.
+    timeline_json: str = ""
     # Language spoken in the clips when it differs from `language` (set on
     # the dubbed second-language copy, whose clips speak the original).
     clip_language: str = ""
-    speaker_tts_voice: str = "Charon"
     title_alt: str = ""
     final_alt_uri: str = ""
     created_at: str = field(default_factory=_now_iso)
@@ -300,9 +315,39 @@ class Story:
         self.final_uri = ""
         self.final_alt_uri = ""
 
+    def _spoken_pair(self, index: int) -> bool:
+        if index <= 0 or index >= len(self.scenes):
+            return False
+        prev, sc = self.scenes[index - 1], self.scenes[index]
+        return bool(prev.spoken and prev.narration.strip()) and bool(
+            sc.spoken and sc.narration.strip()
+        )
+
+    def continues_take(self, index: int) -> bool:
+        """Scene `index` continues the previous clip (a continuous take):
+        both scenes are spoken on camera, continuous takes are on, and the
+        take stays within STORY_TAKE_MAX_SECONDS (then it cuts to a new one)."""
+        if not self.continuous_takes or not self._spoken_pair(index):
+            return False
+        cap = Default().STORY_TAKE_MAX_SECONDS
+        take = 0.0
+        for i in range(index + 1):
+            d = float(self.scenes[i].duration)
+            joins = i > 0 and self._spoken_pair(i) and take + d <= cap
+            take = take + d if joins else d
+            if i == index:
+                return joins
+        return False
+
+    def take_start(self, index: int) -> int:
+        """First scene of the continuous take that scene `index` belongs to."""
+        while index > 0 and self.continues_take(index):
+            index -= 1
+        return index
+
     def media_uris(self) -> list[str]:
         """Every stored media URI this story points at (empty ones skipped)."""
-        uris = [self.reference_uri, self.final_uri, self.final_alt_uri]
+        uris = [self.reference_uri, self.final_uri, self.final_alt_uri, self.music_uri]
         for sc in self.scenes:
             uris += [sc.frame_uri, sc.clip_uri]
         return [u for u in uris if u]
@@ -367,7 +412,7 @@ def apply_caps(scene_count: int, duration: int, resolution: str | None = None) -
     """Clamp a film request to the configured guardrails.
 
     Scene count is clamped to [STORY_MIN_SCENES, STORY_MAX_SCENES], duration
-    snaps to a Veo-supported value, and the total length must fit
+    snaps to a supported clip length, and the total length must fit
     STORY_MAX_FILM_SECONDS (scenes are dropped from the end if it does not).
     """
     cfg = Default()
@@ -378,7 +423,7 @@ def apply_caps(scene_count: int, duration: int, resolution: str | None = None) -
         notes.append(f"Scenes limited to {n0}.")
     d0 = nearest_duration(duration)
     if d0 != int(duration):
-        notes.append(f"Scene length set to {d0}s (supported by Veo).")
+        notes.append(f"Scene length set to {d0}s (supported by the video model).")
     n, d = n0, d0
     while n * d > limit and n > cfg.STORY_MIN_SCENES:
         n -= 1
@@ -491,18 +536,34 @@ def parse_scenario(
                 str(raw.get("camera") or raw.get("camera_move") or "")
             )
         )
+        spoken = _spoken(raw.get("spoken"), narration, speech_mode)
         scenes.append(
             Scene(
                 narration=narration,
                 visual=visual,
                 camera=camera,
-                duration=duration,
-                spoken=_spoken(raw.get("spoken"), narration, speech_mode),
+                duration=_spoken_length(raw.get("seconds"), duration)
+                if spoken
+                else duration,
+                spoken=spoken,
             )
         )
     if len(scenes) < scene_count:
         raise ScenarioError(f"Expected {scene_count} scenes, got {len(scenes)}.")
+    if sum(s.duration for s in scenes) > Default().STORY_MAX_FILM_SECONDS:
+        for s in scenes:
+            s.duration = duration
     return title[:120], scenes
+
+
+def _spoken_length(raw, duration: int) -> int:
+    """A spoken scene may run longer than the film's scene length (the writer
+    gives it "seconds"), so a speech fits in one or two takes. Never shorter."""
+    try:
+        seconds = int(float(raw))
+    except (TypeError, ValueError):
+        return duration
+    return max(duration, nearest_duration(seconds)) if seconds > duration else duration
 
 
 def _spoken(raw, narration: str, speech_mode: str) -> bool:
@@ -566,6 +627,14 @@ def _speech_rules(story: Story) -> str:
         "and confident, neutral American accent\". It is reused for every spoken scene so it "
         'sounds the same. Use "" if nobody speaks on camera.'
     )
+    longest = max(supported_durations())
+    takes = (
+        "- Keep each person's speech in as few spoken scenes as possible: one "
+        "or two back-to-back spoken scenes, never many short ones. A spoken "
+        f'scene may run longer: set "seconds" (up to {longest}) so its line '
+        f"fits at about {WORDS_PER_SECOND:g} words a second, and write the line to "
+        "fill it. Back-to-back spoken scenes are filmed as one continuous take."
+    )
     if story.speech_mode == "narrator":
         return (
             '- Every line is a narrator voiceover: "spoken" is false for every '
@@ -577,6 +646,8 @@ def _speech_rules(story: Story) -> str:
             'true for every scene and "narration" is the exact words they say. '
             "Each visual shows that person facing the camera and speaking.\n"
             + voice
+            + "\n"
+            + takes
         )
     return (
         "- Decide for each scene who speaks. If the idea features a person "
@@ -586,6 +657,8 @@ def _speech_rules(story: Story) -> str:
         "on-camera speech whenever a speaking person is the point of the film. "
         'Otherwise set "spoken" to false and write a narrator voiceover line.\n'
         + voice
+        + "\n"
+        + takes
     )
 
 
@@ -606,7 +679,8 @@ Idea: \"\"\"{story.idea.strip()}\"\"\"
 Rules:
 - Write the title and every narration line in {story.language}.
 - Narration: one short sentence per scene that can be spoken in under
-  {story.duration} seconds (at most {max_words(story.duration)} words).
+  {story.duration} seconds (at most {max_words(story.duration)} words), or in
+  its "seconds" for a longer spoken scene.
 {_speech_rules(story)}
 - Visual: a detailed, self-contained description of what the camera sees
   (subject, action, setting, lighting). Keep the main character's look
@@ -614,7 +688,7 @@ Rules:
 - {cam_rule}
 - Build a clear beginning, middle and end.
 
-Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "visual": str, "camera": str}}]}}"""
+Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str}}]}}"""
 
 
 def scene_regen_prompt(story: Story, index: int) -> str:
@@ -668,12 +742,28 @@ def frame_prompt(story: Story, scene: Scene, has_reference: bool) -> str:
     )
 
 
-def clip_prompt(story: Story, scene: Scene) -> str:
+def clip_prompt(story: Story, scene: Scene, continuing: bool = False) -> str:
+    """Video prompt for a scene. ``continuing``: the clip continues the
+    previous one (a continuous take), so it carries on the same shot and voice.
+
+    Every clip has its own sound. Narrated scenes ask for natural ambient
+    sound only, because the narrator's voiceover and the music go on top."""
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cam = CAMERA_PRESETS.get(scene.camera, CAMERA_PRESETS["static"])["prompt"]
     base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
+    if continuing:
+        # Name the character again: each turn of the thread is its own prompt.
+        who = f" ({story.character})" if story.character else ""
+        base = (
+            f"Continue this exact shot without a cut: the same person{who}, "
+            "outfit, place, lighting and camera, and the same voice, pace and "
+            f"room sound as before. {base}"
+        )
     if not (scene.spoken and scene.narration.strip()):
-        return base
+        return (
+            f"{base} Sound: natural ambient sound and sound effects of the "
+            "scene only. No speech, dialogue, narration, singing or music."
+        )
     voice = story.speaker_voice or "a voice that matches their age and gender"
     who = f" ({story.character})" if story.character else ""
     return (
@@ -714,7 +804,7 @@ def alt_story(story: Story) -> Story:
                 clip_uri=sc.clip_alt_uri,
                 continues_from=sc.clip_alt_from,
             )
-            if sc.spoken and sc.has_alt_clip() and not story.same_voice
+            if sc.spoken and sc.has_alt_clip()
             else replace(sc, narration=sc.narration_alt)
             for sc in story.scenes
         ],
@@ -810,11 +900,9 @@ class Segment:
     duration: float
     fade_in: float
     narration: str = ""
-    # The clip carries its own speech (keep its audio, no voiceover).
+    # The clip carries its own speech (levelled as dialogue, no voiceover).
+    # Otherwise its sound is an ambient bed under the narrator.
     spoken: bool = False
-    # Spoken, but voiced by the fixed TTS voice: the clip's own audio is
-    # dropped and the voice is fitted to when the person speaks.
-    dub: bool = False
     # Seconds skipped at the start of the clip. A seamless join drops the
     # clip's first frame, which repeats the previous clip's last frame.
     trim_head: float = 0.0
@@ -838,7 +926,6 @@ def build_stitch_plan(
     clip_durations: list[float] | None = None,
     seamless: bool = False,
     fps: int = 24,
-    dub: bool = False,
 ) -> StitchPlan:
     """Lay out clips on a timeline with overlapping crossfades.
 
@@ -858,7 +945,7 @@ def build_stitch_plan(
     durs = [
         float(clip_durations[k])
         if clip_durations and k < len(clip_durations)
-        else float(s.duration)
+        else float(s.duration) + float(s.clip_in or 0)
         for k, (_, s) in enumerate(usable)
     ]
     xf = max(0.0, min(float(crossfade), min(durs) / 3.0)) if len(usable) > 1 else 0.0
@@ -874,15 +961,27 @@ def build_stitch_plan(
             and d > head
             and is_seamless_join(prev, s)
         )
+        # An extended clip starts with a copy of the clip it continued:
+        # always skip those seconds.
+        base = float(s.clip_in or 0) if 0 < float(s.clip_in or 0) < d - 0.5 else 0.0
+        extended = (
+            base > 0
+            and prev is not None
+            and prev_i == i - 1
+            and s.extends_from == prev.clip_uri
+        )
         if k == 0:
-            start, fade, trim = 0.0, 0.0, 0.0
-        elif cut:
+            start, fade, trim = 0.0, 0.0, base
+        elif extended:
+            # Continuous take: a straight cut into the clip's new seconds.
+            start, fade, trim = t, 0.0, base
+        elif cut and not base:
             start, fade, trim = t, 0.0, head
         elif s.spoken or prev.spoken:
             # A crossfade would overlap speech with the next shot: cut instead.
-            start, fade, trim = t, 0.0, 0.0
+            start, fade, trim = t, 0.0, base
         else:
-            start, fade, trim = t - xf, xf, 0.0
+            start, fade, trim = t - xf, xf, base
         segments.append(
             Segment(
                 index=i,
@@ -892,7 +991,6 @@ def build_stitch_plan(
                 fade_in=fade,
                 narration=s.narration,
                 spoken=bool(s.spoken and s.narration.strip()),
-                dub=dub and bool(s.spoken and s.narration.strip()),
                 trim_head=round(trim, 4),
             )
         )

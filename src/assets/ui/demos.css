@@ -123,6 +123,9 @@ html body .gm-demo-card {
   box-shadow: var(--gm-card-shadow);
 }
 html body .gm-demo-card-head { display: flex; align-items: flex-start; gap: 12px; }
+/* Side-by-side cards: same head height with or without a hint line, so the
+   image wells and buttons below line up across the row. */
+html body .gm-demo-pair .gm-demo-card-head { min-height: 42px; }
 html body .gm-demo-card-num {
   width: 28px; height: 28px; flex: 0 0 28px;
   border-radius: 9px;
@@ -157,8 +160,22 @@ html body .gm-demo-drop-text { font-size: 14px; color: var(--sys-on-surface-vari
 html body .gm-demo-img { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 html body .gm-demo-img img { width: 100%; height: 100%; object-fit: contain; border-radius: 0 !important; display: block; }
 
+/* Buttons under an image well: one row, every button the same width and
+   height, icon or no icon ("Upload plan" and "From library" match). Rows with
+   an icon-only button (Product 360 view tiles) keep their natural widths. */
 html body .gm-demo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-html body .gm-demo-actions button { min-height: 40px; }
+html body .gm-demo-actions:not(:has(.mat-mdc-icon-button)) {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+html body .gm-demo-actions > *,
+html body .gm-demo-actions > * > * { min-width: 0; }
+html body .gm-demo-actions:not(:has(.mat-mdc-icon-button)) button,
+html body .gm-demo-actions:not(:has(.mat-mdc-icon-button)) .mat-mdc-button-base { width: 100%; }
+html body .gm-demo-actions button { height: var(--gm-control-h); padding: 0 12px; }
+html body .gm-demo-actions .mdc-button__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html body .gm-demo-actions .mat-icon { flex: none; }
 
 /* ---------- Action bar ---------- */
 html body .gm-demo-bar {
@@ -170,7 +187,7 @@ html body .gm-demo-bar {
 }
 html body .gm-demo-bar-settings { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 html body .gm-demo-bar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-html body .gm-demo-bar-actions button { min-height: 44px; padding: 0 22px; }
+html body .gm-demo-bar-actions button { height: var(--gm-control-h); padding: 0 20px; }
 html body .gm-demo-select-sm { width: 120px; }
 html body .gm-demo-select-sm .mat-mdc-form-field-subscript-wrapper,
 html body .gm-demo-settings .mat-mdc-form-field-subscript-wrapper { display: none; }
@@ -228,7 +245,7 @@ html body .gm-demo-media { display: flex; justify-content: center; }
 html body .gm-demo-media video,
 html body .gm-demo-media img { width: 100%; max-width: 760px; border-radius: var(--gm-radius-lg) !important; display: block; }
 html body .gm-demo-center { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
-html body .gm-demo-center button { min-height: 44px; }
+html body .gm-demo-center button { height: var(--gm-control-h); }
 
 /* ---------- Shop the look (upstream components inside the Fashion page) ---------- */
 html body .gm-demo-look { min-width: 0; }
@@ -265,7 +282,9 @@ html body .gm-demo-section-title { font-size: 16px; font-weight: 600; text-align
   html body .gm-demo-bar-actions > * { flex: 1 1 0; }
   html body .gm-demo-bar-actions button { width: 100%; }
   html body .gm-demo-actions > * { flex: 1 1 auto; }
-  html body .gm-demo-actions button { min-height: 44px; width: 100%; }
+  html body .gm-demo-actions button { width: 100%; }
+  /* Phones: stack the buttons, full width, 44px tall. */
+  html body .gm-demo-actions:not(:has(.mat-mdc-icon-button)) { grid-auto-flow: row; }
   html body .gm-demo-switch .mat-button-toggle-label-content { padding: 0 8px !important; }
 }
 
@@ -296,8 +315,19 @@ html body .gm-demo-upstream component-renderer[style*="width: 400px"] {
   color: var(--sys-on-surface-variant);
   font-size: 14px;
 }
-html body .gm-demo-upstream button { min-height: 44px; }
+html body .gm-demo-upstream button { min-height: var(--gm-control-h); }
 
 /* Fashion action bar: compact count picker next to the settings link */
 html body .gm-demo-select-sm .mat-mdc-form-field { width: 100%; }
-html body .gm-demo-bar-settings button { min-height: 44px; }
+html body .gm-demo-bar-settings button { height: var(--gm-control-h); }
+
+/* A card whose last child is a text field (Product 360 description): the
+   field grows to the card's height, so the pair doesn't show a short box
+   next to a tall one. */
+html body .gm-demo-fill > :has(textarea),
+html body .gm-demo-fill > :has(textarea) > ng-component { flex: 1 1 auto; display: flex; flex-direction: column; }
+html body .gm-demo-fill :is(.mat-mdc-form-field, .mat-mdc-text-field-wrapper, .mat-mdc-form-field-flex, .mat-mdc-form-field-infix) {
+  flex: 1 1 auto; display: flex; flex-direction: column;
+}
+html body .gm-demo-fill .mat-mdc-form-field-subscript-wrapper { display: none; }
+html body .gm-demo-fill textarea { flex: 1 1 auto; min-height: 120px; }
