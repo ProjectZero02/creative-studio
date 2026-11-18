@@ -368,7 +368,8 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
 .ss-set-tile-bar { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; }
 .ss-set-tile .ss-media { position: relative; }
 .ss-set-tile-label { position: absolute; left: 6px; bottom: 6px; padding: 2px 8px; border-radius: 999px; font-size: 12px; line-height: 18px; background: rgba(0, 0, 0, 0.55); color: #fff; pointer-events: none; }
-.ss-set-tile-bar .mat-mdc-icon-button.mat-mdc-button-base { width: 40px; height: 40px; padding: 8px; }
+.ss-set-tile-bar .mat-mdc-icon-button.mat-mdc-button-base,
+.ss-set-card-head .mat-mdc-icon-button.mat-mdc-button-base { width: 40px; height: 40px; padding: 8px; }
 .ss-set-voice { display: grid; grid-template-columns: minmax(0, 1fr) 128px; gap: 8px; align-items: center; }
 .ss-set-voice > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
 .ss-set-card-head.is-narrator { grid-template-columns: minmax(0, 1fr) 40px; }
