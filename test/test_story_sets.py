@@ -204,6 +204,14 @@ def test_filling_empty_slots_keeps_the_version(set_store):
             img.uri = "gs://b/other_profile.png"
     assert set_store.save(s, OWNER).version == 2  # replaced: a real change
 
+def test_locking_an_image_keeps_the_version(set_store):
+    s = set_store.save(_sample_set(), OWNER)
+    s.characters[0].images[0].locked = True
+    s = set_store.save(s, OWNER)
+    assert s.version == 1
+    assert set_store.get(s.id, OWNER).characters[0].images[0].locked
+
+
 
 class _Snap:
     def __init__(self, data):

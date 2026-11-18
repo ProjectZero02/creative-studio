@@ -235,8 +235,11 @@ class StorySet:
         skip = filled or set()
         for kind in ("characters", "locations", "props"):
             for asset in data[kind]:
+                # Locking only protects a picture; it changes nothing a film uses.
                 asset["images"] = [
-                    i for i in asset["images"] if i["uri"] and i["uri"] not in skip
+                    {k: v for k, v in i.items() if k != "locked"}
+                    for i in asset["images"]
+                    if i["uri"] and i["uri"] not in skip
                 ]
                 voice = asset.get("voice")
                 if voice and voice["sample_uri"] in skip:
