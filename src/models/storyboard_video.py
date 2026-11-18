@@ -21,7 +21,8 @@ differences between the two request shapes.
 
 from common.error_handling import GenerationError
 from config.omni_models import get_models_by_mode, get_omni_model_config
-from config.veo_models import VEO_MODELS, get_veo_model_config
+from config.veo_models import get_veo_model_config
+from config.video_studio_models import visible_veo_models
 from models.omni import generate_omni_video
 from models.requests import OmniVideoGenerationRequest
 from models.veo import VideoGenerationRequest, generate_video
@@ -41,14 +42,19 @@ def is_omni_model(version_id: str) -> bool:
     return get_omni_model_config(version_id) is not None
 
 
-def video_model_options() -> list[tuple[str, str]]:
+def video_model_options(current: str = "") -> list[tuple[str, str]]:
     """Return ``(label, version_id)`` pairs for the video model dropdown.
 
-    Omni models that can animate an image come first, followed by Veo.
+    Omni models that can animate an image come first, followed by Veo when
+    ``SHOW_VEO_MODELS`` is on. A selected Veo model (``current``) stays listed.
     """
     omni = [(m.display_name, m.version_id) for m in get_models_by_mode("i2v")]
-    veo = [(m.display_name, m.version_id) for m in VEO_MODELS]
-    return omni + veo
+    veo = [(m.display_name, m.version_id) for m in visible_veo_models()]
+    options = omni + veo
+    current_veo = get_veo_model_config(current) if current else None
+    if current_veo and all(v != current for _, v in options):
+        options.append((current_veo.display_name, current_veo.version_id))
+    return options
 
 
 def supported_aspect_ratios(version_id: str) -> list[str]:

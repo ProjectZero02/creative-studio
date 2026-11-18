@@ -279,10 +279,12 @@ def storyboarder_content():
                         on_selection_change=on_image_model_change,
                     )
 
-                    # Video Gen Model Select (Gemini Omni first, then Veo)
+                    # Video Gen Model Select (Gemini Omni first, Veo with SHOW_VEO_MODELS)
                     video_options = [
                         me.SelectOption(label=label, value=version_id)
-                        for label, version_id in video_model_options()
+                        for label, version_id in video_model_options(
+                            state.selected_video_model
+                        )
                     ]
                     me.select(
                         label="Video Model",
