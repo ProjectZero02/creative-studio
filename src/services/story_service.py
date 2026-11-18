@@ -31,6 +31,7 @@ import math
 import os
 import random
 import re
+import subprocess
 import tempfile
 import time
 import uuid
@@ -51,6 +52,7 @@ from services.story_models import (
     StitchPlan,
     Story,
     apply_caps,
+    clip_parts,
     clip_prompt,
     clip_refs,
     frame_refs,
@@ -325,8 +327,6 @@ def _write_wav(path: str, samples: np.ndarray, rate: int = 24000) -> str:
 
 def video_size(path: str) -> tuple[int, int] | None:
     """(width, height) of a video file, or None."""
-    import subprocess
-
     err = subprocess.run(
         [_ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True, check=False
     ).stderr
@@ -1083,6 +1083,79 @@ def clip_inputs(
     return {"omni_mode": "t2v"}
 
 
+def _turn(prompt: str, clip_uri: str) -> list[dict]:
+    """One Omni thread turn: the prompt (user) and the clip it made (model)."""
+    return [
+        {"type": "user_input", "content": [{"type": "text", "text": prompt}]},
+        {
+            "type": "model_output",
+            "content": [
+                {"type": "video", "gcs_uri": clip_uri, "mime_type": "video/mp4"}
+            ],
+        },
+    ]
+
+
+def join_plan(lengths: list[float]) -> list[int]:
+    """Which parts of a lengthened scene to join, by index. An extension
+    turn may return only its new seconds or the whole video so far; a part
+    longer than everything before it is the whole video and replaces it."""
+    keep: list[int] = []
+    total = 0.0
+    for i, length in enumerate(lengths):
+        if keep and length > total + 1.0:
+            keep, total = [i], length
+        else:
+            keep.append(i)
+            total += length
+    return keep
+
+
+def concat_args(
+    paths: list[str], has_audio: list[bool], lengths: list[float], out: str
+) -> list[str]:
+    """ffmpeg argv that joins clips end to end (silence for a clip with no
+    sound), re-encoded so clips from different turns always fit together."""
+    args = [_ffmpeg(), "-v", "error", "-y"]
+    for p in paths:
+        args += ["-i", p]
+    chains, inputs = [], []
+    for i, (audio, secs) in enumerate(zip(has_audio, lengths, strict=True)):
+        chains.append(f"[{i}:v]setsar=1,fps=24[v{i}]")
+        if audio:
+            chains.append(f"[{i}:a]aresample=48000[a{i}]")
+        else:
+            chains.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{secs:.3f}[a{i}]")
+        inputs.append(f"[v{i}][a{i}]")
+    graph = (
+        ";".join(chains)
+        + ";"
+        + "".join(inputs)
+        + f"concat=n={len(paths)}:v=1:a=1[v][a]"
+    )
+    return args + [
+        "-filter_complex",
+        graph,
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        out,
+    ]
+
+
 def take_history(
     story: Story, index: int, prev_clip_uri: str, story_set=None
 ) -> list[dict]:
@@ -1277,13 +1350,99 @@ class VertexStoryBackend:
         extra = clip_inputs(story, scene, start_frame_uri, story_set)
         labels = extra.pop("ref_labels", None)
         prompt = clip_prompt(story, scene, story_set=story_set, ref_labels=labels)
+        parts = clip_parts(scene.duration)
         uri, interaction_id = generate_omni_video(
-            self._omni_request(story, index, prompt, **extra)
+            self._omni_request(story, index, prompt, duration_seconds=parts[0], **extra)
         )
         if not uri:
             raise GenerationError("Gemini Omni returned no video for this scene.")
+        if len(parts) > 1:
+            uri, interaction_id = self._lengthen(
+                story, index, prompt, uri, interaction_id, parts[1:], story_set
+            )
         self._interactions[uri] = interaction_id
         return uri
+
+    def _lengthen(
+        self,
+        story: Story,
+        index: int,
+        prompt: str,
+        uri: str,
+        interaction_id: str,
+        rest: list[int],
+        story_set,
+    ) -> tuple[str, str]:
+        """Make a scene longer than one clip: continue the first clip in its
+        Omni thread, one turn per part of `rest`, then join the parts into
+        one clip. Returns (joined clip, last interaction ID)."""
+        from models.omni import generate_omni_video
+
+        scene = story.scenes[index]
+        history = _turn(prompt, uri)
+        pieces = [uri]
+        for seconds in rest:
+            more = clip_prompt(story, scene, continuing=True, story_set=story_set)
+            new_uri, interaction_id = generate_omni_video(
+                self._omni_request(
+                    story,
+                    index,
+                    more,
+                    omni_mode="t2v",
+                    duration_seconds=seconds,
+                    previous_interaction_id=interaction_id,
+                    chat_history_json=json.dumps(history),
+                )
+            )
+            if not new_uri:
+                raise GenerationError(
+                    f"Gemini Omni could not extend scene {index + 1}."
+                )
+            history += _turn(more, new_uri)
+            pieces.append(new_uri)
+        return self._join_parts(story, index, pieces), interaction_id
+
+    def _join_parts(self, story: Story, index: int, pieces: list[str]) -> str:
+        """One clip from a scene's parts (see join_plan), stored next to the
+        story's other clips."""
+        from common.storage import store_to_gcs
+        from services.story_timeline import probe
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for i, piece in enumerate(pieces):
+                path = os.path.join(tmp, f"part{i}.mp4")
+                _gcs_fetch(piece, path)
+                paths.append(path)
+            probes = [probe(p) for p in paths]
+            keep = join_plan([length for length, _ in probes])
+            if len(keep) == 1:
+                return pieces[keep[0]]
+            out = os.path.join(tmp, "joined.mp4")
+            result = subprocess.run(
+                concat_args(
+                    [paths[i] for i in keep],
+                    [probes[i][1] for i in keep],
+                    [probes[i][0] for i in keep],
+                    out,
+                ),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "Story Studio: joining clip parts failed: %s", result.stderr[-2000:]
+                )
+                raise GenerationError(f"Could not join the parts of scene {index + 1}.")
+            with open(out, "rb") as f:
+                data = f.read()
+        return store_to_gcs(
+            self._folder(story),
+            f"clip{index + 1}_{uuid.uuid4().hex[:8]}.mp4",
+            "video/mp4",
+            data,
+        )
 
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str:
         from common.storage import download_from_gcs, store_to_gcs

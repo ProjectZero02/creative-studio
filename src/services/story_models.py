@@ -153,16 +153,48 @@ def max_words(duration: int | float) -> int:
     return max(1, int(float(duration) * WORDS_PER_SECOND))
 
 
-# Clip lengths offered per scene (seconds), kept inside the model's range.
-SCENE_LENGTHS = (4, 6, 8, 10, 12, 15)
+# Scene lengths offered (seconds). Up to the model's single-clip limit a
+# scene is one clip; longer scenes are extended (see clip_parts).
+SCENE_LENGTHS = (4, 6, 8, 10, 12, 15, 20, 25, 30)
+# Each Omni extension turn adds this many seconds.
+EXTEND_MIN_SECONDS = 3
+EXTEND_MAX_SECONDS = 10
+
+
+def single_clip_max() -> int:
+    """Longest clip the story video model makes in one request."""
+    model = get_omni_model_config(Default().STORY_VIDEO_MODEL)
+    return model.max_duration if model else 8
 
 
 def supported_durations() -> list[int]:
-    """Clip lengths (seconds) the configured story video model can make."""
+    """Scene lengths (seconds) the configured story video model can make:
+    its own clip range, plus longer scenes up to STORY_MAX_SCENE_SECONDS when
+    it can extend a clip."""
     model = get_omni_model_config(Default().STORY_VIDEO_MODEL)
     if not model:
         return [4, 6, 8]
-    return [d for d in SCENE_LENGTHS if model.min_duration <= d <= model.max_duration]
+    top = model.max_duration
+    if "extend" in model.supported_modes:
+        top = max(top, Default().STORY_MAX_SCENE_SECONDS)
+    return [d for d in SCENE_LENGTHS if model.min_duration <= d <= top]
+
+
+def clip_parts(seconds: int, single_max: int | None = None) -> list[int]:
+    """How a scene of `seconds` is made: the first clip, then extension
+    turns of EXTEND_MIN_SECONDS..EXTEND_MAX_SECONDS each. 20 -> [15, 5],
+    30 -> [15, 8, 7], 16 -> [13, 3] (with a 15 s single-clip limit)."""
+    seconds = int(seconds)
+    top = single_clip_max() if single_max is None else single_max
+    if seconds <= top:
+        return [seconds]
+    first, rest = top, seconds - top
+    if rest < EXTEND_MIN_SECONDS:
+        first -= EXTEND_MIN_SECONDS - rest
+        rest = EXTEND_MIN_SECONDS
+    turns = -(-rest // EXTEND_MAX_SECONDS)
+    base, extra = divmod(rest, turns)
+    return [first] + [base + (1 if i < extra else 0) for i in range(turns)]
 
 
 # ---------------------------------------------------------------------------
@@ -341,10 +373,12 @@ class Story:
         if not self.continuous_takes or not self._spoken_pair(index):
             return False
         cap = Default().STORY_TAKE_MAX_SECONDS
+        single = single_clip_max()
         take = 0.0
         for i in range(index + 1):
             d = float(self.scenes[i].duration)
-            joins = i > 0 and self._spoken_pair(i) and take + d <= cap
+            # A scene longer than one clip is extended in its own thread.
+            joins = i > 0 and self._spoken_pair(i) and take + d <= cap and d <= single
             take = take + d if joins else d
             if i == index:
                 return joins
@@ -908,7 +942,8 @@ Idea: \"\"\"{story.idea.strip()}\"\"\"
 
 Rules:
 - Write the title and every narration line in {story.language}.
-- Narration: one short sentence per scene that can be spoken in under
+- Narration: what is said in each scene (one sentence for a short scene, a few
+  for a long one) that can be spoken in under
   {story.duration} seconds (at most {max_words(story.duration)} words), or in
   its "seconds" for a longer spoken scene.
 {_speech_rules(story)}
