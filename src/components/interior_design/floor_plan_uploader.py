@@ -7,7 +7,12 @@ from typing import Callable
 import mesop as me
 
 from common.utils import create_display_url
-from components.demo_flow.demo_flow import cicon, ctext, demo_card_head
+from components.demo_flow.demo_flow import (
+    cicon,
+    ctext,
+    demo_card_head,
+    demo_upload_button,
+)
 from components.library.library_chooser_button import library_chooser_button
 
 
@@ -32,11 +37,9 @@ def floor_plan_uploader(
             cicon("floorplan", "gm-demo-drop-icon")
             ctext("No floor plan yet", "gm-demo-drop-text")
     with me.box(classes="gm-demo-actions"):
-        me.uploader(
-            label="Replace plan" if uri else "Upload plan",
-            on_upload=on_upload,
-            accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-            type="stroked",
+        demo_upload_button(
+            "Replace plan" if uri else "Upload plan",
+            on_upload,
             key="interior_floor_plan_uploader",
         )
         library_chooser_button(

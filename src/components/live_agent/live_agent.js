@@ -79,6 +79,13 @@ const STYLE = `
   background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); font-weight: 500;
   box-shadow: 0 6px 20px rgba(26,95,216,.35); }
 .gml-launch svg, .gml-dock svg { width: 20px; height: 20px; fill: currentColor; }
+/* A round mic that shows its label on hover or keyboard focus: the wide pill
+   sat on top of the bottom-right primary action (Fashion "Try it on", Brand
+   kit "Create brand kit") on a 1440 x 900 screen. */
+.gml-launch { min-width: 48px; padding: 0 14px; }
+.gml-launch span { display: none; }
+.gml-launch:hover span, .gml-launch:focus-visible span { display: inline; }
+.gml-launch:hover, .gml-launch:focus-visible { padding: 0 18px 0 14px; }
 .gml-dock { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
   width: min(640px, calc(100vw - 32px)); border-radius: 24px; padding: 10px 10px 10px 16px;
   display: flex; align-items: center; gap: 10px; pointer-events: auto; }

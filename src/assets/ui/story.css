@@ -238,6 +238,8 @@ html body.dark-theme .ss-root { --story-ring: #ffffff; }
 .ss-row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ss-row-tools { display: flex; gap: 2px; margin-left: auto; }
 .ss-sound { gap: 12px; }
+/* Scene audio type (Voiceover / On camera): left-aligned with the fields. */
+html body .gm-segmented.ss-audio-type { justify-content: flex-start; margin: 6px 0 8px; }
 
 /* ---------- Video ---------- */
 .ss-video { display: flex; flex-direction: column; gap: 16px; }
@@ -298,3 +300,36 @@ html body.dark-theme .ss-root { --story-ring: #ffffff; }
    text flips: mirroring the whole outlined field breaks its label notch. */
 .ss-rtl textarea { direction: rtl; text-align: right; }
 .ss-rtl-text { direction: rtl; text-align: right; }
+
+/* Edit step: one header bar (name, then Scenes / Music / Download / Export),
+   an optional music row, then the timeline editor. Every control is 40px. */
+.ss-edit-head { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; padding: 12px 16px; }
+.ss-edit-name { display: flex; flex-direction: column; min-width: 0; }
+.ss-edit-name > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-edit-tools { display: grid; grid-template-columns: repeat(4, 112px); gap: 8px; }
+.ss-edit-tools .mat-mdc-button-base { width: 100%; min-width: 0; height: 40px; padding: 0 12px; border-radius: var(--gm-radius-md, 12px); }
+html body .ss-edit-dl component-renderer, html body .ss-edit-dl mesop-link { display: block; height: 40px; }
+html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
+  display: flex !important; align-items: center; justify-content: center; height: 40px; border-radius: var(--gm-radius-md, 12px);
+  background: var(--gm-tonal); color: var(--sys-on-surface); font-size: 14px; font-weight: 500; text-decoration: none;
+  transition: background-color var(--gm-fast, 150ms) var(--gm-ease, ease);
+}
+.ss-edit-dl a:hover { background: var(--gm-tonal-hover); }
+.ss-edit-dl a:active { background: var(--gm-tonal-press); }
+.ss-edit-dl a:focus-visible { outline: 2px solid var(--gm-focus, var(--sys-primary)); outline-offset: 2px; }
+.ss-edit-dl.is-off > * { opacity: 0.45; cursor: default; }
+.ss-edit-music { display: grid; flex-direction: row; grid-template-columns: minmax(0, 1fr) 132px 132px; gap: 8px; align-items: center; padding: 12px 16px; }
+.ss-edit-music .mat-mdc-button-base { width: 100%; height: 40px; border-radius: var(--gm-radius-md, 12px); }
+.ss-edit-music .mat-mdc-form-field-subscript-wrapper { display: none; }
+.ss-edit-music .mat-mdc-text-field-wrapper { height: 40px; }
+.ss-edit-music .mat-mdc-form-field-infix { min-height: 40px; padding-top: 8px !important; padding-bottom: 8px !important; }
+.ss-edit-main { padding: 16px; }
+/* Keep the 40px row height (story-wide buttons are 44px). */
+.ss-root .ss-edit-tools .mdc-button, .ss-root .ss-edit-music .mdc-button { min-height: 40px; }
+@media (max-width: 640px) {
+  .ss-edit-head, .ss-edit-music, .ss-edit-main { padding: 12px; }
+  .ss-edit-name { width: 100%; }
+  .ss-edit-tools { grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; }
+  .ss-edit-music { grid-template-columns: 1fr 1fr; }
+  .ss-edit-music-input { grid-column: 1 / -1; }
+}

@@ -13,15 +13,15 @@
 # limitations under the License.
 """Story Studio service layer: every external call goes through here.
 
-``VertexStoryBackend`` calls Gemini, Gemini Image, Veo, Lyria and Gemini TTS
+``VertexStoryBackend`` calls Gemini, Gemini Image, Gemini Omni, Lyria and Gemini TTS
 through the repo's existing model modules (imported lazily, so demo mode and
 tests never touch Google Cloud). ``MockStoryBackend`` produces a fake
 scenario, painted placeholder frames, short motion clips, a synth music bed
 and a tone "voiceover" on local disk with realistic delays, so the whole
 wizard can be clicked through without credentials.
 
-Both backends share :func:`stitch_local`, the real MoviePy stitcher
-(crossfades + music + voiceover), so stitching is exercised in demo mode too.
+Both backends share :func:`make_film`, which lays the film out as a timeline
+and renders it with ffmpeg, so stitching is exercised in demo mode too.
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ from services.story_models import (
     CAMERA_IDS,
     LANGUAGES,
     STYLE_BY_ID,
+    Scene,
     StitchPlan,
     Story,
     apply_caps,
@@ -141,25 +142,33 @@ class StoryBackend(Protocol):
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str: ...
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str: ...
     def generate_music(self, story: Story, prompt: str, seconds: float) -> str: ...
-    def generate_voiceover(
-        self,
-        story: Story,
-        index: int,
-        text: str,
-        style: str = "narrator",
-        direction: str = "",
-    ) -> str: ...
-    def study_delivery(
-        self, story: Story, index: int, clip_uri: str, text: str, same_language: bool
-    ) -> tuple[str, str]: ...
+    def generate_voiceover(self, story: Story, index: int, text: str) -> str: ...
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
-    ) -> str: ...
+    ) -> tuple[str, dict]: ...
+    def extend_clip(
+        self, story: Story, index: int, prev_clip_uri: str
+    ) -> tuple[str, float]: ...
+    def interaction_of(self, clip_uri: str) -> str: ...
+    def render_timeline(self, story: Story, timeline: dict) -> str: ...
+    def save_audio_upload(self, data: bytes, mime_type: str) -> str: ...
     def save_to_library(self, story: Story, final_uri: str, owner: str) -> str: ...
     def save_upload(self, data: bytes, mime_type: str) -> str: ...
 
 
 _UPLOAD_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+_AUDIO_EXT = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/aac": "aac",
+    "audio/ogg": "ogg",
+}
+AUDIO_MIME_TYPES = sorted(_AUDIO_EXT)
 
 
 # ---------------------------------------------------------------------------
@@ -184,380 +193,10 @@ def read_last_frame_png(video_path: str, out_path: str) -> str:
     return out_path
 
 
-# Dubbing a spoken clip with the fixed voice: find when the person speaks in
-# Veo's audio, then fit the voice line to that span without changing pitch.
-DUB_MIN_TEMPO = 0.9
-# Acting direction for lines said on camera (not a narration).
-PRESENTER_DIRECTION = (
-    "Deliver this live on a big conference stage, speaking into a handheld "
-    "microphone to a large audience: confident, warm and energetic, a natural "
-    "pace with small pauses and a smile in the voice. A real keynote speaker, "
-    "not a narrator reading a script."
-)
-DUB_MAX_TEMPO = 1.35
-
-
 def _ffmpeg() -> str:
     import imageio_ffmpeg
 
     return imageio_ffmpeg.get_ffmpeg_exe()
-
-
-def read_mono(path: str, rate: int = 16000) -> np.ndarray:
-    """Decode a file's audio to mono floats with ffmpeg (empty if no audio)."""
-    import subprocess
-
-    out = subprocess.run(
-        [_ffmpeg(), "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", str(rate),
-         "-f", "s16le", "-"],
-        capture_output=True,
-        check=False,
-    ).stdout
-    return np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
-
-
-def speech_span(
-    samples: np.ndarray, rate: int = 16000, ratio: float = 0.2
-) -> tuple[float, float] | None:
-    """(start, end) seconds of the loud part of a clip's audio, or None.
-
-    Veo's speech is far louder than its room tone, so the span between the
-    first and last 20 ms frame above `ratio` of the peak is the spoken line.
-    """
-    frame = max(1, int(rate * 0.02))
-    n = len(samples) // frame
-    if n == 0:
-        return None
-    rms = np.sqrt((samples[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
-    peak = float(rms.max())
-    if peak < 0.01:
-        return None
-    active = np.nonzero(rms >= max(peak * ratio, 0.01))[0]
-    start, end = active[0] * frame / rate, (active[-1] + 1) * frame / rate
-    return (float(start), float(end)) if end - start >= 0.2 else None
-
-
-def dub_tempo(voice_seconds: float, span_seconds: float) -> float:
-    """Speed change that makes the voice fill the span, within natural limits."""
-    if span_seconds <= 0 or voice_seconds <= 0:
-        return 1.0
-    return min(DUB_MAX_TEMPO, max(DUB_MIN_TEMPO, voice_seconds / span_seconds))
-
-
-def fit_voice(voice_path: str, out_path: str, tempo: float) -> str:
-    """Change the voice's speed by `tempo` (pitch kept) with ffmpeg atempo."""
-    import subprocess
-
-    if abs(tempo - 1.0) < 0.02:
-        return voice_path
-    subprocess.run(
-        [_ffmpeg(), "-v", "error", "-y", "-i", voice_path, "-filter:a",
-         f"atempo={tempo:.4f}", out_path],
-        check=True,
-        capture_output=True,
-    )
-    return out_path
-
-
-def _secs(value) -> float:
-    """Speech-to-Text duration ("1.200s" or {"seconds", "nanos"}) in seconds."""
-    if isinstance(value, dict):
-        return float(value.get("seconds", 0)) + float(value.get("nanos", 0)) / 1e9
-    try:
-        return float(str(value or "0").rstrip("s"))
-    except ValueError:
-        return 0.0
-
-
-Word = tuple[str, float, float]  # (word, start, end) in seconds
-
-
-def transcribe_words(path: str, language_code: str) -> list[Word]:
-    """Word timings of a file's speech from Google Speech-to-Text ([] on failure).
-
-    Uses the v1 recognize API with word time offsets on 16 kHz mono audio.
-    Needs speech.googleapis.com enabled; any failure falls back to the
-    simpler span fit, so a render never breaks on it.
-    """
-    import base64
-
-    import google.auth
-    from google.auth.transport.requests import AuthorizedSession
-
-    pcm = read_mono(path, 16000)
-    if len(pcm) == 0:
-        return []
-    content = base64.b64encode(
-        (np.clip(pcm, -1, 1) * 32767).astype("<i2").tobytes()
-    ).decode()
-    try:
-        creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        session = AuthorizedSession(creds)
-        for model in ("latest_short", None):
-            config = {
-                "encoding": "LINEAR16",
-                "sampleRateHertz": 16000,
-                "languageCode": language_code,
-                "enableWordTimeOffsets": True,
-            }
-            if model:
-                config["model"] = model
-            r = session.post(
-                "https://speech.googleapis.com/v1/speech:recognize",
-                json={"config": config, "audio": {"content": content}},
-                timeout=60,
-            )
-            if r.status_code == 200:
-                break
-            logger.warning(
-                "Speech-to-Text %s (model %s): %s", r.status_code, model, r.text[:300]
-            )
-        else:
-            return []
-    except Exception as exc:  # network, auth, API disabled
-        logger.warning("Speech-to-Text unavailable: %s", exc)
-        return []
-    words: list[Word] = []
-    for result in r.json().get("results", []):
-        alts = result.get("alternatives") or [{}]
-        for w in alts[0].get("words", []):
-            words.append((str(w.get("word", "")), _secs(w.get("startTime")), _secs(w.get("endTime"))))
-    return words
-
-
-def _norm_word(word: str) -> str:
-    return re.sub(r"[^\w]", "", word.lower())
-
-
-def match_words(voice: list[Word], clip: list[Word]) -> list[tuple[float, float, float, float]]:
-    """(voice_start, voice_end, clip_start, clip_end) for words said in both,
-    in order (difflib matching, so a misheard word is just skipped)."""
-    import difflib
-
-    a = [_norm_word(w) for w, _, _ in voice]
-    b = [_norm_word(w) for w, _, _ in clip]
-    pairs = []
-    for blk in difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
-        for k in range(blk.size):
-            v, c = voice[blk.a + k], clip[blk.b + k]
-            if a[blk.a + k]:
-                pairs.append((v[1], v[2], c[1], c[2]))
-    return pairs
-
-
-def pause_marked(text: str, clip_words: list[Word]) -> str:
-    """The line with a comma or "..." wherever the person in the clip pauses
-    between two words, so the voice breathes where their lips stop."""
-    import difflib
-
-    tokens = text.split()
-    a = [_norm_word(t) for t in tokens]
-    b = [_norm_word(w) for w, _, _ in clip_words]
-    to_clip: dict[int, int] = {}
-    for blk in difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
-        for k in range(blk.size):
-            if a[blk.a + k]:
-                to_clip[blk.a + k] = blk.b + k
-    out = []
-    for k, tok in enumerate(tokens):
-        if k in to_clip and k + 1 in to_clip and not re.search(r"[^\w]$", tok):
-            gap = clip_words[to_clip[k + 1]][1] - clip_words[to_clip[k]][2]
-            if gap >= 0.6:
-                tok += "..."
-            elif gap >= 0.3:
-                tok += ","
-        out.append(tok)
-    return " ".join(out)
-
-
-def pace_direction(clip_words: list[Word]) -> str:
-    """How fast the person in the clip talks, as a direction for the voice."""
-    if len(clip_words) < 2:
-        return ""
-    span = clip_words[-1][2] - clip_words[0][1]
-    if span <= 0:
-        return ""
-    wps = len(clip_words) / span
-    if wps < 1.8:
-        how = "slowly and deliberately"
-    elif wps > 3.2:
-        how = "quickly, with energy"
-    else:
-        how = "at a natural pace"
-    return (
-        f"Speak {how}, about {wps:.1f} words a second, and pause where the "
-        "line has commas or dots."
-    )
-
-
-def delivery_prompt(line: str) -> str:
-    return (
-        "Watch and listen to this clip. A voice actor will dub the person on "
-        "screen with this line (it may be a translation of what they say): "
-        f"\"{line}\"\n"
-        "In one or two short sentences, direct the voice actor to deliver it "
-        "exactly the way the person does: emotion, energy, pace, and which words "
-        "they stress. Directions only: no quotes, no preamble."
-    )
-
-
-WARP_MIN_TEMPO = 0.6
-WARP_MAX_TEMPO = 1.8
-
-
-def warp_points(
-    pairs: list[tuple[float, float, float, float]], voice_seconds: float
-) -> list[tuple[float, float]]:
-    """Monotonic (voice time, clip time) anchors from matched words, with the
-    voice's lead-in and tail kept at their own length."""
-    points: list[tuple[float, float]] = []
-    for vs, ve, cs, ce in pairs:
-        for p in ((vs, cs), (ve, ce)):
-            if not points or (p[0] > points[-1][0] + 1e-3 and p[1] > points[-1][1] + 1e-3):
-                points.append(p)
-    if not points:
-        return []
-    v0, c0 = points[0]
-    head = (0.0, max(0.0, c0 - v0))
-    if v0 > 1e-3 and head[1] < c0:
-        points.insert(0, head)
-    v1, c1 = points[-1]
-    if voice_seconds > v1 + 1e-3:
-        points.append((voice_seconds, c1 + (voice_seconds - v1)))
-    return points
-
-
-def _atempo_chain(tempo: float) -> str:
-    """ffmpeg atempo filters for any tempo (each stage must stay in 0.5..2)."""
-    stages = []
-    while tempo > 2.0:
-        stages.append(2.0)
-        tempo /= 2.0
-    while tempo < 0.5:
-        stages.append(0.5)
-        tempo /= 0.5
-    stages.append(tempo)
-    return ",".join(f"atempo={t:.4f}" for t in stages)
-
-
-def warp_voice(
-    voice_path: str, points: list[tuple[float, float]], out_path: str, rate: int = 24000
-) -> str:
-    """Re-time the voice piece by piece so each anchor lands at its clip time.
-
-    The output's time 0 is the clip's time 0. Each piece is sped up or slowed
-    down (pitch kept) within WARP_MIN_TEMPO..WARP_MAX_TEMPO.
-    """
-    import subprocess
-
-    src = read_mono(voice_path, rate)
-    out = np.zeros(int((points[-1][1] + 0.5) * rate), dtype=np.float32)
-    fade = int(0.005 * rate)
-    with tempfile.TemporaryDirectory() as tmp:
-        for k, ((va, ca), (vb, cb)) in enumerate(zip(points, points[1:])):
-            piece = src[int(va * rate) : int(vb * rate)]
-            target = int((cb - ca) * rate)
-            if len(piece) < 2 or target < 2:
-                continue
-            tempo = min(WARP_MAX_TEMPO, max(WARP_MIN_TEMPO, len(piece) / target))
-            if abs(tempo - 1.0) > 0.02:
-                p_in, p_out = os.path.join(tmp, f"{k}.wav"), os.path.join(tmp, f"{k}o.wav")
-                _write_wav(p_in, piece, rate)
-                subprocess.run(
-                    [_ffmpeg(), "-v", "error", "-y", "-i", p_in, "-filter:a",
-                     _atempo_chain(tempo), p_out],
-                    check=True,
-                    capture_output=True,
-                )
-                piece = read_mono(p_out, rate)
-            piece = piece[:target].copy()
-            if len(piece) > 2 * fade:
-                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
-                piece[:fade] *= ramp
-                piece[-fade:] *= ramp[::-1]
-            at = int(ca * rate)
-            end = min(len(out), at + len(piece))
-            out[at:end] += piece[: end - at]
-    return _write_wav(out_path, out, rate)
-
-
-def stage_voice(voice_path: str, out_path: str) -> str:
-    """Make a dry studio voice sound like a live mic: rumble cut, less
-    low-mid "box", a little presence and gentle compression (ffmpeg filters).
-
-    No echo: short repeats of each word sounded boxy and like a second voice
-    talking underneath.
-    """
-    import subprocess
-
-    subprocess.run(
-        [_ffmpeg(), "-v", "error", "-y", "-i", voice_path, "-filter:a",
-         "highpass=f=90,"
-         "equalizer=f=350:t=q:w=1.2:g=-3,"
-         "equalizer=f=3500:t=q:w=1.0:g=2,"
-         "acompressor=threshold=0.125:ratio=2.5:attack=8:release=120",
-         out_path],
-        check=True,
-        capture_output=True,
-    )
-    return out_path
-
-
-ROOM_TONE_GAIN = 0.5
-
-
-def room_tone(samples: np.ndarray, rate: int, seconds: float, ratio: float = 0.05):
-    """The clip's own background (crowd, room) with the speech cut out, looped
-    to `seconds` at half level, or None when there is too little of it.
-
-    Frames near any speech are left out too, so soft syllables and breaths of
-    Veo's voice do not come back as murmuring under the dubbed voice.
-    """
-    frame = max(1, int(rate * 0.02))
-    n = len(samples) // frame
-    if n == 0:
-        return None
-    frames = samples[: n * frame].reshape(n, frame)
-    rms = np.sqrt((frames**2).mean(axis=1))
-    peak = float(rms.max())
-    if peak <= 0:
-        return None
-    loud = rms >= peak * 0.1
-    guard = 15  # 0.3 s either side of speech
-    near = np.convolve(loud.astype(float), np.ones(2 * guard + 1), "same") > 0
-    quiet = frames[(rms < peak * ratio) & ~near]
-    if len(quiet) * frame < int(0.4 * rate):
-        return None
-    bed = quiet.reshape(-1) * ROOM_TONE_GAIN
-    want = int(seconds * rate)
-    reps = int(np.ceil(want / len(bed)))
-    return np.tile(bed, reps)[:want].astype(np.float32)
-
-
-def _sync_words(
-    voice_path: str,
-    clip_path: str,
-    out_path: str,
-    word_timer,
-    voice_language: str,
-    clip_language: str,
-) -> str:
-    """Word-level re-timing of the voice to the clip's speech, or "" when it
-    cannot be done (no timer, other language, too few matching words)."""
-    if word_timer is None or not voice_language or voice_language != clip_language:
-        return ""
-    voice_words = word_timer(voice_path, voice_language)
-    clip_words = word_timer(clip_path, clip_language)
-    pairs = match_words(voice_words, clip_words)
-    if len(pairs) < 2 or len(pairs) < 0.5 * max(1, len(voice_words)):
-        return ""
-    voice_seconds = len(read_mono(voice_path, 16000)) / 16000
-    points = warp_points(pairs, voice_seconds)
-    if len(points) < 2:
-        return ""
-    return warp_voice(voice_path, points, out_path)
 
 
 def stitch_local(
@@ -567,16 +206,15 @@ def stitch_local(
     music_path: str = "",
     voice_paths: list[str] | None = None,
     fps: int = 24,
-    word_timer=None,
-    voice_language: str = "",
-    clip_language: str = "",
 ) -> str:
-    """Render the film: clips overlapped with crossfades, music bed, voiceover.
+    """Legacy MoviePy renderer (kept for old callers; films now render
+    through :func:`make_film` and the timeline).
+
+    Render the film: clips overlapped with crossfades, music bed, voiceover.
 
     ``clip_paths`` and ``voice_paths`` follow ``plan.segments`` order. Clip
     audio is dropped except for spoken segments, whose clip carries the
-    on-camera speech. Dubbed segments drop the clip's audio and get their
-    voice line fitted to when the person speaks in it. The music is
+    on-camera speech. The music is
     looped/trimmed to the film and ducked under any speech; the voiceover
     starts just after each crossfade.
     """
@@ -594,7 +232,7 @@ def stitch_local(
     opened = []
     try:
         sources = [
-            VideoFileClip(p, audio=seg.spoken and not seg.dub)
+            VideoFileClip(p, audio=seg.spoken)
             for p, seg in zip(clip_paths, plan.segments)
         ]
         opened.extend(sources)
@@ -605,7 +243,7 @@ def stitch_local(
             clip = src.subclipped(
                 seg.trim_head, min(seg.trim_head + seg.duration, src.duration)
             )
-            if seg.spoken and not seg.dub and clip.audio is not None:
+            if seg.spoken and clip.audio is not None:
                 speech.append(clip.audio.with_start(seg.start))
             clip = clip.without_audio()
             if tuple(clip.size) != tuple(size):
@@ -631,47 +269,9 @@ def stitch_local(
                 ]
             )
             tracks.append(music)
-        for k, (seg, vpath) in enumerate(zip(plan.segments, voice_paths or [])):
+        for seg, vpath in zip(plan.segments, voice_paths or []):
             if not vpath:
                 continue
-            if seg.dub:
-                clip_audio = read_mono(clip_paths[k])
-                bed = room_tone(clip_audio, 16000, seg.duration)
-                if bed is not None:
-                    # Keep the clip's own crowd and room sound under the voice.
-                    bed_path = _write_wav(f"{out_path}.room{k}.wav", bed, 16000)
-                    room = AudioFileClip(bed_path)
-                    opened.append(room)
-                    tracks.append(room.with_start(seg.start))
-                warped = _sync_words(
-                    vpath, clip_paths[k], f"{out_path}.sync{k}.wav",
-                    word_timer, voice_language, clip_language,
-                )
-                if warped:
-                    staged = stage_voice(warped, f"{out_path}.stage{k}.wav")
-                    voice = AudioFileClip(staged)
-                    opened.append(voice)
-                    head = min(seg.trim_head, voice.duration)
-                    voice = voice.subclipped(head, min(voice.duration, head + seg.duration))
-                    tracks.append(voice.with_start(seg.start))
-                    continue
-                # Fit the fixed voice to when the person speaks in the clip.
-                span = speech_span(clip_audio)
-                if span:
-                    begin = max(span[0] - seg.trim_head, 0.0)
-                    voice = AudioFileClip(vpath)
-                    tempo = dub_tempo(voice.duration, span[1] - span[0])
-                    voice.close()
-                    fitted = fit_voice(
-                        vpath, f"{out_path}.dub{k}.wav", tempo
-                    )
-                    voice = AudioFileClip(stage_voice(fitted, f"{out_path}.stage{k}.wav"))
-                    opened.append(voice)
-                    room = max(0.3, seg.duration - begin - 0.05)
-                    if voice.duration > room:
-                        voice = voice.subclipped(0, room)
-                    tracks.append(voice.with_start(seg.start + begin))
-                    continue
             voice = AudioFileClip(vpath)
             opened.append(voice)
             lead = min(seg.fade_in + 0.25, seg.duration / 3)
@@ -711,6 +311,90 @@ def _write_wav(path: str, samples: np.ndarray, rate: int = 24000) -> str:
         w.setframerate(rate)
         w.writeframes(pcm.tobytes())
     return path
+
+
+def video_size(path: str) -> tuple[int, int] | None:
+    """(width, height) of a video file, or None."""
+    import subprocess
+
+    err = subprocess.run(
+        [_ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True, check=False
+    ).stderr
+    m = re.search(r"Stream #.*Video:.*?(\d{2,5})x(\d{2,5})", err)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def make_film(
+    story: Story,
+    plan: StitchPlan,
+    music_uri: str,
+    voice_uris: list[str],
+    fetch,
+    out_path: str,
+) -> dict:
+    """Lay the made media out as an editable timeline and render it.
+
+    ``fetch(uri, local_path)`` copies a stored file to disk. Every clip keeps
+    its own sound: spoken clips levelled to one dialogue loudness, narrated
+    clips as a quiet ambient bed under the voiceover (the music ducks under
+    the voice). The user's text overlays
+    and music level from the story's previous timeline are kept.
+    Returns the timeline (JSON-safe dict).
+    """
+    import shutil
+
+    from services import story_timeline as tl_mod
+
+    if not plan.segments:
+        raise GenerationError("Nothing to stitch: some scenes have no clip.")
+    with tempfile.TemporaryDirectory() as tmp:
+        cache: dict[str, str] = {}
+
+        def local(uri: str) -> str:
+            if uri not in cache:
+                ext = os.path.splitext(uri.split("?")[0])[1][:6] or ".bin"
+                path = os.path.join(tmp, f"m{len(cache)}{ext}")
+                fetch(uri, path)
+                cache[uri] = path
+            return cache[uri]
+
+        clip_lengths: dict[int, float] = {}
+        gains: dict[int, float] = {}
+        voice_lengths: dict[int, float] = {}
+        voices = {
+            seg.index: v for seg, v in zip(plan.segments, voice_uris or []) if v
+        }
+        size = None
+        for seg in plan.segments:
+            path = local(seg.clip_uri)
+            length, _ = tl_mod.probe(path)
+            clip_lengths[seg.index] = length or (seg.trim_head + seg.duration)
+            size = size or video_size(path)
+            # Every clip keeps its own sound: speech levelled for dialogue,
+            # a narrated clip's ambience kept low under the narrator.
+            gains[seg.index] = tl_mod.clip_gain(tl_mod.measure_lufs(path), seg.spoken)
+            vuri = voices.get(seg.index)
+            if vuri:
+                voice_lengths[seg.index] = tl_mod.probe(local(vuri))[0]
+        width, height = size or frame_size(story.aspect_ratio, 1280)
+        music_len = tl_mod.probe(local(music_uri))[0] if music_uri else 0.0
+        timeline = tl_mod.build_timeline(
+            story,
+            plan,
+            width=width,
+            height=height,
+            clip_lengths=clip_lengths,
+            voice_uris=voices,
+            voice_lengths=voice_lengths,
+            clip_gains=gains,
+            music_uri=music_uri,
+            music_length=music_len,
+        )
+        timeline = tl_mod.keep_edits(timeline, story.timeline_json)
+        tl_mod.render_timeline(
+            timeline, lambda uri, dest: shutil.copyfile(local(uri), dest), out_path
+        )
+    return timeline
 
 
 # ---------------------------------------------------------------------------
@@ -1015,20 +699,7 @@ class MockStoryBackend:
         _write_wav(path + ".wav", out, rate)
         return uri + ".wav"
 
-    def study_delivery(
-        self, story: Story, index: int, clip_uri: str, text: str, same_language: bool
-    ) -> tuple[str, str]:
-        """No model to watch the clip offline: no extra direction."""
-        return "", text
-
-    def generate_voiceover(
-        self,
-        story: Story,
-        index: int,
-        text: str,
-        style: str = "narrator",
-        direction: str = "",
-    ) -> str:
+    def generate_voiceover(self, story: Story, index: int, text: str) -> str:
         self._sleep(0.8, 1.6)
         rate = 24000
         words = max(1, len(text.split()))
@@ -1048,18 +719,54 @@ class MockStoryBackend:
     # -- stitch --
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
-    ) -> str:
-        clip_paths = [local_path(s.clip_uri) for s in plan.segments]
+    ) -> tuple[str, dict]:
+        import shutil
+
         uri, path = self._new_uri(story, "film")
-        stitch_local(
-            clip_paths,
+        timeline = make_film(
+            story,
             plan,
+            music_uri,
+            voice_uris,
+            lambda u, dest: shutil.copyfile(local_path(u), dest),
             path + ".mp4",
-            music_path=local_path(music_uri) if music_uri else "",
-            voice_paths=[local_path(v) if v else "" for v in voice_uris],
-            fps=12,
+        )
+        return uri + ".mp4", timeline
+
+    def extend_clip(
+        self, story: Story, index: int, prev_clip_uri: str
+    ) -> tuple[str, float]:
+        """Demo stand-in for an Omni continuation: a new clip from the previous
+        clip's last frame (the clip holds only the new seconds)."""
+        start = self.last_frame(story, prev_clip_uri, index)
+        return self.generate_clip(story, index, start), 0.0
+
+    def interaction_of(self, clip_uri: str) -> str:
+        """Demo clips have no Omni thread."""
+        return ""
+
+    def render_timeline(self, story: Story, timeline: dict) -> str:
+        import shutil
+
+        from services.story_timeline import render_timeline
+
+        self._sleep(0.5, 1.0)
+        uri, path = self._new_uri(story, "film")
+        render_timeline(
+            timeline, lambda u, dest: shutil.copyfile(local_path(u), dest), path + ".mp4"
         )
         return uri + ".mp4"
+
+    def save_audio_upload(self, data: bytes, mime_type: str) -> str:
+        ext = _AUDIO_EXT.get(mime_type)
+        if not ext:
+            raise GenerationError("Use an MP3, WAV, M4A or OGG audio file.")
+        rel = f"uploads/music_{uuid.uuid4().hex[:10]}.{ext}"
+        path = local_path(LOCAL_SCHEME + rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return LOCAL_SCHEME + rel
 
     def save_to_library(self, story: Story, final_uri: str, owner: str) -> str:
         self._sleep(0.3, 0.6)
@@ -1082,6 +789,80 @@ class MockStoryBackend:
 # ---------------------------------------------------------------------------
 
 
+def _gcs_fetch(uri: str, path: str) -> None:
+    """Copy a gs:// object to a local file."""
+    from common.storage import download_from_gcs
+
+    with open(path, "wb") as f:
+        f.write(download_from_gcs(uri))
+
+
+def _image_mime(uri: str) -> str:
+    return "image/jpeg" if uri.lower().split("?")[0].endswith((".jpg", ".jpeg")) else "image/png"
+
+
+# Omni's extend task adds at most this many seconds to a video.
+OMNI_EXTEND_MAX_SECONDS = 10
+
+
+def clip_inputs(story: Story, scene: Scene, start_frame_uri: str) -> dict:
+    """Omni mode and media for a scene's first clip (not a continuation).
+
+    A clip that starts from the previous clip's last frame (continuity) must
+    begin on that frame: image to video. A clip that starts fresh from its
+    storyboard frame, in a story with a character reference, is made as
+    reference to video from both images, so the person's face and outfit
+    follow the reference too. Otherwise image to video from the frame.
+    """
+    from models.requests import APIReferenceImage
+
+    fresh = bool(start_frame_uri) and start_frame_uri == scene.frame_uri
+    if story.reference_uri and (fresh or not start_frame_uri):
+        refs = [u for u in (start_frame_uri, story.reference_uri) if u]
+        return {
+            "omni_mode": "ref2v",
+            "r2v_references": [
+                APIReferenceImage(gcs_uri=u, mime_type=_image_mime(u)) for u in refs
+            ],
+        }
+    if start_frame_uri:
+        return {
+            "omni_mode": "i2v",
+            "reference_image_gcs": start_frame_uri,
+            "reference_image_mime_type": _image_mime(start_frame_uri),
+        }
+    return {"omni_mode": "t2v"}
+
+
+def take_history(story: Story, index: int, prev_clip_uri: str) -> list[dict]:
+    """The Omni thread of scene `index`'s continuous take so far: each earlier
+    scene's prompt (user turn) and clip (model turn), oldest first. The
+    clip of the scene just before is `prev_clip_uri`."""
+    start = story.take_start(index)
+    history: list[dict] = []
+    for j in range(start, index):
+        sc = story.scenes[j]
+        history += [
+            {
+                "type": "user_input",
+                "content": [
+                    {"type": "text", "text": clip_prompt(story, sc, continuing=j > start)}
+                ],
+            },
+            {
+                "type": "model_output",
+                "content": [
+                    {
+                        "type": "video",
+                        "gcs_uri": prev_clip_uri if j == index - 1 else sc.clip_uri,
+                        "mime_type": "video/mp4",
+                    }
+                ],
+            },
+        ]
+    return history
+
+
 class VertexStoryBackend:
     """Real backend on Vertex AI. Untested live in this repo's local setup."""
 
@@ -1089,9 +870,31 @@ class VertexStoryBackend:
 
     def __init__(self):
         self.cfg = Default()
+        # clip URI -> Gemini Omni interaction that made it (see interaction_of).
+        self._interactions: dict[str, str] = {}
 
     def _folder(self, story: Story) -> str:
         return f"story_studio/{story.id}"
+
+    def interaction_of(self, clip_uri: str) -> str:
+        """The Omni interaction that made `clip_uri` ("" if unknown)."""
+        return self._interactions.get(clip_uri, "")
+
+    def _omni_request(self, story: Story, index: int, prompt: str, **extra):
+        from config.omni_models import clamp_duration
+        from models.requests import OmniVideoGenerationRequest
+
+        scene = story.scenes[index]
+        caps = apply_caps(story.scene_count, scene.duration)
+        seconds = extra.pop("duration_seconds", caps.duration)
+        return OmniVideoGenerationRequest(
+            prompt=prompt,
+            duration_seconds=clamp_duration(self.cfg.STORY_VIDEO_MODEL, int(seconds)),
+            aspect_ratio=story.aspect_ratio,
+            resolution=caps.resolution,
+            model_version_id=self.cfg.STORY_VIDEO_MODEL,
+            **extra,
+        )
 
     def _json_text(
         self, prompt: str, temperature: float = 0.8, task: str = "story_scenario"
@@ -1143,34 +946,19 @@ class VertexStoryBackend:
         return uris[0]
 
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str:
-        from models.requests import VideoGenerationRequest
-        from models.veo import generate_video
+        """One clip with Gemini Omni, with its own sound: the spoken line with
+        lip sync for on-camera scenes, ambient sound for narrated ones."""
+        from models.omni import generate_omni_video
 
         scene = story.scenes[index]
-        spoken = bool(scene.spoken and scene.narration.strip())
-        caps = apply_caps(story.scene_count, scene.duration)
-        uris, _ = generate_video(
-            VideoGenerationRequest(
-                prompt=clip_prompt(story, scene),
-                duration_seconds=caps.duration,
-                video_count=1,
-                aspect_ratio=story.aspect_ratio,
-                resolution=caps.resolution,
-                # Prompt rewriting can drop the line or the voice, so spoken
-                # scenes go to Veo exactly as written.
-                enhance_prompt=not spoken,
-                # Spoken scenes: Veo renders the line with lip sync. Other
-                # clips stay silent under the music and voiceover.
-                generate_audio=spoken,
-                model_version_id=self.cfg.STORY_VEO_MODEL_VERSION,
-                person_generation="Allow (Adults only)",
-                reference_image_gcs=start_frame_uri or None,
-                reference_image_mime_type="image/png" if start_frame_uri else None,
-            )
+        extra = clip_inputs(story, scene, start_frame_uri)
+        uri, interaction_id = generate_omni_video(
+            self._omni_request(story, index, clip_prompt(story, scene), **extra)
         )
-        if not uris:
-            raise GenerationError("Veo returned no video for this scene.")
-        return uris[0]
+        if not uri:
+            raise GenerationError("Gemini Omni returned no video for this scene.")
+        self._interactions[uri] = interaction_id
+        return uri
 
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str:
         from common.storage import download_from_gcs, store_to_gcs
@@ -1199,75 +987,15 @@ class VertexStoryBackend:
             raise GenerationError("Lyria returned no music.")
         return uris[0]
 
-    def study_delivery(
-        self, story: Story, index: int, clip_uri: str, text: str, same_language: bool
-    ) -> tuple[str, str]:
-        """How the person in the clip says the line: (direction, line).
-
-        Gemini watches the clip and writes acting notes (emotion, stress);
-        Speech-to-Text gives their pace and pauses. Pauses are copied into the
-        line only when the clip speaks the same language. Any failure just
-        means less direction.
-        """
-        from google.genai import types
-
-        from common.analytics import track_model_call
-        from common.storage import download_from_gcs
-        from models.gemini import client
-
-        notes: list[str] = []
-        line = text
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "clip.mp4")
-                with open(path, "wb") as f:
-                    f.write(download_from_gcs(clip_uri))
-                words = transcribe_words(
-                    path, LANGUAGES.get(story.clip_language or story.language, "en-US")
-                )
-        except Exception as exc:
-            logger.warning("Could not time the clip's speech: %s", exc)
-            words = []
-        if words:
-            notes.append(pace_direction(words))
-            if same_language:
-                line = pause_marked(text, words)
-        model = self.cfg.STORY_SCENARIO_MODEL_ID
-        try:
-            with track_model_call(model_name=model, task="story_delivery"):
-                response = client.models.generate_content(
-                    model=model,
-                    contents=[
-                        types.Part.from_uri(file_uri=clip_uri, mime_type="video/mp4"),
-                        delivery_prompt(text),
-                    ],
-                    config=types.GenerateContentConfig(temperature=0.3),
-                )
-            if response.text:
-                notes.insert(0, " ".join(response.text.split())[:400])
-        except Exception as exc:
-            logger.warning("Gemini could not study the delivery: %s", exc)
-        return " ".join(n for n in notes if n), line
-
-    def generate_voiceover(
-        self,
-        story: Story,
-        index: int,
-        text: str,
-        style: str = "narrator",
-        direction: str = "",
-    ) -> str:
+    def generate_voiceover(self, story: Story, index: int, text: str) -> str:
+        """The narrator's line (Gemini TTS)."""
         from common.storage import store_to_gcs
         from models.gemini_tts import synthesize_speech
 
         audio = synthesize_speech(
             text=text,
-            prompt=" ".join(filter(None, [PRESENTER_DIRECTION, direction]))
-            if style == "presenter"
-            else "Narrate warmly and clearly, like a short film voiceover.",
-            model_name=self.cfg.STORY_SPEAKER_TTS_MODEL
-            if style == "presenter"
-            else self.cfg.STORY_TTS_MODEL,
+            prompt="Narrate warmly and clearly, like a short film voiceover.",
+            model_name=self.cfg.STORY_TTS_MODEL,
             voice_name=story.voice_name,
             language_code=LANGUAGES.get(story.language, "en-US"),
         )
@@ -1282,40 +1010,92 @@ class VertexStoryBackend:
 
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
-    ) -> str:
-        from common.storage import download_from_gcs, store_to_gcs
-
+    ) -> tuple[str, dict]:
         with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "film.mp4")
+            timeline = make_film(story, plan, music_uri, voice_uris, _gcs_fetch, out)
+            return self._store_film(story, out), timeline
 
-            def fetch(uri: str, name: str) -> str:
-                if not uri:
-                    return ""
-                path = os.path.join(tmp, name)
-                with open(path, "wb") as f:
-                    f.write(download_from_gcs(uri))
-                return path
+    def _store_film(self, story: Story, path: str) -> str:
+        from common.storage import store_to_gcs
 
-            clips = [
-                fetch(s.clip_uri, f"clip{k}.mp4") for k, s in enumerate(plan.segments)
-            ]
-            music = fetch(music_uri, "music.wav")
-            voices = [fetch(v, f"voice{k}.wav") for k, v in enumerate(voice_uris)]
-            out = stitch_local(
-                clips,
-                plan,
-                os.path.join(tmp, "film.mp4"),
-                music,
-                voices,
-                word_timer=transcribe_words,
-                voice_language=LANGUAGES.get(story.language, "en-US"),
-                clip_language=LANGUAGES.get(
-                    story.clip_language or story.language, "en-US"
-                ),
-            )
-            with open(out, "rb") as f:
-                data = f.read()
+        with open(path, "rb") as f:
+            data = f.read()
         return store_to_gcs(
             self._folder(story), f"film_{uuid.uuid4().hex[:8]}.mp4", "video/mp4", data
+        )
+
+    def render_timeline(self, story: Story, timeline: dict) -> str:
+        from services.story_timeline import render_timeline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "film.mp4")
+            render_timeline(timeline, _gcs_fetch, out)
+            return self._store_film(story, out)
+
+    def extend_clip(
+        self, story: Story, index: int, prev_clip_uri: str
+    ) -> tuple[str, float]:
+        """Continue the previous clip in the same Gemini Omni thread, which
+        keeps the shot, the person and their voice. The thread is the take so
+        far: every earlier turn's prompt and clip are sent again with the
+        previous interaction ID. Without a stored interaction (expired, or
+        made before a restart) it falls back to Omni's extend task on the
+        previous clip. Returns (clip, seconds of it that repeat the previous
+        clip), measured, since the model may return the joined video."""
+        from models.omni import generate_omni_video
+        from services.story_timeline import probe
+
+        scene = story.scenes[index]
+        prompt = clip_prompt(story, scene, continuing=True)
+        prev = story.scenes[index - 1] if index > 0 else None
+        prev_id = (prev.interaction_id if prev else "") or self.interaction_of(
+            prev_clip_uri
+        )
+        if prev_id:
+            # A chat follow-up makes the next part of the take at the scene's
+            # own length (sent in response_format, like a new clip).
+            request = self._omni_request(
+                story,
+                index,
+                prompt,
+                omni_mode="t2v",
+                previous_interaction_id=prev_id,
+                chat_history_json=json.dumps(take_history(story, index, prev_clip_uri)),
+            )
+        else:
+            request = self._omni_request(
+                story,
+                index,
+                prompt,
+                omni_mode="extend",
+                duration_seconds=min(OMNI_EXTEND_MAX_SECONDS, int(scene.duration)),
+                reference_video_gcs=prev_clip_uri,
+                reference_video_mime_type="video/mp4",
+            )
+        uri, interaction_id = generate_omni_video(request)
+        if not uri:
+            raise GenerationError("Gemini Omni returned no video for this scene.")
+        self._interactions[uri] = interaction_id
+        with tempfile.TemporaryDirectory() as tmp:
+            prev_path, new_path = os.path.join(tmp, "a.mp4"), os.path.join(tmp, "b.mp4")
+            _gcs_fetch(prev_clip_uri, prev_path)
+            _gcs_fetch(uri, new_path)
+            prev_len, new_len = probe(prev_path)[0], probe(new_path)[0]
+        joined = new_len > prev_len + 1.0
+        return uri, round(prev_len, 3) if joined else 0.0
+
+    def save_audio_upload(self, data: bytes, mime_type: str) -> str:
+        from common.storage import store_to_gcs
+
+        ext = _AUDIO_EXT.get(mime_type)
+        if not ext:
+            raise GenerationError("Use an MP3, WAV, M4A or OGG audio file.")
+        return store_to_gcs(
+            "story_studio/uploads",
+            f"music_{uuid.uuid4().hex[:10]}.{ext}",
+            mime_type,
+            data,
         )
 
     def save_to_library(self, story: Story, final_uri: str, owner: str) -> str:
@@ -1331,7 +1111,7 @@ class VertexStoryBackend:
             mime_type="video/mp4",
             media_type="video",
             mode="story_studio",
-            model=self.cfg.STORY_VEO_MODEL_VERSION,
+            model=self.cfg.STORY_VIDEO_MODEL,
             prompt=story.idea,
             original_prompt=story.idea,
             aspect=story.aspect_ratio,

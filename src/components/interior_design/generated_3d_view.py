@@ -16,7 +16,7 @@ def generated_3d_view(storyboard: dict, is_generating: bool):
     the other workflow pages.
     """
     uri = storyboard.get("generated_3d_view_uri") if storyboard else None
-    demo_card_head("2", "3D view", "A furnished 3D model of the whole plan.")
+    demo_card_head("2", "3D view")
     with me.box(classes="gm-demo-drop"):
         if is_generating:
             me.progress_spinner(diameter=36)

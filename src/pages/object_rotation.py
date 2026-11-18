@@ -128,8 +128,10 @@ from components.demo_flow.demo_flow import (
     DEMO_STYLESHEETS,
     cicon,
     ctext,
+    demo_card_head,
     demo_progress,
     demo_steps,
+    demo_upload_button,
 )
 from components.generation_progress.generation_progress import friendly_error
 from models.object_rotation import generate_product_views, save_object_rotation_project
@@ -302,13 +304,7 @@ def _rotation_progress(state: PageState):
         )
 
 
-def _card_head(number: str, title: str, hint: str):
-    with me.box(classes="gm-demo-card-head"):
-        if number:
-            ctext(number, "gm-demo-card-num")
-        with me.box(classes="gm-demo-card-titles"):
-            ctext(title, "gm-demo-card-title")
-            ctext(hint, "gm-demo-card-hint")
+_card_head = demo_card_head
 
 
 @me.component
@@ -329,11 +325,9 @@ def step1_content():
                 if main_uri:
                     me.button("Remove photo", on_click=on_remove_main_image, type="stroked")
                 else:
-                    me.uploader(
-                        label="Upload photo",
-                        on_upload=on_main_image_upload_safe,
-                        accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                        type="stroked",
+                    demo_upload_button(
+                        "Upload photo",
+                        on_main_image_upload_safe,
                         key="object_rotation_main_uploader",
                     )
                     library_chooser_button(
@@ -341,8 +335,8 @@ def step1_content():
                         button_label="From library",
                         key=MAIN_IMAGE_CHOOSER_ID,
                     )
-        with me.box(classes="gm-demo-card"):
-            _card_head("", "Description (optional)", "Name, material and colour help the views stay true.")
+        with me.box(classes="gm-demo-card gm-demo-fill"):
+            _card_head("2", "Description (optional)", "Name, material and colour.")
             me.textarea(
                 label="Product description",
                 value=state.rotation_project.get("product_description", ""),
@@ -472,14 +466,17 @@ def step2_content():
         _card_head(
             "2",
             "Four views",
-            "Let Gemini draw them, or upload your own photos for any side.",
+            "Generate them, or upload your own for any side.",
         )
+        # One filled button per view: "Generate" leads until the four views
+        # exist, then "Next" does.
+        have_all = len(views) >= len(_VIEW_UPLOADS)
         with me.box(classes="gm-demo-center"):
-            with me.box(classes="gm-demo-primary"):
+            with me.box(classes="" if have_all else "gm-demo-primary"):
                 me.button(
-                    "Generate 4 views",
+                    "Generate again" if have_all else "Generate 4 views",
                     on_click=on_generate_views,
-                    type="flat",
+                    type="stroked" if have_all else "flat",
                     disabled=state.is_generating_views,
                 )
         with me.box(classes="gm-demo-views"):
@@ -607,11 +604,7 @@ def step3_content():
     state = me.state(PageState)
     video_uri = state.rotation_project.get("final_video_uri")
     with me.box(classes="gm-demo-card"):
-        _card_head(
-            "3",
-            "360 video",
-            f"{engine_name(cfg.OBJECT_ROTATION_VIDEO_MODEL)} turns the four views into one smooth spin.",
-        )
+        _card_head("3", "360 video")
         if video_uri and not state.is_generating_video:
             with me.box(classes="gm-demo-media"):
                 me.video(src=create_display_url(video_uri))
