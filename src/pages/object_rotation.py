@@ -135,6 +135,7 @@ from components.generation_progress.generation_progress import friendly_error
 from models.object_rotation import generate_product_views, save_object_rotation_project
 from state.state import AppState
 from config.default import Default as cfg
+from config.video_studio_models import engine_name
 
 
 @me.stateclass
@@ -288,7 +289,7 @@ def _rotation_progress(state: PageState):
         demo_progress(
             stages=[
                 "Preparing the four views",
-                "Making the 360 video with Veo",
+                f"Making the 360 video with {engine_name(cfg.OBJECT_ROTATION_VIDEO_MODEL)}",
                 "Saving to your library",
             ],
             current=1,
@@ -606,7 +607,11 @@ def step3_content():
     state = me.state(PageState)
     video_uri = state.rotation_project.get("final_video_uri")
     with me.box(classes="gm-demo-card"):
-        _card_head("3", "360 video", "Veo turns the four views into one smooth spin.")
+        _card_head(
+            "3",
+            "360 video",
+            f"{engine_name(cfg.OBJECT_ROTATION_VIDEO_MODEL)} turns the four views into one smooth spin.",
+        )
         if video_uri and not state.is_generating_video:
             with me.box(classes="gm-demo-media"):
                 me.video(src=create_display_url(video_uri))

@@ -110,7 +110,7 @@ EN: dict[str, str] = {
     "nav.admin_users": "Users",
     # Page header purposes (the line each page passes to header())
     "page.nano_banana.purpose": "Create and edit images from a prompt and your own pictures with Gemini.",
-    "page.veo.purpose": "Make, edit, extend or upscale video clips with Gemini Omni or Veo.",
+    "page.veo.purpose": "Make, edit, extend or upscale video clips with Gemini Omni.",
     "page.voice.purpose": "Turn a script into natural speech in 130+ languages.",
     "page.lyria.purpose": "Compose music and songs from a description, with optional lyrics.",
     "page.fashion.purpose": "Dress a model in any piece of clothing, or style a whole look from a catalog.",
@@ -400,7 +400,7 @@ AR: dict[str, str] = {
     "nav.config.desc": "اضبط إعدادات التطبيق.",
     "nav.admin_users": "المستخدمون",
     "page.nano_banana.purpose": "أنشئ الصور وعدّلها انطلاقًا من وصف نصي وصورك الخاصة باستخدام Gemini.",
-    "page.veo.purpose": "أنشئ مقاطع الفيديو أو عدّلها أو مدّدها أو ارفع دقتها باستخدام Gemini Omni أو Veo.",
+    "page.veo.purpose": "أنشئ مقاطع الفيديو أو عدّلها أو مدّدها أو ارفع دقتها باستخدام Gemini Omni.",
     "page.voice.purpose": "حوّل النص المكتوب إلى كلام طبيعي بأكثر من 130 لغة.",
     "page.lyria.purpose": "ألّف الموسيقى والأغاني من وصف نصي، مع كلمات اختيارية.",
     "page.fashion.purpose": "ألبِس العارضة أي قطعة ملابس، أو نسّق إطلالة كاملة من الكتالوج.",
