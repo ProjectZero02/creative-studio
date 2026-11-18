@@ -43,7 +43,7 @@ def _caps_cfg(**over):
         STORY_MAX_SCENES=8,
         STORY_MAX_FILM_SECONDS=64,
         STORY_VIDEO_RESOLUTION="720p",
-        STORY_VEO_MODEL_VERSION="3.1-fast",
+        STORY_VIDEO_MODEL="gemini-omni-1.2-flash",
     )
     base.update(over)
     return lambda: SimpleNamespace(**base)
@@ -152,12 +152,12 @@ def test_caps_clamp_scene_count(monkeypatch):
     assert apply_caps(1, 4).scene_count == 3
 
 
-def test_caps_snap_duration_to_veo_values(monkeypatch):
+def test_caps_snap_duration_to_supported_values(monkeypatch):
     monkeypatch.setattr(story_models, "Default", _caps_cfg())
     caps = apply_caps(4, 5)
     assert caps.duration in (4, 6)
-    assert any("supported by Veo" in n for n in caps.notes)
-    assert apply_caps(4, 30).duration == 8
+    assert any("supported by the video model" in n for n in caps.notes)
+    assert apply_caps(4, 30).duration == 15
 
 
 def test_caps_total_film_length(monkeypatch):
@@ -279,7 +279,7 @@ def test_stitch_local_renders_tiny_clips(tmp_path):
 
 
 def test_stitch_local_keeps_speech_of_spoken_clips(tmp_path):
-    """A spoken clip's own audio (Veo speech) ends up in the film."""
+    """A spoken clip's own audio (Omni speech) ends up in the film."""
     moviepy = pytest.importorskip("moviepy")
     import numpy as np
 
@@ -934,7 +934,7 @@ def test_clip_prompt_carries_the_spoken_line():
     prompt = story_models.clip_prompt(st, spoken)
     assert '"Meet Gemini."' in prompt and "calm male voice" in prompt
     assert "lip-synced" in prompt and "only voice" in prompt
-    # Without a described voice, Veo is told to match the person it shows.
+    # Without a described voice, Omni is told to match the person it shows.
     fallback = story_models.clip_prompt(Story(), spoken)
     assert "matches their age and gender" in fallback
     silent = Scene(visual="A man on stage.", narration="Meet Gemini.")
@@ -985,8 +985,8 @@ def _spoken_story(local_store, **kw):
     )
 
 
-def test_veo_voice_mode_gives_spoken_scene_no_voiceover(speech, local_store):
-    s = _spoken_story(local_store, same_voice=False)
+def test_spoken_scene_gets_no_voiceover(speech, local_store):
+    s = _spoken_story(local_store)
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert [t.scene_index for t in job.tasks if t.kind == "voice"] == [1]
@@ -995,7 +995,7 @@ def test_veo_voice_mode_gives_spoken_scene_no_voiceover(speech, local_store):
 
 
 def test_second_language_rerenders_only_spoken_clips(speech, local_store):
-    s = _spoken_story(local_store, second_on=True, same_voice=False)
+    s = _spoken_story(local_store, second_on=True)
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     arabic_clips = [c for c in speech.clips if c[0] == "Arabic"]
@@ -1013,7 +1013,7 @@ def test_second_language_rerenders_only_spoken_clips(speech, local_store):
 
 
 def test_second_language_without_voiceover_when_scenes_speak(speech, local_store):
-    s = _spoken_story(local_store, second_on=True, voice_on=False, same_voice=False)
+    s = _spoken_story(local_store, second_on=True, voice_on=False)
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert local_store.get(s.id, OWNER).final_alt_uri
@@ -1028,7 +1028,7 @@ def test_failed_spoken_alt_clip_skips_second_film(speech, local_store):
         return original(story, index, start)
 
     speech.generate_clip = flaky
-    s = _spoken_story(local_store, second_on=True, same_voice=False)
+    s = _spoken_story(local_store, second_on=True)
     job = _run(story_jobs.start_video(s.id, OWNER))
     kinds = {t.kind: t.status for t in job.tasks}
     assert kinds["stitch"] == "done" and kinds["stitch_alt"] == "skipped"
@@ -1065,7 +1065,6 @@ def test_arabic_clips_chain_from_each_other_with_continuity(local_store):
                 continuity=True,
                 continuous_takes=False,
                 second_on=True,
-                same_voice=False,
                 scenes=scenes,
             ),
             OWNER,
@@ -1090,326 +1089,224 @@ def test_scenario_prompt_asks_for_the_speakers_gender():
 
 
 # ---------------------------------------------------------------------------
-# Same voice in every scene (dubbed on-camera lines)
+# Gemini Omni clips (request shapes, mocked: no Vertex calls)
 # ---------------------------------------------------------------------------
 
 
-def test_speech_span_finds_the_loud_part():
-    import numpy as np
+@pytest.fixture
+def omni_calls(monkeypatch):
+    """Capture every Omni request the Vertex backend sends."""
+    import models.omni
 
-    rate = 16000
-    a = np.full(rate * 3, 0.002, dtype=np.float32)  # room tone
-    t = np.arange(rate) / rate
-    a[rate : 2 * rate] = 0.3 * np.sin(2 * np.pi * 180 * t)  # speech 1.0s-2.0s
-    start, end = story_service.speech_span(a, rate)
-    assert start == pytest.approx(1.0, abs=0.05)
-    assert end == pytest.approx(2.0, abs=0.05)
-    assert story_service.speech_span(np.zeros(rate, dtype=np.float32), rate) is None
+    calls = []
 
+    def fake(request):
+        calls.append(request)
+        return f"gs://bucket/out{len(calls)}.mp4", f"int-{len(calls)}"
 
-def test_dub_tempo_stays_natural():
-    assert story_service.dub_tempo(3.0, 3.0) == 1.0
-    assert story_service.dub_tempo(10.0, 3.0) == story_service.DUB_MAX_TEMPO
-    assert story_service.dub_tempo(1.0, 3.0) == story_service.DUB_MIN_TEMPO
-    assert story_service.dub_tempo(3.0, 0) == 1.0
+    monkeypatch.setattr(models.omni, "generate_omni_video", fake)
+    return calls
 
 
-def test_fit_voice_changes_length_not_pitch(tmp_path):
-    import numpy as np
-
-    rate = 24000
-    t = np.arange(rate * 2) / rate
-    src = story_service._write_wav(
-        str(tmp_path / "v.wav"), 0.3 * np.sin(2 * np.pi * 200 * t), rate
-    )
-    out = story_service.fit_voice(src, str(tmp_path / "fast.wav"), 1.25)
-    fast = story_service.read_mono(out, 16000)
-    assert len(fast) / 16000 == pytest.approx(1.6, abs=0.08)
-    spectrum = np.abs(np.fft.rfft(fast))
-    peak_hz = np.argmax(spectrum) * 16000 / len(fast)
-    assert peak_hz == pytest.approx(200, abs=10)  # same pitch, only faster
-    assert story_service.fit_voice(src, str(tmp_path / "same.wav"), 1.0) == src
+def _omni_story(**kw):
+    scenes = [
+        Scene(narration=f"Line {i}.", spoken=True, duration=d, frame_uri=f"gs://b/f{i}.png")
+        for i, d in enumerate(kw.pop("durations", [8, 8, 8]))
+    ]
+    return Story(title="Pitch", aspect_ratio="16:9", scenes=scenes, **kw)
 
 
-def test_stitch_local_dubs_spoken_clip_with_fixed_voice(tmp_path):
-    """Veo's own voice (440 Hz) is replaced by the fixed voice (220 Hz),
-    placed where the person speaks in the clip."""
-    moviepy = pytest.importorskip("moviepy")
-    import numpy as np
-
-    def veo_speech(t):
-        t = np.asarray(t, dtype=float)
-        out = np.where((t > 0.4) & (t < 0.8), 0.3 * np.sin(2 * np.pi * 440 * t), 0.0)
-        return float(out) if out.ndim == 0 else out
-
-    paths = []
-    for i in range(2):
-        p = tmp_path / f"c{i}.mp4"
-        clip = moviepy.ColorClip((64, 36), color=(60 * i, 0, 0), duration=1.0)
-        if i == 1:
-            clip = clip.with_audio(
-                moviepy.AudioClip(veo_speech, duration=1.0, fps=22050)
-            )
-        clip.write_videofile(
-            str(p), fps=8, codec="libx264", audio_codec="aac", logger=None
-        )
-        paths.append(str(p))
-    rate = 24000
-    t = np.arange(int(rate * 0.4)) / rate
-    voice = story_service._write_wav(
-        str(tmp_path / "line.wav"), 0.3 * np.sin(2 * np.pi * 220 * t), rate
-    )
-    scenes = _clips([1, 1])
-    scenes[1].spoken, scenes[1].narration = True, "Hello"
-    plan = build_stitch_plan(scenes, crossfade=0.25, dub=True)
-    assert plan.segments[1].dub
-    out = story_service.stitch_local(
-        paths, plan, str(tmp_path / "film.mp4"), voice_paths=["", voice], fps=8
-    )
-    audio = story_service.read_mono(out, 16000)
-    window = audio[int(1.45 * 16000) : int(1.75 * 16000)]
-    spectrum = np.abs(np.fft.rfft(window))
-    peak_hz = np.argmax(spectrum) * 16000 / len(window)
-    assert peak_hz == pytest.approx(220, abs=25)  # the fixed voice, not Veo's
-    assert np.abs(audio[: int(0.9 * 16000)]).max() < 0.02  # silent first scene
-
-
-def test_tts_voice_follows_speaker_gender():
-    assert story_models.tts_voice_for("A female voice, 40s") == "Kore"
-    assert story_models.tts_voice_for("a male voice, mid-30s") == "Charon"
-    assert story_models.tts_voice_for("") == "Charon"
-
-
-def test_dubbed_story_keeps_main_clips_for_second_language():
-    sc = Scene(narration="a", narration_alt="b", spoken=True, clip_uri="main")
-    sc.clip_alt_uri, sc.clip_alt_key = "refilmed", sc.alt_clip_key()
-    assert story_models.alt_story(Story(scenes=[sc], same_voice=True)).scenes[0].clip_uri == "main"
-    refilm = Story(scenes=[sc], same_voice=False)
-    assert story_models.alt_story(refilm).scenes[0].clip_uri == "refilmed"
-
-
-class _VoiceMock(_SpeechMock):
-    def generate_voiceover(self, story, index, text, style="narrator"):
-        self.voiced = getattr(self, "voiced", []) + [
-            (story.language, index, story.voice_name, style)
-        ]
-        return f"local://{story.language}-{story.voice_name}-v{index}.wav"
-
-    def stitch(self, story, plan, music_uri, voice_uris):
-        self.plans = getattr(self, "plans", []) + [plan]
-        return super().stitch(story, plan, music_uri, voice_uris)
-
-
-def test_same_voice_voices_spoken_lines_with_the_fixed_voice(local_store):
-    backend = _VoiceMock()
-    story_service.set_backend(backend)
-    try:
-        s = _spoken_story(local_store, speaker_tts_voice="Orus", voice_name="Kore", same_voice=True)
-        job = _run(story_jobs.start_video(s.id, OWNER))
-        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
-        # Spoken scene: the fixed presenter voice; narrated scene: the narrator.
-        assert ("English", 0, "Orus", "presenter") in backend.voiced
-        assert ("English", 1, "Kore", "narrator") in backend.voiced
-        assert backend.plans[0].segments[0].dub
-        assert not backend.plans[0].segments[1].dub
-        assert any("Orus voice" in t.label for t in job.tasks)
-    finally:
-        story_service.set_backend(None)
-
-
-def test_same_voice_dubs_second_language_over_the_same_clips(local_store):
-    backend = _VoiceMock()
-    story_service.set_backend(backend)
-    try:
-        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus", same_voice=True)
-        job = _run(story_jobs.start_video(s.id, OWNER))
-        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
-        assert "clip_alt" not in {t.kind for t in job.tasks}  # no re-filming
-        assert not [c for c in backend.clips if c[0] == "Arabic"]
-        assert ("Arabic", 0, "Orus", "presenter") in backend.voiced
-        english, arabic = backend.plans
-        assert [g.clip_uri for g in arabic.segments] == [
-            g.clip_uri for g in english.segments
-        ]
-        assert arabic.segments[0].dub
-        assert local_store.get(s.id, OWNER).final_alt_uri
-    finally:
-        story_service.set_backend(None)
-
-
-def test_same_voice_works_with_narrator_voiceover_off(local_store):
-    backend = _VoiceMock()
-    story_service.set_backend(backend)
-    try:
-        s = _spoken_story(local_store, voice_on=False, same_voice=True)
-        job = _run(story_jobs.start_video(s.id, OWNER))
-        assert [t.scene_index for t in job.tasks if t.kind == "voice"] == [0]
-    finally:
-        story_service.set_backend(None)
-
-
-def test_scenario_picks_fixed_voice_from_speaker_gender(fast_backend, local_store):
-    s = local_store.save(
-        Story(idea="A woman presenting a new phone", scene_count=2, duration=4),
-        OWNER,
-    )
-
-    def female(story):
-        return json.dumps(
-            {
-                "title": "T",
-                "voice": "A female voice, 40s, warm",
-                "scenes": [
-                    {"narration": "Hi.", "spoken": True, "visual": "a"},
-                    {"narration": "Look.", "spoken": True, "visual": "b"},
-                ],
-            }
-        )
-
-    fast_backend.write_scenario = female
-    assert _run(story_jobs.start_scenario(s.id, OWNER)).status == "done"
-    assert local_store.get(s.id, OWNER).speaker_tts_voice == "Kore"
-
-
-# ---------------------------------------------------------------------------
-# Word-level lip timing, stage sound and voice preview
-# ---------------------------------------------------------------------------
-
-
-def test_stage_voice_keeps_the_voice_without_echo(tmp_path):
-    import numpy as np
-
-    rate = 24000
-    v = np.zeros(rate, dtype=np.float32)
-    t = np.arange(int(rate * 0.1)) / rate
-    v[: len(t)] = 0.3 * np.sin(2 * np.pi * 220 * t)
-    src = story_service._write_wav(str(tmp_path / "v.wav"), v, rate)
-    out = story_service.read_mono(story_service.stage_voice(src, str(tmp_path / "s.wav")), 16000)
-    assert np.abs(out[: int(0.1 * 16000)]).max() > 0.1
-    # No repeats of the word after it ends (they sounded boxy).
-    assert np.abs(out[int(0.15 * 16000) : int(0.4 * 16000)]).max() < 0.01
-
-
-def test_room_tone_keeps_only_the_background():
-    import numpy as np
-
-    rate = 16000
-    rng = np.random.default_rng(1)
-    a = (0.01 * rng.standard_normal(rate * 3)).astype(np.float32)
-    a[rate : 2 * rate] += 0.5  # loud speech
-    a[int(0.85 * rate) : rate] += 0.04  # a soft breath just before it
-    bed = story_service.room_tone(a, rate, 3.0)
-    assert len(bed) == 3 * rate
-    assert np.abs(bed).max() < 0.03  # background only, at half level
-    assert story_service.room_tone(np.zeros(0, dtype=np.float32), rate, 1.0) is None
-
-
-def test_transcribe_words_falls_back_quietly(tmp_path, monkeypatch):
-    import numpy as np
-    import google.auth
-
-    def broken(*a, **k):
-        raise RuntimeError("no credentials")
-
-    monkeypatch.setattr(google.auth, "default", broken)
-    src = story_service._write_wav(
-        str(tmp_path / "v.wav"), 0.1 * np.ones(1600, dtype=np.float32), 16000
-    )
-    assert story_service.transcribe_words(src, "en-US") == []
-
-
-def test_dubbed_second_language_remembers_clip_language():
+def test_second_language_copy_remembers_clip_language():
     sc = Scene(narration="a", narration_alt="b", spoken=True, clip_uri="main")
     alt = story_models.alt_story(Story(scenes=[sc], second_on=True))
     assert alt.language == "Arabic" and alt.clip_language == "English"
 
 
-def test_preview_voice_uses_first_spoken_line(local_store):
-    calls = []
-
-    class Backend(_SpeechMock):
-        def generate_voiceover(self, story, index, text, style="narrator"):
-            calls.append((story.voice_name, index, text, style))
-            return "local://sample.wav"
-
-    story_service.set_backend(Backend())
-    try:
-        scenes = [Scene(narration="Intro.", duration=4), Scene(narration="Hi all!", spoken=True, duration=4)]
-        assert story_jobs.preview_voice(Story(scenes=scenes), "Orus") == "local://sample.wav"
-        assert calls == [("Orus", 1, "Hi all!", "presenter")]
-        story_jobs.preview_voice(Story(scenes=[Scene(narration="x", duration=4)]), "Kore")
-        assert calls[-1][2] == story_jobs.PREVIEW_LINE["English"]
-    finally:
-        story_service.set_backend(None)
-
-
-def test_presenter_lines_use_the_speaker_model():
+def test_first_clip_is_image_to_video_from_its_frame(omni_calls):
     from config.default import Default
 
-    cfg = Default()
-    assert cfg.STORY_SPEAKER_TTS_MODEL == "gemini-2.5-pro-tts"
-    assert "stage" in story_service.PRESENTER_DIRECTION
+    backend = story_service.VertexStoryBackend()
+    story = _omni_story()
+    uri = backend.generate_clip(story, 0, "gs://b/f0.png")
+    (req,) = omni_calls
+    assert req.omni_mode == "i2v" and req.reference_image_gcs == "gs://b/f0.png"
+    assert req.reference_image_mime_type == "image/png"
+    assert req.model_version_id == Default().STORY_VIDEO_MODEL
+    assert req.duration_seconds == 8 and req.aspect_ratio == "16:9"
+    assert not req.previous_interaction_id and '"Line 0."' in req.prompt
+    assert backend.interaction_of(uri) == "int-1"
 
 
-# ---------------------------------------------------------------------------
-# Dubbed lines copy how the person speaks in the clip
-# ---------------------------------------------------------------------------
-
-
-def test_pause_marked_adds_pauses_where_the_person_stops():
-    clip = [
-        ("good", 0.0, 0.3), ("evening", 0.35, 0.8),  # short gap: no pause
-        ("everyone", 1.2, 1.7),  # 0.4 s gap: comma
-        ("welcome", 2.5, 3.0),  # 0.8 s gap: dots
-        ("home", 3.05, 3.4),
+def test_character_reference_goes_with_a_fresh_clip(omni_calls):
+    backend = story_service.VertexStoryBackend()
+    story = _omni_story(reference_uri="gs://b/face.jpg")
+    backend.generate_clip(story, 0, "gs://b/f0.png")
+    req = omni_calls[-1]
+    assert req.omni_mode == "ref2v"
+    assert [(r.gcs_uri, r.mime_type) for r in req.r2v_references] == [
+        ("gs://b/f0.png", "image/png"),
+        ("gs://b/face.jpg", "image/jpeg"),
     ]
-    out = story_service.pause_marked("Good evening everyone welcome home.", clip)
-    assert out == "Good evening, everyone... welcome home."
-    # Existing punctuation is kept, and no timings means no change.
-    assert story_service.pause_marked("Hi, there", [("hi", 0, 0.2), ("there", 1.0, 1.3)]) == "Hi, there"
-    assert story_service.pause_marked("Hi there", []) == "Hi there"
+    # A clip that must start on the previous clip's last frame stays i2v.
+    backend.generate_clip(story, 1, "gs://b/last-of-clip0.png")
+    assert omni_calls[-1].omni_mode == "i2v"
 
 
-def test_pace_direction_reads_the_speed():
-    fast = [(str(i), i * 0.2, i * 0.2 + 0.15) for i in range(10)]
-    slow = [(str(i), i * 0.8, i * 0.8 + 0.5) for i in range(5)]
-    assert "quickly" in story_service.pace_direction(fast)
-    assert "slowly" in story_service.pace_direction(slow)
-    assert story_service.pace_direction([]) == ""
+def _probe_lengths(monkeypatch, lengths):
+    from services import story_timeline
+
+    monkeypatch.setattr(story_service, "_gcs_fetch", lambda uri, path: None)
+    seq = iter(lengths)
+    monkeypatch.setattr(story_timeline, "probe", lambda path: (next(seq), True))
 
 
-def test_spoken_line_is_voiced_after_its_clip_with_its_delivery(local_store):
-    order = []
-
-    class Backend(_VoiceMock):
-        def generate_clip(self, story, index, start_frame_uri):
-            order.append(("clip", index))
-            return super().generate_clip(story, index, start_frame_uri)
-
-        def study_delivery(self, story, index, clip_uri, text, same_language):
-            order.append(("study", index, bool(clip_uri), same_language))
-            return "Warm and excited.", text.replace(" ", ", ", 1)
-
-        def generate_voiceover(self, story, index, text, style="narrator", direction=""):
-            order.append(("voice", index, style, direction, text))
-            return super().generate_voiceover(story, index, text, style)
-
-    backend = Backend()
-    story_service.set_backend(backend)
-    try:
-        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus", same_voice=True)
-        job = _run(story_jobs.start_video(s.id, OWNER))
-        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
-        clip0 = order.index(("clip", 0))
-        studies = [e for e in order if e[0] == "study"]
-        assert {e[3] for e in studies} == {True, False}  # main line, then Arabic
-        assert all(order.index(e) > clip0 and e[2] for e in studies)
-        spoken = [e for e in order if e[0] == "voice" and e[2] == "presenter"]
-        assert spoken and all(e[3] == "Warm and excited." and ", " in e[4] for e in spoken)
-    finally:
-        story_service.set_backend(None)
+def test_continuation_carries_the_thread_and_its_history(omni_calls, monkeypatch):
+    _probe_lengths(monkeypatch, [8.0, 8.0])
+    backend = story_service.VertexStoryBackend()
+    story = _omni_story(character="Maya, a presenter in her 30s")
+    story.scenes[0].clip_uri, story.scenes[0].interaction_id = "gs://b/c0.mp4", "int-a"
+    story.scenes[1].clip_uri, story.scenes[1].interaction_id = "gs://b/c1.mp4", "int-b"
+    uri, clip_in = backend.extend_clip(story, 2, "gs://b/c1.mp4")
+    (req,) = omni_calls
+    assert req.previous_interaction_id == "int-b"
+    assert req.omni_mode == "t2v" and req.duration_seconds == 8
+    assert "Continue this exact shot" in req.prompt and "Maya" in req.prompt
+    history = json.loads(req.chat_history_json)
+    assert [h["type"] for h in history] == ["user_input", "model_output"] * 2
+    assert history[0]["content"][0]["text"] == story_models.clip_prompt(story, story.scenes[0])
+    assert "Continue this exact shot" in history[2]["content"][0]["text"]
+    assert [h["content"][0]["gcs_uri"] for h in history[1::2]] == [
+        "gs://b/c0.mp4",
+        "gs://b/c1.mp4",
+    ]
+    assert clip_in == 0.0 and backend.interaction_of(uri) == "int-1"
 
 
-def test_mock_backend_studies_nothing():
-    backend = story_service.MockStoryBackend()
-    assert backend.study_delivery(Story(), 0, "local://c.mp4", "Hi there", True) == ("", "Hi there")
+def test_continuation_that_returns_the_joined_video_trims_it(omni_calls, monkeypatch):
+    _probe_lengths(monkeypatch, [8.0, 16.0])
+    backend = story_service.VertexStoryBackend()
+    story = _omni_story()
+    story.scenes[0].clip_uri, story.scenes[0].interaction_id = "gs://b/c0.mp4", "int-a"
+    _, clip_in = backend.extend_clip(story, 1, "gs://b/c0.mp4")
+    assert clip_in == 8.0
+
+
+def test_continuation_without_a_thread_uses_the_extend_task(omni_calls, monkeypatch):
+    _probe_lengths(monkeypatch, [15.0, 10.0])
+    backend = story_service.VertexStoryBackend()
+    story = _omni_story(durations=[15, 15])
+    story.scenes[0].clip_uri = "gs://b/c0.mp4"  # no stored interaction (expired)
+    backend.extend_clip(story, 1, "gs://b/c0.mp4")
+    (req,) = omni_calls
+    assert req.omni_mode == "extend" and not req.previous_interaction_id
+    assert req.reference_video_gcs == "gs://b/c0.mp4"
+    assert req.duration_seconds == story_service.OMNI_EXTEND_MAX_SECONDS
+
+
+def test_follow_up_turn_sends_duration_and_aspect_ratio():
+    from models.omni import _build_video_response_format
+    from models.requests import OmniVideoGenerationRequest
+
+    req = OmniVideoGenerationRequest(
+        prompt="next",
+        duration_seconds=12,
+        aspect_ratio="9:16",
+        resolution="720p",
+        omni_mode="t2v",
+        model_version_id="gemini-omni-1.2-flash",
+        previous_interaction_id="int-a",
+        chat_history_json="[]",
+    )
+    assert _build_video_response_format(req) == {
+        "type": "video",
+        "resolution": "720p",
+        "aspect_ratio": "9:16",
+        "duration": "12s",
+    }
+
+
+def test_take_history_starts_at_the_take():
+    story = _omni_story(durations=[8, 8, 8])
+    story.scenes[0].spoken = False  # narrated: not part of the take
+    for i, sc in enumerate(story.scenes):
+        sc.clip_uri = f"gs://b/c{i}.mp4"
+    history = story_service.take_history(story, 2, "gs://b/c1.mp4")
+    assert [h["content"][0].get("gcs_uri") for h in history[1::2]] == ["gs://b/c1.mp4"]
+
+
+def test_scene_lengths_go_up_to_fifteen_seconds():
+    assert story_models.supported_durations() == [4, 6, 8, 10, 12, 15]
+
+
+def test_scenario_writer_prefers_fewer_longer_spoken_scenes():
+    prompt = story_models.scenario_prompt(Story(speech_mode="on_camera"))
+    assert "one or two back-to-back spoken scenes" in prompt and '"seconds"' in prompt
+    text = json.dumps(
+        {
+            "title": "T",
+            "scenes": [
+                {"narration": "A long welcome speech.", "spoken": True, "seconds": 14, "visual": "a"},
+                {"narration": "Meanwhile.", "spoken": False, "seconds": 15, "visual": "b"},
+                {"narration": "Short.", "spoken": True, "seconds": "x", "visual": "c"},
+            ],
+        }
+    )
+    _, scenes = parse_scenario(text, 3, 6)
+    assert [s.duration for s in scenes] == [15, 6, 6]
+
+
+def test_longer_spoken_scenes_never_break_the_film_cap(monkeypatch):
+    text = json.dumps(
+        {
+            "title": "T",
+            "scenes": [{"narration": "Hi.", "spoken": True, "seconds": 15, "visual": "a"}] * 3,
+        }
+    )
+    real = story_models.Default
+
+    def small():
+        cfg = real()
+        cfg.STORY_MAX_FILM_SECONDS = 30
+        return cfg
+
+    monkeypatch.setattr(story_models, "Default", small)
+    _, scenes = parse_scenario(text, 3, 6)
+    assert [s.duration for s in scenes] == [6, 6, 6]
+
+
+def test_narrated_clips_ask_omni_for_ambient_sound_only():
+    prompt = story_models.clip_prompt(Story(), Scene(visual="A harbour.", narration="It began."))
+    assert "ambient sound" in prompt and "No speech" in prompt and "It began" not in prompt
+
+
+def test_make_film_keeps_omni_sound_under_the_voiceover(tmp_path):
+    import shutil
+    import subprocess
+
+    from services import story_timeline as T
+
+    def clip(name):
+        path = tmp_path / name
+        subprocess.run(
+            [T._ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+             "color=c=gray:s=160x90:r=12:d=2", "-f", "lavfi", "-i",
+             "sine=f=440:d=2", "-shortest", "-c:v", "libx264", "-c:a", "aac",
+             str(path)],
+            check=True,
+        )
+        return str(path)
+
+    scenes = [
+        Scene(clip_uri=clip("a.mp4"), duration=2, narration="Over the picture."),
+        Scene(clip_uri=clip("b.mp4"), duration=2, narration="Hello.", spoken=True),
+    ]
+    story = Story(scenes=scenes)
+    plan = build_stitch_plan(scenes, 0.25)
+    timeline = story_service.make_film(
+        story, plan, "", ["", ""], lambda u, p: shutil.copyfile(u, p), str(tmp_path / "f.mp4")
+    )
+    narrated, spoken = T.track(timeline, "video")["clips"]
+    assert narrated.get("ambient") and narrated["gain"] > 0
+    assert not spoken.get("ambient")
+    # Same tone in both clips: the ambient bed at -30 LUFS is 10 dB under dialogue at -20.
+    assert narrated["gain"] / spoken["gain"] == pytest.approx(10 ** (-10 / 20), rel=0.05)

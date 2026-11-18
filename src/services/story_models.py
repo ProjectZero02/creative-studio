@@ -127,11 +127,6 @@ def voice_label(name: str) -> str:
     return f"{name} ({gender})" if gender else name
 
 
-def tts_voice_for(description: str) -> str:
-    """A fixed TTS voice matching the speaker described by the scenario."""
-    d = (description or "").lower()
-    return "Kore" if ("female" in d or "woman" in d) else "Charon"
-
 # Who speaks each scene's line: a narrator over the picture, or the person on
 # screen (the video model renders the speech with lip sync). "auto" lets Gemini choose per
 # scene from the idea, e.g. a presenter talks on camera.
@@ -219,6 +214,11 @@ class Scene:
     # continues from it). Stored interactions expire after about a week.
     interaction_id: str = ""
 
+    def clear_clip(self) -> None:
+        """Forget the clip and everything made from it (take, Omni thread)."""
+        self.clip_uri = self.extends_from = self.interaction_id = ""
+        self.clip_in = 0.0
+
     def alt_clip_key(self) -> str:
         """What a second-language clip must match to still be current."""
         return f"{self.clip_uri}|{self.narration_alt}"
@@ -279,7 +279,6 @@ class Story:
     # Language spoken in the clips when it differs from `language` (set on
     # the dubbed second-language copy, whose clips speak the original).
     clip_language: str = ""
-    speaker_tts_voice: str = "Charon"
     title_alt: str = ""
     final_alt_uri: str = ""
     created_at: str = field(default_factory=_now_iso)
@@ -537,18 +536,34 @@ def parse_scenario(
                 str(raw.get("camera") or raw.get("camera_move") or "")
             )
         )
+        spoken = _spoken(raw.get("spoken"), narration, speech_mode)
         scenes.append(
             Scene(
                 narration=narration,
                 visual=visual,
                 camera=camera,
-                duration=duration,
-                spoken=_spoken(raw.get("spoken"), narration, speech_mode),
+                duration=_spoken_length(raw.get("seconds"), duration)
+                if spoken
+                else duration,
+                spoken=spoken,
             )
         )
     if len(scenes) < scene_count:
         raise ScenarioError(f"Expected {scene_count} scenes, got {len(scenes)}.")
+    if sum(s.duration for s in scenes) > Default().STORY_MAX_FILM_SECONDS:
+        for s in scenes:
+            s.duration = duration
     return title[:120], scenes
+
+
+def _spoken_length(raw, duration: int) -> int:
+    """A spoken scene may run longer than the film's scene length (the writer
+    gives it "seconds"), so a speech fits in one or two takes. Never shorter."""
+    try:
+        seconds = int(float(raw))
+    except (TypeError, ValueError):
+        return duration
+    return max(duration, nearest_duration(seconds)) if seconds > duration else duration
 
 
 def _spoken(raw, narration: str, speech_mode: str) -> bool:
@@ -612,6 +627,14 @@ def _speech_rules(story: Story) -> str:
         "and confident, neutral American accent\". It is reused for every spoken scene so it "
         'sounds the same. Use "" if nobody speaks on camera.'
     )
+    longest = max(supported_durations())
+    takes = (
+        "- Keep each person's speech in as few spoken scenes as possible: one "
+        "or two back-to-back spoken scenes, never many short ones. A spoken "
+        f'scene may run longer: set "seconds" (up to {longest}) so its line '
+        f"fits at about {WORDS_PER_SECOND:g} words a second, and write the line to "
+        "fill it. Back-to-back spoken scenes are filmed as one continuous take."
+    )
     if story.speech_mode == "narrator":
         return (
             '- Every line is a narrator voiceover: "spoken" is false for every '
@@ -623,6 +646,8 @@ def _speech_rules(story: Story) -> str:
             'true for every scene and "narration" is the exact words they say. '
             "Each visual shows that person facing the camera and speaking.\n"
             + voice
+            + "\n"
+            + takes
         )
     return (
         "- Decide for each scene who speaks. If the idea features a person "
@@ -632,6 +657,8 @@ def _speech_rules(story: Story) -> str:
         "on-camera speech whenever a speaking person is the point of the film. "
         'Otherwise set "spoken" to false and write a narrator voiceover line.\n'
         + voice
+        + "\n"
+        + takes
     )
 
 
@@ -652,7 +679,8 @@ Idea: \"\"\"{story.idea.strip()}\"\"\"
 Rules:
 - Write the title and every narration line in {story.language}.
 - Narration: one short sentence per scene that can be spoken in under
-  {story.duration} seconds (at most {max_words(story.duration)} words).
+  {story.duration} seconds (at most {max_words(story.duration)} words), or in
+  its "seconds" for a longer spoken scene.
 {_speech_rules(story)}
 - Visual: a detailed, self-contained description of what the camera sees
   (subject, action, setting, lighting). Keep the main character's look
@@ -660,7 +688,7 @@ Rules:
 - {cam_rule}
 - Build a clear beginning, middle and end.
 
-Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "visual": str, "camera": str}}]}}"""
+Return only JSON: {{"title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str}}]}}"""
 
 
 def scene_regen_prompt(story: Story, index: int) -> str:
@@ -724,10 +752,12 @@ def clip_prompt(story: Story, scene: Scene, continuing: bool = False) -> str:
     cam = CAMERA_PRESETS.get(scene.camera, CAMERA_PRESETS["static"])["prompt"]
     base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
     if continuing:
+        # Name the character again: each turn of the thread is its own prompt.
+        who = f" ({story.character})" if story.character else ""
         base = (
-            "Continue this exact shot without a cut: the same person, outfit, "
-            "place, lighting and camera, and the same voice, pace and room "
-            f"sound as before. {base}"
+            f"Continue this exact shot without a cut: the same person{who}, "
+            "outfit, place, lighting and camera, and the same voice, pace and "
+            f"room sound as before. {base}"
         )
     if not (scene.spoken and scene.narration.strip()):
         return (
@@ -870,11 +900,9 @@ class Segment:
     duration: float
     fade_in: float
     narration: str = ""
-    # The clip carries its own speech (keep its audio, no voiceover).
+    # The clip carries its own speech (levelled as dialogue, no voiceover).
+    # Otherwise its sound is an ambient bed under the narrator.
     spoken: bool = False
-    # Spoken, but voiced by the fixed TTS voice: the clip's own audio is
-    # dropped and the voice is fitted to when the person speaks.
-    dub: bool = False
     # Seconds skipped at the start of the clip. A seamless join drops the
     # clip's first frame, which repeats the previous clip's last frame.
     trim_head: float = 0.0
@@ -898,7 +926,6 @@ def build_stitch_plan(
     clip_durations: list[float] | None = None,
     seamless: bool = False,
     fps: int = 24,
-    dub: bool = False,
 ) -> StitchPlan:
     """Lay out clips on a timeline with overlapping crossfades.
 
@@ -964,7 +991,6 @@ def build_stitch_plan(
                 fade_in=fade,
                 narration=s.narration,
                 spoken=bool(s.spoken and s.narration.strip()),
-                dub=dub and bool(s.spoken and s.narration.strip()),
                 trim_head=round(trim, 4),
             )
         )

@@ -13,7 +13,7 @@
 # limitations under the License.
 """Background jobs for Story Studio.
 
-Long work (scenario, storyboard frames, Veo clips, music, voiceover, stitch)
+Long work (scenario, storyboard frames, Omni clips, music, voiceover, stitch)
 runs in a background thread, never inside a Mesop event. Each job is a list
 of visible tasks (queued / running / done / failed). The page polls
 :func:`job_snapshot` on a short interval and draws the timeline.
@@ -48,7 +48,6 @@ from services.story_models import (
     parse_single_scene,
     parse_translation,
     parse_voice,
-    tts_voice_for,
 )
 from services.story_service import get_backend
 from services.story_store import StoryAccessError, get_store
@@ -302,8 +301,6 @@ def start_scenario(story_id: str, owner: str) -> Job:
                 s.title = title
                 s.title_alt = ""
                 s.speaker_voice = voice
-                if voice:
-                    s.speaker_tts_voice = tts_voice_for(voice)
                 s.scenes = scenes
                 s.approved = False
                 s.clear_films()
@@ -345,7 +342,8 @@ def start_scene_rewrite(story_id: str, owner: str, index: int) -> Job:
                         scene.visual,
                         scene.camera,
                     )
-                    cur.frame_uri = cur.clip_uri = ""
+                    cur.frame_uri = ""
+                    cur.clear_clip()
                     cur.narration_alt = ""
                     cur.spoken = scene.spoken
                     s.clear_films()
@@ -394,7 +392,7 @@ def start_storyboard(
                 for sc in s.scenes:
                     if sc.id == scene_id:
                         sc.frame_uri = uri
-                        sc.clip_uri = ""
+                        sc.clear_clip()
                 s.clear_films()
 
             mutate_story(story_id, owner, apply)
@@ -420,44 +418,22 @@ def start_storyboard(
     return _spawn(job, work)
 
 
-PREVIEW_LINE = {
-    "English": "Good evening everyone, and thank you so much for being here tonight.",
-    "Arabic": "مساء الخير جميعاً، وشكراً جزيلاً لحضوركم الليلة.",
-}
-
-
-def preview_voice(story: Story, voice: str) -> str:
-    """A short sample of `voice` saying the first on-camera line (or a stock
-    line), delivered the way the film will deliver it."""
-    from services.story_service import get_backend
-
-    index = next(
-        (i for i, sc in enumerate(story.scenes) if _is_spoken(sc)),
-        0 if story.scenes else -1,
-    )
-    if index < 0:
-        raise GenerationError("Add a scene first.")
-    text = story.scenes[index].narration.strip() if _is_spoken(story.scenes[index]) else ""
-    text = text or PREVIEW_LINE.get(story.language, PREVIEW_LINE["English"])
-    return get_backend().generate_voiceover(
-        replace(story, voice_name=voice), index, text, style="presenter"
-    )
-
-
 def _is_spoken(scene) -> bool:
     return bool(scene.spoken and scene.narration.strip())
 
 
+def _interaction_of(backend, clip_uri: str) -> str:
+    """The Omni thread that made a clip ("" for backends without threads)."""
+    lookup = getattr(backend, "interaction_of", None)
+    return (lookup(clip_uri) or "") if callable(lookup) else ""
+
+
 def _needs_voice(story: Story, scene) -> bool:
     """A TTS line: narrated scenes with the voiceover on. On-camera lines
-    are spoken by the person in the clip (the video model's own speech)."""
+    are spoken by the person in the clip (Gemini Omni's own speech)."""
     if _is_spoken(scene):
         return False
     return story.voice_on and bool(scene.narration.strip())
-
-
-def _voice_label(story: Story, scene) -> str:
-    return "voiceover"
 
 
 def _translate_into(story_id: str, owner: str, force: bool = False) -> str:
@@ -517,7 +493,8 @@ def start_translation(story_id: str, owner: str, force: bool = False) -> Job:
 
 
 def start_video(story_id: str, owner: str) -> Job:
-    """Animate each scene with Veo, add music and voiceover, stitch, save."""
+    """Animate each scene with Gemini Omni, add music and voiceover, stitch,
+    save. Back-to-back spoken scenes continue one Omni thread (same voice)."""
     story = get_store().get(story_id, owner)
     if story is None:
         raise StoryAccessError("Story not found.")
@@ -535,7 +512,7 @@ def start_video(story_id: str, owner: str) -> Job:
             if sc.clip_uri and sc.extends_from and (
                 prev is None or sc.extends_from != prev.clip_uri or not s.continues_take(i)
             ):
-                sc.clip_uri, sc.extends_from, sc.clip_in = "", "", 0.0
+                sc.clear_clip()
 
     story = mutate_story(story_id, owner, prepare)
     job = _new_job(owner, story_id, "video")
@@ -551,11 +528,11 @@ def start_video(story_id: str, owner: str) -> Job:
                 job, f"Scene {i + 1} · last frame of scene {i}", "bridge", i
             )
         what = (
-            f"continuous take from scene {i} (Veo extension)"
+            f"same take as scene {i}"
             if i in takes
-            else "video clip with speech (Veo)"
+            else "video clip with speech"
             if _is_spoken(sc)
-            else "video clip (Veo)"
+            else "video clip"
         )
         clip_tasks[i] = _add_task(job, f"Scene {i + 1} · {what}", "clip", i)
     sequential = story.continuity or bool(takes & set(clip_tasks))
@@ -566,7 +543,7 @@ def start_video(story_id: str, owner: str) -> Job:
         else None
     )
     voice_tasks = {
-        i: _add_task(job, f"Scene {i + 1} · {_voice_label(story, sc)}", "voice", i)
+        i: _add_task(job, f"Scene {i + 1} · voiceover", "voice", i)
         for i, sc in enumerate(story.scenes)
         if _needs_voice(story, sc)
     }
@@ -583,7 +560,7 @@ def start_video(story_id: str, owner: str) -> Job:
     alt_voice_tasks = (
         {
             i: _add_task(
-                job, f"Scene {i + 1} · {alt} {_voice_label(story, sc)}", "voice_alt", i
+                job, f"Scene {i + 1} · {alt} voiceover", "voice_alt", i
             )
             for i, sc in enumerate(story.scenes)
             if _needs_voice(story, sc)
@@ -591,12 +568,12 @@ def start_video(story_id: str, owner: str) -> Job:
         if alt_on
         else {}
     )
-    # Spoken scenes: the speech is in the video, so Veo renders the scene
+    # Spoken scenes: the speech is in the video, so Omni renders the scene
     # again saying the translated line (skipped while the last one is current).
     alt_clip_tasks = (
         {
             i: _add_task(
-                job, f"Scene {i + 1} · {alt} video clip with speech (Veo)", "clip_alt", i
+                job, f"Scene {i + 1} · {alt} video clip with speech", "clip_alt", i
             )
             for i, sc in enumerate(story.scenes)
             if _is_spoken(sc) and not (sc.clip_uri and sc.has_alt_clip())
@@ -633,6 +610,7 @@ def start_video(story_id: str, owner: str) -> Job:
             if current is None:
                 raise StoryAccessError("Story not found.")
             uri = backend.generate_clip(current, i, start_frame)
+            thread = _interaction_of(backend, uri)
             scene_id = current.scenes[i].id
 
             def apply(s: Story) -> None:
@@ -641,21 +619,23 @@ def start_video(story_id: str, owner: str) -> Job:
                         sc.clip_uri = uri
                         sc.continues_from = from_clip
                         sc.extends_from, sc.clip_in = "", 0.0
+                        sc.interaction_id = thread
 
             mutate_story(story_id, owner, apply)
             return uri
 
         def extend(i: int, prev_clip: str) -> str:
-            """Continuous take: extend the previous clip with Veo. Falls back
-            to a normal clip if the extension fails."""
+            """Continuous take: continue the previous clip in its Omni thread
+            (same person and voice). Falls back to a normal clip on failure."""
             current = get_store().get(story_id, owner)
             if current is None:
                 raise StoryAccessError("Story not found.")
             try:
                 uri, clip_in = backend.extend_clip(current, i, prev_clip)
             except Exception:
-                logger.exception("Veo extension failed; making a normal clip")
+                logger.exception("Omni continuation failed; making a normal clip")
                 return animate(i, current.scenes[i].frame_uri)
+            thread = _interaction_of(backend, uri)
             scene_id = current.scenes[i].id
 
             def apply(s: Story) -> None:
@@ -663,6 +643,7 @@ def start_video(story_id: str, owner: str) -> Job:
                     if sc.id == scene_id:
                         sc.clip_uri, sc.continues_from = uri, ""
                         sc.extends_from, sc.clip_in = prev_clip, clip_in
+                        sc.interaction_id = thread
 
             mutate_story(story_id, owner, apply)
             return uri
