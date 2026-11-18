@@ -190,9 +190,7 @@ class Default:
     # Gemini Omni is the default video model everywhere. Veo stays available for
     # upstream merges: set SHOW_VEO_MODELS=true to list Veo in the video model
     # pickers again (a ?veo_model= deep link to a Veo model always works).
-    SHOW_VEO_MODELS: bool = (
-        os.environ.get("SHOW_VEO_MODELS", "false").lower() == "true"
-    )
+    SHOW_VEO_MODELS: bool = os.environ.get("SHOW_VEO_MODELS", "false").lower() == "true"
     # The default video model for every page (name kept so existing deploys
     # work). A veo-* name makes Veo the default again.
     DEFAULT_VEO_MODEL_NAME: str = os.environ.get(
