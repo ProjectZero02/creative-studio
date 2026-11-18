@@ -189,6 +189,22 @@ def test_save_bumps_version_only_on_change(set_store):
     assert set_store.get(s.id, OWNER).version == 2
 
 
+def test_filling_empty_slots_keeps_the_version(set_store):
+    s = _sample_set()
+    story_sets.ensure_views(s.characters[0])
+    s = set_store.save(s, OWNER)
+    for img in s.characters[0].images:
+        if img.view == "profile":
+            img.uri = "gs://b/new_profile.png"
+    s.characters[0].voice.sample_uri = "gs://b/sample.wav"
+    s = set_store.save(s, OWNER)
+    assert s.version == 1  # new pictures in empty slots: no film used them
+    for img in s.characters[0].images:
+        if img.view == "profile":
+            img.uri = "gs://b/other_profile.png"
+    assert set_store.save(s, OWNER).version == 2  # replaced: a real change
+
+
 class _Snap:
     def __init__(self, data):
         self._data = data

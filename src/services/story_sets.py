@@ -225,12 +225,34 @@ class StorySet:
             out.version = 1
         return out
 
-    def content(self) -> dict:
-        """What a change means: everything but bookkeeping fields."""
+    def content(self, filled: set[str] | None = None) -> dict:
+        """What a change means: everything but bookkeeping fields. Media in
+        `filled` (URIs new since the stored copy, put in empty slots) is left
+        out, because no film can have used a picture that did not exist."""
         data = self.to_dict()
         for key in ("owner", "version", "created_at", "updated_at"):
             data.pop(key, None)
+        skip = filled or set()
+        for kind in ("characters", "locations", "props"):
+            for asset in data[kind]:
+                asset["images"] = [
+                    i for i in asset["images"] if i["uri"] and i["uri"] not in skip
+                ]
+                voice = asset.get("voice")
+                if voice and voice["sample_uri"] in skip:
+                    voice["sample_uri"] = ""
         return data
+
+    def slots(self) -> dict[tuple, str]:
+        """(kind, asset id, view) -> URI of every image and voice sample."""
+        out: dict[tuple, str] = {}
+        for kind in KINDS:
+            for a in self.assets(kind):
+                for i in a.images:
+                    out[(kind, a.id, i.view)] = i.uri
+                if isinstance(a, Character):
+                    out[(kind, a.id, "voice")] = a.voice.sample_uri
+        return out
 
     def touch(self) -> None:
         self.updated_at = _now_iso()
@@ -310,9 +332,12 @@ def _bump(story_set: StorySet, existing: dict | None) -> None:
         story_set.version = max(1, story_set.version)
         return
     old = StorySet.from_dict(existing)
-    story_set.version = (
-        old.version + 1 if old.content() != story_set.content() else old.version
-    )
+    before = old.slots()
+    filled = {
+        uri for key, uri in story_set.slots().items() if uri and not before.get(key)
+    }
+    changed = old.content() != story_set.content(filled)
+    story_set.version = old.version + 1 if changed else old.version
     story_set.created_at = old.created_at or story_set.created_at
 
 
