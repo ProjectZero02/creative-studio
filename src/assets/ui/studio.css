@@ -77,6 +77,13 @@ html body {
 
   --gm-border: #e1e4ea;
   --gm-hover: rgba(21, 23, 28, 0.05);
+  /* Secondary buttons and fields: a quiet fill, never a bright outline. */
+  --gm-tonal: rgba(21, 23, 28, 0.06);
+  --gm-tonal-hover: rgba(21, 23, 28, 0.10);
+  --gm-tonal-press: rgba(21, 23, 28, 0.14);
+  --gm-field-bg: rgba(21, 23, 28, 0.035);
+  --gm-field-line: rgba(21, 23, 28, 0.12);
+  --gm-field-line-hover: rgba(21, 23, 28, 0.24);
   --gm-active-nav: #dce7fd;
   --gm-scroll-thumb: rgba(21, 23, 28, 0.22);
   --gm-card-shadow: 0 1px 2px rgba(11, 16, 32, 0.06), 0 1px 1px rgba(11, 16, 32, 0.04);
@@ -197,6 +204,12 @@ html body.dark-theme {
 
   --gm-border: #262a31;
   --gm-hover: rgba(231, 233, 237, 0.06);
+  --gm-tonal: rgba(255, 255, 255, 0.08);
+  --gm-tonal-hover: rgba(255, 255, 255, 0.12);
+  --gm-tonal-press: rgba(255, 255, 255, 0.16);
+  --gm-field-bg: rgba(255, 255, 255, 0.05);
+  --gm-field-line: rgba(255, 255, 255, 0.10);
+  --gm-field-line-hover: rgba(255, 255, 255, 0.22);
   --gm-active-nav: #1c2c4d;
   --gm-scroll-thumb: rgba(231, 233, 237, 0.20);
   --gm-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -258,6 +271,36 @@ html body .mat-mdc-button,
 html body .mat-mdc-unelevated-button,
 html body .mat-mdc-raised-button,
 html body .mat-mdc-outlined-button { height: 40px; }
+
+/* Secondary ("stroked") buttons are tonal: a quiet fill, no outline. A bright
+   1px outline on a dark surface looks cheap (owner, 2026-11-18). */
+html body .mat-mdc-outlined-button {
+  --mdc-outlined-button-outline-color: transparent;
+  --mat-outlined-button-outline-color: transparent;
+  --mdc-outlined-button-label-text-color: var(--sys-on-surface);
+  --mat-outlined-button-label-text-color: var(--sys-on-surface);
+  border-color: transparent !important;
+  background-color: var(--gm-tonal);
+}
+html body .mat-mdc-outlined-button:not(:disabled):hover { background-color: var(--gm-tonal-hover); }
+html body .mat-mdc-outlined-button:not(:disabled):active { background-color: var(--gm-tonal-press); }
+html body .mat-mdc-outlined-button:disabled { background-color: var(--gm-tonal); opacity: 0.45; }
+
+/* Fields: soft fill with a faint hairline; the brand colour only on focus. */
+html body .mdc-text-field--outlined:not(.mdc-text-field--disabled) {
+  background-color: var(--gm-field-bg);
+  border-radius: var(--gm-radius-sm);
+}
+html body .mdc-text-field--outlined:not(.mdc-text-field--focused):not(.mdc-text-field--invalid) .mdc-notched-outline__leading,
+html body .mdc-text-field--outlined:not(.mdc-text-field--focused):not(.mdc-text-field--invalid) .mdc-notched-outline__notch,
+html body .mdc-text-field--outlined:not(.mdc-text-field--focused):not(.mdc-text-field--invalid) .mdc-notched-outline__trailing {
+  border-color: var(--gm-field-line) !important;
+}
+html body .mdc-text-field--outlined:not(.mdc-text-field--focused):not(.mdc-text-field--invalid):hover .mdc-notched-outline__leading,
+html body .mdc-text-field--outlined:not(.mdc-text-field--focused):not(.mdc-text-field--invalid):hover .mdc-notched-outline__notch,
+html body .mdc-text-field--outlined:not(.mdc-text-field--focused):not(.mdc-text-field--invalid):hover .mdc-notched-outline__trailing {
+  border-color: var(--gm-field-line-hover) !important;
+}
 
 html body .mat-mdc-dialog-surface { border: 1px solid var(--gm-border); }
 html body .mdc-tooltip__surface,
