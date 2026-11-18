@@ -15,7 +15,7 @@
 import mesop as me
 
 from common.utils import create_display_url
-from config.veo_models import VEO_MODELS
+from config.video_studio_models import video_model_choices
 from models import shop_the_look_workflow
 from state.shop_the_look_state import PageState
 from state.state import AppState
@@ -128,22 +128,14 @@ def config_panel():
                 )
             ):
                 me.select(
-                    label="Version",
-                    # Source options from the VEO_MODELS config (single source of
-                    # truth) so the dropdown can't drift out of sync with the
-                    # models the app actually supports.
-                    # TODO(#1658 follow-up): the selected version_id does not yet
-                    # switch the underlying Veo endpoint/model. models.veo.image_to_video
-                    # only special-cases the legacy "3.0" value and otherwise routes
-                    # every request through config.VEO_MODEL_ID, so all options here
-                    # currently generate with the same (default) model. Wire
-                    # version_id -> model/endpoint before relying on per-option routing.
+                    label="Video model",
+                    # Gemini Omni first; Veo only when SHOW_VEO_MODELS is on.
+                    # Omni ids run through models.workflow_video; a Veo id
+                    # takes the legacy image_to_video path, which only
+                    # special-cases "3.0" and otherwise uses VEO_MODEL_ID.
                     options=[
-                        me.SelectOption(
-                            label=model.display_name,
-                            value=model.version_id,
-                        )
-                        for model in VEO_MODELS
+                        me.SelectOption(label=label, value=model_id)
+                        for label, model_id in video_model_choices(state.veo_model)
                     ],
                     on_selection_change=on_veo_version_change,
                     style=me.Style(width=140),

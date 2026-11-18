@@ -15,7 +15,7 @@
 from dataclasses import field
 import mesop as me
 
-from config.veo_models import DEFAULT_VEO_VERSION_ID
+from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID
 from models.shop_the_look_models import (
     CatalogRecord,
     GeneratedImageAccuracyWrapper,
@@ -85,7 +85,7 @@ class PageState:
     generate_alternate_views: bool
     selected_model: ModelRecord
     generate_video: bool = True
-    veo_model: str = DEFAULT_VEO_VERSION_ID
+    veo_model: str = DEFAULT_STUDIO_MODEL_ID  # Gemini Omni unless set to Veo
     current_status: str = ""
     vto_sample_count: str = "4"
     veo_sample_count: str = "2"
