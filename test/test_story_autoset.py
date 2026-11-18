@@ -265,3 +265,19 @@ def test_picking_a_value_pins_it_and_use_auto_unpins(state):
     state.auto_json = json.dumps({"scene_count": 6, "duration": 10})
     page.on_reset_auto(None)
     assert state.pinned_json == "[]" and state.scene_count == 6
+
+
+def test_last_film_length_wins():
+    found = auto.infer_settings(
+        "a one minute film about bees, actually make it two minutes"
+    )
+    assert found["film_seconds"] == 120
+    assert auto.infer_settings("half a minute, no, 45 seconds")["film_seconds"] == 45
+
+
+def test_pinned_scene_length_replans_the_scene_count():
+    found = auto.infer_settings("a two minute film")
+    current = {"scene_count": 6, "duration": 30}
+    assert auto.merge_settings(current, found, {"duration"}) == {"scene_count": 4}
+    current = {"scene_count": 3, "duration": 10}
+    assert auto.merge_settings(current, found, {"scene_count"}) == {"duration": 30}

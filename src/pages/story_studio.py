@@ -1062,10 +1062,12 @@ def _pin(field: str) -> None:
 
 def _apply_auto(found: dict) -> None:
     s = me.state(StoryState)
-    s.auto_json = json.dumps(found) if found else ""
     current = {f: getattr(s, f) for f in story_autoset.FIELDS}
     for field, value in story_autoset.merge_settings(current, found, _pinned()).items():
         setattr(s, field, value)
+    if found.get("film_seconds"):  # the note shows the plan actually used
+        found = {**found, "scene_count": s.scene_count, "duration": s.duration}
+    s.auto_json = json.dumps(found) if found else ""
 
 
 def on_idea_live(e: me.WebEvent):
@@ -1096,6 +1098,10 @@ def on_reset_auto(e: me.ClickEvent):
         found = json.loads(s.auto_json) if s.auto_json else {}
     except ValueError:
         found = {}
+    if found.get("film_seconds"):
+        found["scene_count"], found["duration"] = story_autoset.plan_length(
+            found["film_seconds"]
+        )
     _apply_auto(found)
 
 

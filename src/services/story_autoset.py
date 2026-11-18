@@ -95,21 +95,27 @@ def _num(text: str) -> float:
 
 
 def _film_seconds(t: str) -> int | None:
-    """Total film length the idea asks for, in seconds."""
-    if re.search(
-        r"\b(?:a|one) minute and a half\b|\b(?:one|1) and a half minutes?\b", t
-    ):
-        return 90
-    if re.search(r"\bhalf (?:a|one) minute\b|\bhalf-minute\b", t):
-        return 30
+    """Total film length the idea asks for, in seconds. When it gives more
+    than one, the last wins (people add corrections at the end)."""
     lo, hi = FILM_SECONDS_RANGE
+    found: list[tuple[int, int]] = []  # (position, seconds)
+    fixed = [
+        (r"\b(?:a|one) minute and a half\b|\b(?:one|1) and a half minutes?\b", 90),
+        (r"\bhalf (?:a|one) minute\b|\bhalf-minute\b", 30),
+    ]
+    taken: list[tuple[int, int]] = []
+    for pattern, secs in fixed:
+        for m in re.finditer(pattern, t):
+            found.append((m.start(), secs))
+            taken.append(m.span())
     for unit, scale in ((_MIN, 60), (_SEC, 1)):
-        m = re.search(rf"\b{_NUM}\s*[- ]?\s*{unit}", t)
-        if m:
+        for m in re.finditer(rf"\b{_NUM}\s*[- ]?\s*{unit}", t):
+            if any(a <= m.start() < b for a, b in taken):
+                continue
             secs = int(round(_num(m.group(1)) * scale))
             if lo <= secs <= hi:
-                return secs
-    return None
+                found.append((m.start(), secs))
+    return max(found)[1] if found else None
 
 
 def _scene_seconds(t: str) -> tuple[int | None, str]:
@@ -347,7 +353,18 @@ def parse_live_settings(text: str) -> dict:
 
 def merge_settings(current: dict, found: dict, pinned: set[str]) -> dict:
     """The form fields to change: what was found, minus fields the user
-    picked by hand, minus values that are already set."""
+    picked by hand, minus values that are already set. When the idea gives
+    a film length and the user pinned the scene count or length, the other
+    one is planned around the pinned value."""
+    found = dict(found)
+    total = found.get("film_seconds")
+    if total and pinned & {"scene_count", "duration"}:
+        n, d = plan_length(
+            total,
+            current.get("scene_count") if "scene_count" in pinned else None,
+            current.get("duration") if "duration" in pinned else None,
+        )
+        found["scene_count"], found["duration"] = n, d
     return {
         k: v
         for k, v in found.items()
