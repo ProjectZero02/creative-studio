@@ -1046,7 +1046,7 @@ class MockStoryBackend:
     def extend_clip(
         self, story: Story, index: int, prev_clip_uri: str
     ) -> tuple[str, float]:
-        """Demo stand-in for Veo extension: a new clip from the previous
+        """Demo stand-in for an Omni continuation: a new clip from the previous
         clip's last frame (the clip holds only the new seconds)."""
         start = self.last_frame(story, prev_clip_uri, index)
         return self.generate_clip(story, index, start), 0.0
@@ -1110,9 +1110,31 @@ class VertexStoryBackend:
 
     def __init__(self):
         self.cfg = Default()
+        # clip URI -> Gemini Omni interaction that made it (see interaction_of).
+        self._interactions: dict[str, str] = {}
 
     def _folder(self, story: Story) -> str:
         return f"story_studio/{story.id}"
+
+    def interaction_of(self, clip_uri: str) -> str:
+        """The Omni interaction that made `clip_uri` ("" if unknown)."""
+        return self._interactions.get(clip_uri, "")
+
+    def _omni_request(self, story: Story, index: int, prompt: str, **extra):
+        from config.omni_models import clamp_duration
+        from models.requests import OmniVideoGenerationRequest
+
+        scene = story.scenes[index]
+        caps = apply_caps(story.scene_count, scene.duration)
+        seconds = extra.pop("duration_seconds", caps.duration)
+        return OmniVideoGenerationRequest(
+            prompt=prompt,
+            duration_seconds=clamp_duration(self.cfg.STORY_VIDEO_MODEL, int(seconds)),
+            aspect_ratio=story.aspect_ratio,
+            resolution=caps.resolution,
+            model_version_id=self.cfg.STORY_VIDEO_MODEL,
+            **extra,
+        )
 
     def _json_text(
         self, prompt: str, temperature: float = 0.8, task: str = "story_scenario"
@@ -1164,36 +1186,27 @@ class VertexStoryBackend:
         return uris[0]
 
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str:
-        from models.requests import VideoGenerationRequest
-        from models.veo import generate_video
+        """One clip with Gemini Omni, with its own sound: the spoken line with
+        lip sync for on-camera scenes, ambient sound for narrated ones."""
+        from models.omni import generate_omni_video
 
         scene = story.scenes[index]
-        spoken = bool(scene.spoken and scene.narration.strip())
-        caps = apply_caps(story.scene_count, scene.duration)
-        uris, _ = generate_video(
-            VideoGenerationRequest(
-                prompt=clip_prompt(story, scene),
-                duration_seconds=caps.duration,
-                video_count=1,
-                aspect_ratio=story.aspect_ratio,
-                resolution=caps.resolution,
-                # Prompt rewriting can drop the line or the voice, so spoken
-                # scenes go to Veo exactly as written.
-                enhance_prompt=not spoken,
-                # Spoken scenes: Veo renders the line with lip sync. Other
-                # clips stay silent under the music and voiceover.
-                generate_audio=spoken,
-                model_version_id=self.cfg.STORY_VEO_MODEL_VERSION,
-                person_generation="Allow (Adults only)",
-                # One seed for the whole film steadies the look and voice.
-                seed=story.seed or None,
-                reference_image_gcs=start_frame_uri or None,
-                reference_image_mime_type="image/png" if start_frame_uri else None,
-            )
+        extra = (
+            {
+                "omni_mode": "i2v",
+                "reference_image_gcs": start_frame_uri,
+                "reference_image_mime_type": "image/png",
+            }
+            if start_frame_uri
+            else {"omni_mode": "t2v"}
         )
-        if not uris:
-            raise GenerationError("Veo returned no video for this scene.")
-        return uris[0]
+        uri, interaction_id = generate_omni_video(
+            self._omni_request(story, index, clip_prompt(story, scene), **extra)
+        )
+        if not uri:
+            raise GenerationError("Gemini Omni returned no video for this scene.")
+        self._interactions[uri] = interaction_id
+        return uri
 
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str:
         from common.storage import download_from_gcs, store_to_gcs
@@ -1331,45 +1344,80 @@ class VertexStoryBackend:
     def extend_clip(
         self, story: Story, index: int, prev_clip_uri: str
     ) -> tuple[str, float]:
-        """Continue the previous clip with Veo video extension (same shot,
-        person and voice). Returns (clip, seconds of it that belong to the
-        previous clip): Veo may return the whole joined video or only the
-        new seconds, so both lengths are measured."""
-        from config.veo_models import get_veo_model_config
-        from models.requests import VideoGenerationRequest
-        from models.veo import generate_video
+        """Continue the previous clip in the same Gemini Omni thread, which
+        keeps the shot, the person and their voice. The thread is the take so
+        far: every earlier turn's prompt and clip are sent again with the
+        previous interaction ID. Without a stored interaction (expired, or
+        made before a restart) it falls back to Omni's extend task on the
+        previous clip. Returns (clip, seconds of it that repeat the previous
+        clip), measured, since the model may return the joined video."""
+        from models.omni import generate_omni_video
         from services.story_timeline import probe
 
         scene = story.scenes[index]
-        model = get_veo_model_config(self.cfg.STORY_VEO_MODEL_VERSION)
-        seconds = (
-            (model.supported_extension_durations or [7])[0] if model else 7
+        prompt = clip_prompt(story, scene, continuing=True)
+        prev = story.scenes[index - 1] if index > 0 else None
+        prev_id = (prev.interaction_id if prev else "") or self.interaction_of(
+            prev_clip_uri
         )
-        uris, _ = generate_video(
-            VideoGenerationRequest(
-                prompt=clip_prompt(story, scene, continuing=True),
+        # A follow-up adds at most 10 s (Omni extension limit).
+        seconds = min(10, int(scene.duration))
+        if prev_id:
+            start = story.take_start(index)
+            history: list[dict] = []
+            for j in range(start, index):
+                sc = story.scenes[j]
+                history += [
+                    {
+                        "type": "user_input",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": clip_prompt(story, sc, continuing=j > start),
+                            }
+                        ],
+                    },
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {
+                                "type": "video",
+                                "gcs_uri": sc.clip_uri if j < index - 1 else prev_clip_uri,
+                                "mime_type": "video/mp4",
+                            }
+                        ],
+                    },
+                ]
+            request = self._omni_request(
+                story,
+                index,
+                prompt,
+                omni_mode="t2v",
                 duration_seconds=seconds,
-                video_count=1,
-                aspect_ratio=story.aspect_ratio,
-                resolution=apply_caps(story.scene_count, scene.duration).resolution,
-                enhance_prompt=False,
-                generate_audio=True,
-                model_version_id=self.cfg.STORY_VEO_MODEL_VERSION,
-                person_generation="Allow (Adults only)",
-                seed=story.seed or None,
-                video_input_gcs=prev_clip_uri,
-                video_input_mime_type="video/mp4",
+                previous_interaction_id=prev_id,
+                chat_history_json=json.dumps(history),
             )
-        )
-        if not uris:
-            raise GenerationError("Veo returned no video for this scene.")
+        else:
+            request = self._omni_request(
+                story,
+                index,
+                prompt,
+                omni_mode="extend",
+                duration_seconds=seconds,
+                reference_video_gcs=prev_clip_uri,
+                reference_video_mime_type="video/mp4",
+            )
+        uri, interaction_id = generate_omni_video(request)
+        if not uri:
+            raise GenerationError("Gemini Omni returned no video for this scene.")
+        self._interactions[uri] = interaction_id
         with tempfile.TemporaryDirectory() as tmp:
             prev_path, new_path = os.path.join(tmp, "a.mp4"), os.path.join(tmp, "b.mp4")
             _gcs_fetch(prev_clip_uri, prev_path)
-            _gcs_fetch(uris[0], new_path)
+            _gcs_fetch(uri, new_path)
             prev_len, new_len = probe(prev_path)[0], probe(new_path)[0]
         joined = new_len > prev_len + 1.0
-        return uris[0], round(prev_len, 3) if joined else 0.0
+        return uri, round(prev_len, 3) if joined else 0.0
 
     def save_audio_upload(self, data: bytes, mime_type: str) -> str:
         from common.storage import store_to_gcs
@@ -1397,7 +1445,7 @@ class VertexStoryBackend:
             mime_type="video/mp4",
             media_type="video",
             mode="story_studio",
-            model=self.cfg.STORY_VEO_MODEL_VERSION,
+            model=self.cfg.STORY_VIDEO_MODEL,
             prompt=story.idea,
             original_prompt=story.idea,
             aspect=story.aspect_ratio,

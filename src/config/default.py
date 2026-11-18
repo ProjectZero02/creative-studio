@@ -345,10 +345,16 @@ class Default:
     )
     # Cost guardrails: every film is capped by these values.
     STORY_MIN_SCENES: int = 3
-    STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 8))
-    STORY_MAX_FILM_SECONDS: int = int(os.environ.get("STORY_MAX_FILM_SECONDS", 64))
+    STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 16))
+    STORY_MAX_FILM_SECONDS: int = int(os.environ.get("STORY_MAX_FILM_SECONDS", 180))
     STORY_VIDEO_RESOLUTION: str = os.environ.get("STORY_VIDEO_RESOLUTION", "720p")
-    STORY_VEO_MODEL_VERSION: str = os.environ.get("STORY_VEO_MODEL_VERSION", "3.1-fast")
+    # Story clips are made with Gemini Omni (sound, speech and extension in
+    # one model). Spoken scenes in a row continue one Omni thread, which keeps
+    # the person's voice; a thread is cut after STORY_TAKE_MAX_SECONDS.
+    STORY_VIDEO_MODEL: str = os.environ.get(
+        "STORY_VIDEO_MODEL", os.environ.get("OMNI_MODEL_ID", "gemini-omni-1.2-flash")
+    )
+    STORY_TAKE_MAX_SECONDS: int = int(os.environ.get("STORY_TAKE_MAX_SECONDS", 30))
     STORY_SCENARIO_MODEL_ID: str = os.environ.get(
         "STORY_SCENARIO_MODEL_ID", os.environ.get("MODEL_ID", "gemini-3.5-flash")
     )
