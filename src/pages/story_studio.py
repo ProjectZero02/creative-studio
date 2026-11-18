@@ -281,6 +281,10 @@ def _open_story(story_id: str) -> None:
     if story is None:
         s.error = "That story was not found."
         return
+    try:
+        story = story_jobs.ensure_set(story_id, _owner()) or story
+    except Exception:  # never block opening a story on the migration
+        logger.exception("Story Studio: set migration failed")
     _set_story(story)
     _load_form(story)
     s.step = furthest_step(story)

@@ -493,3 +493,62 @@ def duplicate(story_set: StorySet, owner: str, name: str = "") -> StorySet:
     copy.created_at = copy.updated_at = _now_iso()
     copy.created_from = "manual"
     return copy
+
+
+# ---------------------------------------------------------------------------
+# Migration of stories made before sets
+# ---------------------------------------------------------------------------
+
+
+def needs_migration(story) -> bool:
+    """True for a story from before sets that has cast details to keep."""
+    if story.set_id:
+        return False
+    return bool(story.reference_uri or story.character or story.speaker_voice)
+
+
+def _lead_name(character: str) -> str:
+    head = (character or "").split(",")[0].split(".")[0].strip()
+    return head if head and len(head.split()) <= 3 else "Lead"
+
+
+def legacy_set(story) -> StorySet:
+    """A one-character set from an old story's reference image, character
+    text and voice fields. Also tags every scene with that character (and
+    as the speaker of spoken lines). Pure: nothing is saved."""
+    lead = Character(
+        name=_lead_name(story.character),
+        description=story.character or "",
+        images=[SetImage("front", story.reference_uri)] if story.reference_uri else [],
+        voice=Voice(
+            tts_voice=story.voice_name if story.voice_name in VOICES else "Kore",
+            description=story.speaker_voice or "",
+        ),
+    )
+    ensure_views(lead)
+    characters = [lead]
+    if story.voice_on:
+        characters.append(
+            Character(
+                name="Narrator",
+                narrator=True,
+                voice=Voice(
+                    tts_voice=story.voice_name
+                    if story.voice_name in VOICES
+                    else "Kore",
+                    style="Narrate warmly and clearly, like a short film voiceover.",
+                ),
+            )
+        )
+    story_set = StorySet(
+        name=f"{story.title or 'Story'} set",
+        style=story.style,
+        characters=characters,
+        created_from="migrated",
+    )
+    for sc in story.scenes:
+        if not sc.cast:
+            sc.cast = [lead.id]
+        if sc.spoken and not sc.speaker_id:
+            sc.speaker_id = lead.id
+    return story_set

@@ -16,7 +16,8 @@
 import pytest
 
 from config.default import Default
-from services import story_sets
+from services import story_jobs, story_sets, story_store
+from services.story_models import Scene, Story
 from services.story_sets import (
     Character,
     LocalSetStore,
@@ -233,3 +234,116 @@ def test_firestore_set_store_hides_ownerless_docs():
     db.data["x"] = StorySet(id="x").to_dict() | {"owner": ""}
     store = story_sets.FirestoreSetStore(db=db, collection="story_sets")
     assert store.get("x", OWNER) is None
+
+
+# ---------------------------------------------------------------------------
+# Story / Scene fields and migration
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def stores(tmp_path, set_store):
+    store = story_store.LocalStoryStore(str(tmp_path / "stories.json"))
+    story_store.set_store(store)
+    yield store, set_store
+    story_store.set_store(None)
+
+
+def test_story_and_scene_set_fields_round_trip():
+    st = Story(
+        set_id="s1",
+        set_version=3,
+        scenes=[
+            Scene(cast=["a", "b"], location_id="L", prop_ids=["p"], speaker_id="a")
+        ],
+    )
+    back = Story.from_dict(st.to_dict())
+    assert (back.set_id, back.set_version) == ("s1", 3)
+    sc = back.scenes[0]
+    assert (sc.cast, sc.location_id, sc.prop_ids, sc.speaker_id) == (
+        ["a", "b"],
+        "L",
+        ["p"],
+        "a",
+    )
+
+
+def test_old_story_dicts_load_with_empty_set_fields():
+    raw = Story(scenes=[Scene()]).to_dict()
+    raw.pop("set_id"), raw.pop("set_version")
+    for key in ("cast", "location_id", "prop_ids", "speaker_id"):
+        raw["scenes"][0].pop(key)
+    back = Story.from_dict(raw)
+    assert back.set_id == "" and back.scenes[0].cast == []
+
+
+def _legacy_story(**over) -> Story:
+    base = dict(
+        title="Night shift",
+        style="anime",
+        reference_uri="gs://b/ref.png",
+        character="Maya, a nurse in green scrubs",
+        speaker_voice="calm alto, Irish accent",
+        voice_on=True,
+        voice_name="Leda",
+        scenes=[Scene(spoken=True, narration="Hi."), Scene(narration="Later.")],
+    )
+    base.update(over)
+    return Story(**base)
+
+
+def test_needs_migration():
+    assert story_sets.needs_migration(_legacy_story())
+    assert not story_sets.needs_migration(_legacy_story(set_id="x"))
+    assert not story_sets.needs_migration(
+        Story(reference_uri="", character="", speaker_voice="")
+    )
+
+
+def test_legacy_set_keeps_reference_character_and_voices():
+    story = _legacy_story()
+    made = story_sets.legacy_set(story)
+    lead = made.characters[0]
+    assert made.created_from == "migrated" and made.style == "anime"
+    assert lead.name == "Maya"
+    assert lead.description == "Maya, a nurse in green scrubs"
+    assert story_sets.image_of(lead, "front").uri == "gs://b/ref.png"
+    assert lead.voice.description == "calm alto, Irish accent"
+    assert made.narrator().voice.tts_voice == "Leda"
+    assert [sc.cast for sc in story.scenes] == [[lead.id], [lead.id]]
+    assert [sc.speaker_id for sc in story.scenes] == [lead.id, ""]
+
+
+def test_legacy_set_long_character_text_gets_generic_name():
+    made = story_sets.legacy_set(
+        _legacy_story(character="a tall old man with a cane", voice_on=False)
+    )
+    assert made.characters[0].name == "Lead"
+    assert made.narrator() is None
+
+
+def test_ensure_set_migrates_once_and_owner_only(stores):
+    story_db, set_db = stores
+    story = story_db.save(_legacy_story(), OWNER)
+    assert story_jobs.ensure_set(story.id, OTHER) is None
+    migrated = story_jobs.ensure_set(story.id, OWNER)
+    assert migrated.set_id
+    assert migrated.set_version == 0  # no film yet
+    assert set_db.get(migrated.set_id, OWNER).characters[0].name == "Maya"
+    assert set_db.get(migrated.set_id, OTHER) is None
+    again = story_jobs.ensure_set(story.id, OWNER)
+    assert again.set_id == migrated.set_id
+    assert len(set_db.list(OWNER)) == 1
+
+
+def test_ensure_set_records_version_of_existing_film(stores):
+    story_db, _ = stores
+    story = story_db.save(_legacy_story(final_uri="gs://b/film.mp4"), OWNER)
+    assert story_jobs.ensure_set(story.id, OWNER).set_version == 1
+
+
+def test_ensure_set_leaves_plain_stories_alone(stores):
+    story_db, set_db = stores
+    story = story_db.save(Story(idea="no cast details"), OWNER)
+    assert story_jobs.ensure_set(story.id, OWNER).set_id == ""
+    assert set_db.list(OWNER) == []

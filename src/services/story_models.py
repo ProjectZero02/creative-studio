@@ -213,6 +213,12 @@ class Scene:
     # Gemini Omni interaction that made clip_uri (the next scene of a take
     # continues from it). Stored interactions expire after about a week.
     interaction_id: str = ""
+    # Set assets in this scene (services/story_sets.py): the characters on
+    # screen, the location and props, and who says a spoken line.
+    cast: list[str] = field(default_factory=list)
+    location_id: str = ""
+    prop_ids: list[str] = field(default_factory=list)
+    speaker_id: str = ""
 
     def clear_clip(self) -> None:
         """Forget the clip and everything made from it (take, Omni thread)."""
@@ -281,6 +287,10 @@ class Story:
     clip_language: str = ""
     title_alt: str = ""
     final_alt_uri: str = ""
+    # The set this story uses ("" = none) and the set version its film was
+    # rendered with (0 = not rendered with a set yet).
+    set_id: str = ""
+    set_version: int = 0
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 

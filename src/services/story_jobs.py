@@ -51,6 +51,7 @@ from services.story_models import (
 )
 from services.story_service import get_backend
 from services.story_store import StoryAccessError, get_store
+from services.story_sets import get_set_store, legacy_set, needs_migration
 
 logger = get_logger(__name__)
 
@@ -114,6 +115,24 @@ def mutate_story(story_id: str, owner: str, fn: Callable[[Story], None]) -> Stor
             raise StoryAccessError("Story not found.")
         fn(story)
         return store.save(story, owner)
+
+
+def ensure_set(story_id: str, owner: str) -> Story | None:
+    """Give a story from before sets its one-character set (lazy migration,
+    run when the story is opened). Stories with a set are left alone."""
+    story = get_store().get(story_id, owner)
+    if story is None or not needs_migration(story):
+        return story
+
+    def apply(s: Story) -> None:
+        if not needs_migration(s):
+            return
+        made = get_set_store().save(legacy_set(s), owner)
+        s.set_id = made.id
+        # A film made before the migration was made with exactly this cast.
+        s.set_version = made.version if (s.final_uri or s.final_alt_uri) else 0
+
+    return mutate_story(story_id, owner, apply)
 
 
 def friendly_error(exc: Exception) -> str:
