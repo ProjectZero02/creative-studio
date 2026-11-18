@@ -45,13 +45,28 @@ from services.story_models import (
     build_stitch_plan,
     default_music_prompt,
     parse_scenario,
+    parse_scene_links,
+    parse_set_build,
     parse_single_scene,
     parse_translation,
     parse_voice,
 )
 from services.story_service import get_backend
 from services.story_store import StoryAccessError, get_store
-from services.story_sets import get_set_store, legacy_set, needs_migration
+from services.story_sets import (
+    KINDS,
+    VIEW_LABELS,
+    StorySet,
+    anchor_view,
+    aspect_for,
+    ensure_views,
+    get_set_store,
+    image_of,
+    image_prompt,
+    legacy_set,
+    needs_migration,
+    views_for,
+)
 
 logger = get_logger(__name__)
 
@@ -296,12 +311,17 @@ def start_scenario(story_id: str, owner: str) -> Job:
         story = get_store().get(story_id, owner)
         if story is None:
             raise StoryAccessError("Story not found.")
+        story_set = get_set_store().get(story.set_id, owner) if story.set_id else None
 
         def write() -> str:
             last: Exception | None = None
             for _ in range(2):  # one automatic retry on malformed JSON
                 try:
-                    text = backend.write_scenario(story)
+                    text = (
+                        backend.write_scenario(story, story_set)
+                        if story_set is not None
+                        else backend.write_scenario(story)
+                    )
                     title, scenes = parse_scenario(
                         text,
                         story.scene_count,
@@ -310,6 +330,8 @@ def start_scenario(story_id: str, owner: str) -> Job:
                         story.speech_mode,
                     )
                     voice = parse_voice(text) if any(sc.spoken for sc in scenes) else ""
+                    if story_set is not None:
+                        parse_scene_links(text, story_set, scenes)
                     break
                 except ScenarioError as exc:
                     last = exc
@@ -1007,6 +1029,188 @@ def set_music(story_id: str, owner: str, uri: str) -> Story:
     return mutate_story(story_id, owner, apply)
 
 
+# ---------------------------------------------------------------------------
+# Sets
+# ---------------------------------------------------------------------------
+
+
+def mutate_set(set_id: str, owner: str, fn: Callable[[StorySet], None]) -> StorySet:
+    """Load, change and save a set under its lock. Owner-only."""
+    with _story_lock(f"set:{set_id}"):
+        store = get_set_store()
+        story_set = store.get(set_id, owner)
+        if story_set is None:
+            raise StoryAccessError("Set not found.")
+        fn(story_set)
+        return store.save(story_set, owner)
+
+
+def attach_set(story_id: str, owner: str, set_id: str) -> Story:
+    """Make a story use one of the owner's sets ("" = no set)."""
+    if set_id and get_set_store().get(set_id, owner) is None:
+        raise StoryAccessError("Set not found.")
+
+    def apply(s: Story) -> None:
+        if s.set_id != set_id:
+            s.set_id = set_id
+            for sc in s.scenes:
+                sc.cast, sc.location_id, sc.prop_ids, sc.speaker_id = [], "", [], ""
+
+    return mutate_story(story_id, owner, apply)
+
+
+def _set_work(story_set: StorySet, targets: list | None) -> list[tuple]:
+    """(kind, asset id, view) pieces to make: the given targets, else every
+    empty image slot and missing voice sample. Locked images never."""
+    wanted = {tuple(t) for t in targets} if targets else None
+    out: list[tuple] = []
+    for kind in KINDS:
+        for asset in story_set.assets(kind):
+            ensure_views(asset)
+            for img in asset.images:
+                if img.view not in views_for(asset) or img.locked:
+                    continue
+                key = (kind, asset.id, img.view)
+                if (wanted is None and not img.uri) or (wanted and key in wanted):
+                    out.append(key)
+            if kind == "character":
+                key = (kind, asset.id, "voice")
+                if (wanted is None and not asset.voice.sample_uri) or (
+                    wanted and key in wanted
+                ):
+                    out.append(key)
+    return out
+
+
+def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
+    """Make the story's set.
+
+    A story without a set is cast first with one Gemini call (characters,
+    locations, props and who is in each scene). Then every missing image is
+    painted (each asset's front or wide plate first, its other views from
+    it) with a voice sample per character, in parallel. `targets` limits the
+    run to those (kind, asset id, view) pieces: a regenerate. Locked images
+    are never replaced.
+    """
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    job = _new_job(owner, story_id, "set", {"targets": targets, "task_targets": {}})
+    cast_task = None
+    if not story.set_id:
+        cast_task = _add_task(job, "Casting with Gemini", "set")
+    cfg = Default()
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+        set_id = story.set_id
+        if cast_task is not None:
+            holder: dict[str, StorySet] = {}
+
+            def cast() -> str:
+                current = get_store().get(story_id, owner)
+                if current is None:
+                    raise StoryAccessError("Story not found.")
+                last: Exception | None = None
+                for _ in range(2):  # one automatic retry on malformed JSON
+                    try:
+                        made = parse_set_build(backend.write_set(current), current)
+                        break
+                    except ScenarioError as exc:
+                        last = exc
+                else:
+                    raise last or ScenarioError("No set.")
+                made = get_set_store().save(made, owner)
+                links = {
+                    sc.id: (sc.cast, sc.location_id, sc.prop_ids, sc.speaker_id)
+                    for sc in current.scenes
+                }
+
+                def apply(s: Story) -> None:
+                    s.set_id = made.id
+                    for sc in s.scenes:
+                        if sc.id in links:
+                            sc.cast, sc.location_id, sc.prop_ids, sc.speaker_id = links[
+                                sc.id
+                            ]
+
+                mutate_story(story_id, owner, apply)
+                holder["set"] = made
+                return ""
+
+            if not _run_task(cast_task, cast):
+                return
+            set_id = holder["set"].id
+        story_set = get_set_store().get(set_id, owner)
+        if story_set is None:
+            raise StoryAccessError("Set not found.")
+        pieces = _set_work(story_set, targets)
+        tasks: dict[tuple, Task] = {}
+        for kind, aid, view in pieces:
+            asset = story_set.asset(kind, aid)
+            what = "voice sample" if view == "voice" else VIEW_LABELS.get(view, view)
+            task = _add_task(job, f"{asset.name} · {what}", "set")
+            tasks[(kind, aid, view)] = task
+            job.params["task_targets"][task.id] = [kind, aid, view]
+
+        def paint(kind: str, aid: str, view: str) -> str:
+            current = get_set_store().get(set_id, owner)
+            asset = current.asset(kind, aid) if current else None
+            if asset is None:
+                raise StoryAccessError("Set not found.")
+            if view == "voice":
+                uri = backend.voice_sample(current, asset)
+
+                def apply_voice(st: StorySet) -> None:
+                    a = st.asset(kind, aid)
+                    if a is not None:
+                        a.voice.sample_uri = uri
+
+                mutate_set(set_id, owner, apply_voice)
+                return uri
+            anchor = anchor_view(asset)
+            ref = image_of(asset, anchor) if view != anchor else None
+            prompt = image_prompt(current, asset, view)
+            uri = backend.generate_set_image(
+                current, prompt, [ref.uri] if ref else [], aspect_for(asset, view)
+            )
+
+            def apply(st: StorySet) -> None:
+                a = st.asset(kind, aid)
+                if a is None:
+                    return
+                ensure_views(a)
+                for img in a.images:
+                    if img.view == view and not img.locked:
+                        img.uri, img.prompt = uri, prompt
+
+            mutate_set(set_id, owner, apply)
+            return uri
+
+        def chain(kind: str, aid: str, views: list[str]) -> None:
+            # The anchor view goes first: the others are made from it.
+            anchor_failed = False
+            for view in views:
+                task = tasks[(kind, aid, view)]
+                if anchor_failed and view != "voice":
+                    task.status, task.error = SKIPPED, "Needs the first image."
+                    continue
+                ok = _run_task(task, lambda v=view: paint(kind, aid, v))
+                if not ok and view in ("front", "plate"):
+                    anchor_failed = True
+
+        by_asset: dict[tuple, list[str]] = {}
+        for kind, aid, view in pieces:
+            by_asset.setdefault((kind, aid), []).append(view)
+        order = {"front": 0, "plate": 0, "voice": 9}
+        with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+            for (kind, aid), views in by_asset.items():
+                views.sort(key=lambda v: order.get(v, 1))
+                pool.submit(chain, kind, aid, views)
+
+    return _spawn(job, work)
+
+
 def retry(job_id: str, owner: str) -> Job | None:
     """Start a new job of the same kind. Finished pieces are skipped."""
     job = get_job(job_id, owner)
@@ -1027,6 +1231,13 @@ def retry(job_id: str, owner: str) -> Job | None:
         return start_export(job.story_id, owner)
     if job.kind == "music":
         return start_music(job.story_id, owner)
+    if job.kind == "set":
+        tt = job.params.get("task_targets") or {}
+        failed = [
+            tt[t.id] for t in job.tasks if t.status in (FAILED, SKIPPED) and t.id in tt
+        ]
+        # A failed casting call has no targets: start over from the story.
+        return start_set(job.story_id, owner, failed or job.params.get("targets"))
     return start_video(job.story_id, owner)
 
 

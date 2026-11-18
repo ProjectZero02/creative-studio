@@ -14,11 +14,12 @@
 """Story Studio Sets: model, owner-only stores, migration, auto-build, jobs, refs."""
 
 import json
+import os
 
 import pytest
 
 from config.default import Default
-from services import story_jobs, story_sets, story_store
+from services import story_jobs, story_service, story_sets, story_store
 from services.story_models import (
     SET_MAX_CHARACTERS,
     SET_MAX_LOCATIONS,
@@ -545,3 +546,241 @@ def test_scenario_prompt_uses_saved_set():
     )
     assert "Location The café" in with_set
     assert '"speaker": str' in with_set
+
+
+# ---------------------------------------------------------------------------
+# Backend images and the "set" job (mock backend, no network)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_backend(stores, tmp_path, monkeypatch):
+    monkeypatch.setattr(story_service, "LOCAL_MEDIA_DIR", str(tmp_path / "media"))
+    backend = story_service.MockStoryBackend(speed=0)
+    story_service.set_backend(backend)
+    yield backend
+    story_service.set_backend(None)
+
+
+def _run(job):
+    done = story_jobs.wait(job.id, OWNER, timeout=30)
+    assert done is not None and done.status != "running"
+    return done
+
+
+def _story_with_scenes(story_db, **over) -> Story:
+    base = dict(
+        idea="A lighthouse keeper and a stray cat",
+        title="Keeper",
+        voice_name="Leda",
+        scenes=[
+            Scene(spoken=True, narration="Hello.", visual="v1"),
+            Scene(narration="Night falls.", visual="v2"),
+            Scene(narration="Morning.", visual="v3"),
+        ],
+    )
+    base.update(over)
+    return story_db.save(Story(**base), OWNER)
+
+
+def test_mock_set_image_and_sample_are_local_files(mock_backend):
+    s = _sample_set()
+    for aspect in ("3:4", "16:9", "1:1"):
+        uri = mock_backend.generate_set_image(s, "Full-body character", [], aspect)
+        assert uri.startswith(f"local://story_sets/{s.id}/")
+        assert os.path.getsize(story_service.local_path(uri)) > 0
+    wav = mock_backend.voice_sample(s, s.characters[0])
+    assert wav.endswith(".wav") and os.path.isfile(story_service.local_path(wav))
+
+
+def test_vertex_set_image_uses_nano_banana_with_refs(monkeypatch):
+    calls = {}
+
+    def fake(**kw):
+        calls.update(kw)
+        return ["gs://b/story_sets/x/set_1.png"], 0, [], None, []
+
+    import models.gemini as gemini
+
+    monkeypatch.setattr(gemini, "generate_image_from_prompt_and_images", fake)
+    backend = story_service.VertexStoryBackend.__new__(story_service.VertexStoryBackend)
+    s = _sample_set()
+    uri = backend.generate_set_image(s, "p", ["gs://b/front.png"], "3:4")
+    assert uri == "gs://b/story_sets/x/set_1.png"
+    assert calls["images"] == ["gs://b/front.png"]
+    assert calls["aspect_ratio"] == "3:4"
+    assert calls["gcs_folder"] == f"story_sets/{s.id}"
+
+
+def test_image_prompts_follow_the_recipes():
+    s = _sample_set()
+    maya, cafe, cup = s.characters[0], s.locations[0], s.props[0]
+    front = story_sets.image_prompt(s, maya, "front")
+    assert "Full-body character reference of Maya" in front
+    assert "plain light-grey studio background" in front.lower()
+    assert "preserve identity" in story_sets.image_prompt(s, maya, "profile")
+    assert "close-up of the face" in story_sets.image_prompt(s, maya, "face")
+    assert "no people" in story_sets.image_prompt(s, cafe, "plate")
+    assert "different camera angle" in story_sets.image_prompt(s, cafe, "angle")
+    assert "plain light-grey background" in story_sets.image_prompt(s, cup, "item")
+    assert story_sets.aspect_for(maya, "front") == "3:4"
+    assert story_sets.aspect_for(maya, "face") == "1:1"
+    assert story_sets.aspect_for(cafe, "plate") == "16:9"
+
+
+def test_set_job_casts_paints_and_links_scenes(mock_backend, stores):
+    story_db, set_db = stores
+    story = _story_with_scenes(story_db)
+    job = _run(story_jobs.start_set(story.id, OWNER))
+    assert job.status == "done", [t.error for t in job.tasks]
+    assert job.kind == "set"
+    story = story_db.get(story.id, OWNER)
+    made = set_db.get(story.set_id, OWNER)
+    assert made.created_from == "auto"
+    assert made.missing_images() == 0
+    assert all(c.voice.sample_uri for c in made.characters)
+    lead = made.on_screen()[0]
+    assert story.scenes[0].cast[0] == lead.id
+    assert story.scenes[0].speaker_id == lead.id
+    assert story.scenes[0].location_id == made.locations[0].id
+    # Casting, then one task per image and voice sample.
+    assert len(job.tasks) == 1 + made.image_count() + len(made.characters)
+
+
+def test_set_views_are_made_from_the_front_image(mock_backend, stores):
+    story_db, set_db = stores
+    seen = []
+    real = mock_backend.generate_set_image
+
+    def spy(story_set, prompt, refs, aspect_ratio="1:1"):
+        uri = real(story_set, prompt, refs, aspect_ratio)
+        seen.append((list(refs), uri))
+        return uri
+
+    mock_backend.generate_set_image = spy
+    story = _story_with_scenes(story_db)
+    _run(story_jobs.start_set(story.id, OWNER))
+    made = set_db.get(story_db.get(story.id, OWNER).set_id, OWNER)
+    refs_of = {uri: refs for refs, uri in seen}
+    lead = made.on_screen()[0]
+    front = story_sets.image_of(lead, "front").uri
+    assert refs_of[front] == []
+    for view in ("three_quarter", "profile", "face"):
+        assert refs_of[story_sets.image_of(lead, view).uri] == [front]
+    plate = story_sets.image_of(made.locations[0], "plate").uri
+    angle = story_sets.image_of(made.locations[0], "angle").uri
+    assert refs_of[plate] == [] and refs_of[angle] == [plate]
+
+
+def test_regenerate_one_image_and_locked_images_stay(mock_backend, stores):
+    story_db, set_db = stores
+    story = _story_with_scenes(story_db)
+    _run(story_jobs.start_set(story.id, OWNER))
+    set_id = story_db.get(story.id, OWNER).set_id
+    lead = set_db.get(set_id, OWNER).on_screen()[0]
+    before = {i.view: i.uri for i in lead.images}
+
+    def lock_face(st):
+        for img in st.character(lead.id).images:
+            if img.view == "face":
+                img.locked = True
+
+    story_jobs.mutate_set(set_id, OWNER, lock_face)
+    targets = [["character", lead.id, "profile"], ["character", lead.id, "face"]]
+    job = _run(story_jobs.start_set(story.id, OWNER, targets))
+    assert [t.label for t in job.tasks] == [f"{lead.name} · Profile"]
+    after = {i.view: i.uri for i in set_db.get(set_id, OWNER).character(lead.id).images}
+    assert after["profile"] != before["profile"]
+    assert after["face"] == before["face"]  # locked
+    assert after["front"] == before["front"]
+
+
+def test_editing_a_description_regenerates_nothing(mock_backend, stores):
+    story_db, set_db = stores
+    story = _story_with_scenes(story_db)
+    _run(story_jobs.start_set(story.id, OWNER))
+    set_id = story_db.get(story.id, OWNER).set_id
+    v1 = set_db.get(set_id, OWNER)
+
+    def edit(st):
+        st.on_screen()[0].description = "now with a beard"
+
+    v2 = story_jobs.mutate_set(set_id, OWNER, edit)
+    assert v2.version == v1.version + 1
+    assert [i.uri for i in v2.on_screen()[0].images] == [
+        i.uri for i in v1.on_screen()[0].images
+    ]
+    # Nothing is missing, so a plain run has nothing to do.
+    job = _run(story_jobs.start_set(story.id, OWNER))
+    assert job.tasks == [] and job.status == "done"
+
+
+class _FlakyFront(story_service.MockStoryBackend):
+    def __init__(self):
+        super().__init__(speed=0)
+        self.fail = True
+
+    def generate_set_image(self, story_set, prompt, refs, aspect_ratio="1:1"):
+        if self.fail and prompt.startswith("Full-body character reference"):
+            raise story_service.GenerationError("busy")
+        return super().generate_set_image(story_set, prompt, refs, aspect_ratio)
+
+
+def test_failed_front_skips_its_views_and_retry_finishes(stores, tmp_path, monkeypatch):
+    story_db, set_db = stores
+    monkeypatch.setattr(story_service, "LOCAL_MEDIA_DIR", str(tmp_path / "media"))
+    backend = _FlakyFront()
+    story_service.set_backend(backend)
+    try:
+        story = _story_with_scenes(story_db)
+        job = _run(story_jobs.start_set(story.id, OWNER))
+        assert job.status == "failed"
+        lead = set_db.get(story_db.get(story.id, OWNER).set_id, OWNER).on_screen()[0]
+        status = {t.label: t.status for t in job.tasks}
+        assert status[f"{lead.name} · Front"] == "failed"
+        assert status[f"{lead.name} · Profile"] == "skipped"
+        assert any(k.endswith("· Wide") and v == "done" for k, v in status.items())
+        backend.fail = False
+        again = _run(story_jobs.retry(job.id, OWNER))
+        assert again.status == "done"
+        made = set_db.get(story_db.get(story.id, OWNER).set_id, OWNER)
+        assert made.missing_images() == 0
+    finally:
+        story_service.set_backend(None)
+
+
+def test_set_job_retries_bad_casting_json_once(mock_backend, stores):
+    story_db, _ = stores
+    calls = {"n": 0}
+    real = mock_backend.write_set
+
+    def flaky(story):
+        calls["n"] += 1
+        return "not json" if calls["n"] == 1 else real(story)
+
+    mock_backend.write_set = flaky
+    story = _story_with_scenes(story_db)
+    assert _run(story_jobs.start_set(story.id, OWNER)).status == "done"
+    assert calls["n"] == 2
+
+
+def test_set_job_owner_only(mock_backend, stores):
+    story_db, _ = stores
+    story = _story_with_scenes(story_db)
+    with pytest.raises(StoryAccessError):
+        story_jobs.start_set(story.id, OTHER)
+    with pytest.raises(StoryAccessError):
+        story_jobs.attach_set(story.id, OWNER, "someone-elses-set")
+
+
+def test_scenario_with_a_saved_set_casts_its_people(mock_backend, stores):
+    story_db, set_db = stores
+    saved = set_db.save(_sample_set(), OWNER)
+    story = story_db.save(Story(idea="A morning at the cafe", scene_count=3), OWNER)
+    story_jobs.attach_set(story.id, OWNER, saved.id)
+    assert _run(story_jobs.start_scenario(story.id, OWNER)).status == "done"
+    story = story_db.get(story.id, OWNER)
+    assert story.set_id == saved.id
+    assert all(sc.cast == ["maya"] for sc in story.scenes)
+    assert story.scenes[0].location_id == "cafe"
+    assert story.scenes[0].visual.startswith("Maya")

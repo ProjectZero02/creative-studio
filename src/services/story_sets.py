@@ -552,3 +552,74 @@ def legacy_set(story) -> StorySet:
         if sc.spoken and not sc.speaker_id:
             sc.speaker_id = lead.id
     return story_set
+
+
+# ---------------------------------------------------------------------------
+# Image recipes (Nano Banana): front first, other views from it
+# ---------------------------------------------------------------------------
+
+_NO_TEXT = "No text, no captions, no watermark."
+
+
+def aspect_for(asset: Asset, view: str) -> str:
+    if isinstance(asset, Character):
+        return "1:1" if view == "face" else "3:4"
+    if isinstance(asset, Location):
+        return "16:9"
+    return "1:1"
+
+
+def anchor_view(asset: Asset) -> str:
+    """The view every other view of the asset is made from."""
+    return "front" if isinstance(asset, Character) else "plate"
+
+
+def image_prompt(story_set: StorySet, asset: Asset, view: str) -> str:
+    """The prompt for one image of an asset, in the set's style."""
+    style = STYLE_BY_ID.get(story_set.style, STYLE_BY_ID["photographic"])["prompt"]
+    notes = (
+        f" {story_set.style_notes.strip()}." if story_set.style_notes.strip() else ""
+    )
+    look = asset.look()
+    if isinstance(asset, Character):
+        same = (
+            "The same person as the reference image, same outfit, preserve identity, "
+            "face, hair, body and colours exactly. "
+        )
+        shots = {
+            "front": (
+                f"Full-body character reference of {look}. Standing, facing the "
+                "camera, neutral pose, arms relaxed, whole body in frame."
+            ),
+            "three_quarter": f"{same}Full body, three-quarter view, turned 45 degrees.",
+            "profile": f"{same}Full body, side profile view.",
+            "face": f"{same}Head-and-shoulders close-up of the face, looking at the camera.",
+        }
+        shot = shots.get(view, shots["front"])
+        if view != "front":
+            shot += f" The character: {look}."
+        return (
+            f"{shot} Plain light-grey studio background, even soft light. "
+            f"One person only. Style: {style}.{notes} {_NO_TEXT}"
+        )
+    if isinstance(asset, Location):
+        if view == "plate":
+            shot = f"Wide establishing shot of {look}."
+        else:
+            shot = (
+                "The same place as the reference image from a different camera "
+                "angle: same layout, materials, colours and light. "
+                f"The place: {look}."
+            )
+        return f"{shot} Empty: no people, no animals. Style: {style}.{notes} {_NO_TEXT}"
+    return (
+        f"Reference image of {look}, centred on a plain light-grey background, "
+        f"soft even light, the whole object in frame. Style: {style}.{notes} {_NO_TEXT}"
+    )
+
+
+def voice_sample_text(character: Character) -> str:
+    """A ~5 second line for the voice sample."""
+    if character.narrator:
+        return "Every story starts somewhere. This one starts here, tonight."
+    return f"Hi, I'm {character.name}. This is how I sound in every scene."

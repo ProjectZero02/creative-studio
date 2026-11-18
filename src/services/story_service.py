@@ -55,6 +55,7 @@ from services.story_models import (
     frame_prompt,
     scenario_prompt,
     scene_regen_prompt,
+    set_build_prompt,
     translation_prompt,
 )
 
@@ -135,14 +136,21 @@ def display_url(uri: str) -> str:
 class StoryBackend(Protocol):
     name: str
 
-    def write_scenario(self, story: Story) -> str: ...
+    def write_scenario(self, story: Story, story_set=None) -> str: ...
+    def write_set(self, story: Story) -> str: ...
+    def generate_set_image(
+        self, story_set, prompt: str, refs: list[str], aspect_ratio: str = "1:1"
+    ) -> str: ...
+    def voice_sample(self, story_set, character) -> str: ...
     def rewrite_scene(self, story: Story, index: int) -> str: ...
     def translate(self, story: Story) -> str: ...
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str: ...
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str: ...
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str: ...
     def generate_music(self, story: Story, prompt: str, seconds: float) -> str: ...
-    def generate_voiceover(self, story: Story, index: int, text: str) -> str: ...
+    def generate_voiceover(
+        self, story: Story, index: int, text: str, voice=None
+    ) -> str: ...
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
     ) -> tuple[str, dict]: ...
@@ -473,7 +481,7 @@ class MockStoryBackend:
         return LOCAL_SCHEME + rel, path
 
     # -- scenario --
-    def write_scenario(self, story: Story) -> str:
+    def write_scenario(self, story: Story, story_set=None) -> str:
         self._sleep(1.6, 2.6)
         hero = _hero_from_idea(story.idea)
         n = story.scene_count
@@ -510,6 +518,15 @@ class MockStoryBackend:
             title = f"{title} {w}".strip()
         title = (title or "Untitled story")[0].upper() + (title or "Untitled story")[1:]
         voice = "a warm, confident voice, mid-30s" if spoken else ""
+        if story_set is not None:  # a saved set: cast it in every scene
+            lead = story_set.on_screen()[:1]
+            places = story_set.locations
+            for i, sc in enumerate(scenes):
+                sc["cast"] = [c.name for c in lead]
+                sc["location"] = places[i % len(places)].name if places else ""
+                sc["speaker"] = lead[0].name if lead and sc["spoken"] else ""
+                if lead:
+                    sc["visual"] = sc["visual"].replace(f"The {hero}", lead[0].name, 1)
         return json.dumps({"title": title, "voice": voice, "scenes": scenes})
 
     def rewrite_scene(self, story: Story, index: int) -> str:
@@ -623,6 +640,189 @@ class MockStoryBackend:
         img.save(path, "JPEG", quality=84, optimize=True, progressive=True)
         return uri
 
+    # -- sets --
+    def write_set(self, story: Story) -> str:
+        """Demo stand-in for the casting call: the hero of the idea, up to
+        three of the scenes' places and one prop."""
+        self._sleep(1.2, 2.0)
+        hero = _hero_from_idea(story.idea)
+        name = hero.split()[-1].capitalize() if hero else "Hero"
+        characters = [
+            {
+                "key": "c1",
+                "name": name,
+                "description": f"the {hero}, mid-30s, friendly face, short dark hair",
+                "outfit": "a weathered blue jacket and boots",
+                "voice": {
+                    "tts_voice": story.voice_name,
+                    "style": "warm, unhurried",
+                    "description": "a warm, confident voice, mid-30s, neutral accent",
+                },
+            }
+        ]
+        if " and " in f" {story.idea.lower()} ":
+            characters.append(
+                {
+                    "key": "c2",
+                    "name": "Sam",
+                    "description": "a wiry friend in their 20s, curly red hair",
+                    "outfit": "a yellow raincoat",
+                    "voice": {
+                        "tts_voice": "Puck",
+                        "style": "quick, upbeat",
+                        "description": "a bright male voice, mid-20s, quick and upbeat",
+                    },
+                }
+            )
+        n_places = min(3, max(1, story.scene_count))
+        locations = [
+            {
+                "key": f"l{k + 1}",
+                "name": _MOCK_PLACES[k].split(" ", 1)[1].split(" at ")[0].capitalize(),
+                "description": _MOCK_PLACES[k],
+                "time_of_day": "",
+            }
+            for k in range(n_places)
+        ]
+        scenes = []
+        for i, sc in enumerate(story.scenes):
+            cast = ["c1"] + (["c2"] if len(characters) > 1 and i % 2 else [])
+            scenes.append(
+                {
+                    "cast": cast,
+                    "location": f"l{i % n_places + 1}",
+                    "props": ["p1"] if i == 1 else [],
+                    "speaker": "c1" if sc.spoken else "",
+                }
+            )
+        return json.dumps(
+            {
+                "name": f"{story.title or name} set",
+                "characters": characters,
+                "narrator": {"tts_voice": story.voice_name, "style": "warm and clear"},
+                "locations": locations,
+                "props": [
+                    {
+                        "key": "p1",
+                        "name": "Lantern",
+                        "description": "a brass storm lantern",
+                    }
+                ],
+                "scenes": scenes,
+            }
+        )
+
+    def generate_set_image(
+        self, story_set, prompt: str, refs: list[str], aspect_ratio: str = "1:1"
+    ) -> str:
+        """A placeholder reference image: a figure for characters (3:4 and
+        1:1 faces), a landscape for locations (16:9), an object otherwise."""
+        from PIL import Image, ImageDraw, ImageFont
+
+        self._sleep(1.0, 2.2)
+        w, h = {"3:4": (480, 640), "16:9": (768, 432)}.get(aspect_ratio, (512, 512))
+        top, mid, glow = _STYLE_PALETTES.get(
+            story_set.style, _STYLE_PALETTES["photographic"]
+        )
+        rng = random.Random(prompt + uuid.uuid4().hex[:4])
+        y = np.linspace(0, 1, h)[:, None, None]
+        if aspect_ratio == "16:9":
+            grad = (np.array(top) * (1 - y) + np.array(mid) * y).repeat(w, axis=1)
+        else:  # studio grey, like the real prompt asks for
+            grad = np.array((214, 216, 220)) * (1 - y) + np.array((168, 170, 176)) * y
+            grad = grad.repeat(w, axis=1)
+        img = Image.fromarray(grad.astype("uint8"), "RGB")
+        draw = ImageDraw.Draw(img, "RGBA")
+        tint = tuple(int(c) for c in mid)
+        if aspect_ratio == "16:9":
+            for layer in range(3):
+                base = h * (0.55 + layer * 0.14)
+                phase = rng.uniform(0, math.tau)
+                pts = (
+                    [(0, h)]
+                    + [
+                        (x, base + h * 0.07 * math.sin(phase + 2 * x / w * math.tau))
+                        for x in range(0, w + 16, 16)
+                    ]
+                    + [(w, h)]
+                )
+                shade = 0.55 - layer * 0.15
+                draw.polygon(pts, fill=(*(int(c * shade) for c in top), 255))
+            draw.ellipse(
+                (w * 0.7, h * 0.15, w * 0.8, h * 0.15 + w * 0.1), fill=(*glow, 255)
+            )
+        elif (
+            aspect_ratio == "3:4"
+            or "face" in prompt.lower()
+            or "person" in prompt.lower()
+        ):
+            face = "close-up of the face" in prompt
+            cx = w // 2
+            head = int(w * (0.22 if face else 0.09))
+            hy = int(h * (0.42 if face else 0.2))
+            draw.ellipse(
+                (cx - head, hy - head, cx + head, hy + head), fill=(*glow, 255)
+            )
+            body_top = hy + head + 4
+            body_w = int(head * (1.6 if face else 1.5))
+            body_bottom = h if face else int(h * 0.62)
+            draw.rounded_rectangle(
+                (cx - body_w, body_top, cx + body_w, body_bottom),
+                radius=head // 2,
+                fill=(*tint, 255),
+            )
+            if not face:
+                draw.rectangle(
+                    (cx - body_w + 6, body_bottom, cx - 6, int(h * 0.92)),
+                    fill=(40, 44, 60, 255),
+                )
+                draw.rectangle(
+                    (cx + 6, body_bottom, cx + body_w - 6, int(h * 0.92)),
+                    fill=(40, 44, 60, 255),
+                )
+        else:
+            r = int(w * 0.22)
+            draw.rounded_rectangle(
+                (w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r),
+                radius=r // 3,
+                fill=(*tint, 255),
+            )
+        try:
+            font = ImageFont.load_default(size=max(12, h // 30))
+        except TypeError:  # older Pillow
+            font = ImageFont.load_default()
+        label = "DEMO SET IMAGE" + ("  ·  FROM REFERENCE" if refs else "")
+        draw.rounded_rectangle(
+            (12, 12, 24 + len(label) * (h // 52 + 2), 14 + h // 18),
+            radius=6,
+            fill=(0, 0, 0, 120),
+        )
+        draw.text((20, 15), label, fill=(255, 255, 255, 230), font=font)
+        rel = f"story_sets/{story_set.id}/img_{uuid.uuid4().hex[:10]}.jpg"
+        path = local_path(LOCAL_SCHEME + rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        img.save(path, "JPEG", quality=84, optimize=True)
+        return LOCAL_SCHEME + rel
+
+    def voice_sample(self, story_set, character) -> str:
+        from services.story_sets import voice_sample_text
+
+        self._sleep(0.5, 1.0)
+        rate = 24000
+        text = voice_sample_text(character)
+        t = np.arange(int(rate * min(5.0, 0.33 * len(text.split()) + 0.4))) / rate
+        pitch = 150 + 40 * (sum(map(ord, character.voice.tts_voice)) % 5)
+        tone = (
+            0.18
+            * (0.5 + 0.5 * np.sin(2 * math.pi * 3.2 * t) ** 2)
+            * np.sin(2 * math.pi * pitch * t)
+        )
+        rel = f"story_sets/{story_set.id}/voice_{uuid.uuid4().hex[:10]}.wav"
+        path = local_path(LOCAL_SCHEME + rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _write_wav(path, tone, rate)
+        return LOCAL_SCHEME + rel
+
     # -- clips --
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str:
         from moviepy import VideoClip
@@ -699,7 +899,9 @@ class MockStoryBackend:
         _write_wav(path + ".wav", out, rate)
         return uri + ".wav"
 
-    def generate_voiceover(self, story: Story, index: int, text: str) -> str:
+    def generate_voiceover(
+        self, story: Story, index: int, text: str, voice=None
+    ) -> str:
         self._sleep(0.8, 1.6)
         rate = 24000
         words = max(1, len(text.split()))
@@ -799,6 +1001,15 @@ def _gcs_fetch(uri: str, path: str) -> None:
 
 def _image_mime(uri: str) -> str:
     return "image/jpeg" if uri.lower().split("?")[0].endswith((".jpg", ".jpeg")) else "image/png"
+
+
+NARRATOR_STYLE = "Narrate warmly and clearly, like a short film voiceover."
+
+
+def _tts_style(voice) -> str:
+    """The TTS style prompt: a set voice's own style, else the default."""
+    style = (getattr(voice, "style", "") or "").strip()
+    return f"Speak {style}." if style else NARRATOR_STYLE
 
 
 # Omni's extend task adds at most this many seconds to a video.
@@ -918,8 +1129,53 @@ class VertexStoryBackend:
             raise GenerationError("Gemini returned an empty scenario.")
         return response.text
 
-    def write_scenario(self, story: Story) -> str:
-        return self._json_text(scenario_prompt(story))
+    def write_scenario(self, story: Story, story_set=None) -> str:
+        return self._json_text(scenario_prompt(story, story_set))
+
+    def write_set(self, story: Story) -> str:
+        return self._json_text(
+            set_build_prompt(story), temperature=0.6, task="story_set"
+        )
+
+    def generate_set_image(
+        self, story_set, prompt: str, refs: list[str], aspect_ratio: str = "1:1"
+    ) -> str:
+        """One set reference image with Nano Banana, stored under
+        story_sets/<set id>/."""
+        from models.gemini import generate_image_from_prompt_and_images
+
+        uris, _, _, _, _ = generate_image_from_prompt_and_images(
+            prompt=prompt,
+            images=list(refs),
+            aspect_ratio=aspect_ratio,
+            gcs_folder=f"story_sets/{story_set.id}",
+            file_prefix="set",
+        )
+        if not uris:
+            raise GenerationError("The image model returned no image. Try again.")
+        return uris[0]
+
+    def voice_sample(self, story_set, character) -> str:
+        """A ~5 s Gemini TTS sample of a character's voice and style."""
+        from common.storage import store_to_gcs
+        from models.gemini_tts import synthesize_speech
+        from services.story_sets import voice_sample_text
+
+        audio = synthesize_speech(
+            text=voice_sample_text(character),
+            prompt=_tts_style(character.voice),
+            model_name=self.cfg.STORY_TTS_MODEL,
+            voice_name=character.voice.tts_voice,
+            language_code="en-US",
+        )
+        if not audio:
+            raise GenerationError("Text-to-speech returned no audio.")
+        return store_to_gcs(
+            f"story_sets/{story_set.id}",
+            f"voice_{uuid.uuid4().hex[:10]}.wav",
+            "audio/wav",
+            audio,
+        )
 
     def rewrite_scene(self, story: Story, index: int) -> str:
         return self._json_text(scene_regen_prompt(story, index))
@@ -987,16 +1243,19 @@ class VertexStoryBackend:
             raise GenerationError("Lyria returned no music.")
         return uris[0]
 
-    def generate_voiceover(self, story: Story, index: int, text: str) -> str:
-        """The narrator's line (Gemini TTS)."""
+    def generate_voiceover(
+        self, story: Story, index: int, text: str, voice=None
+    ) -> str:
+        """The narrator's line (Gemini TTS). `voice`: the set narrator's
+        pinned TTS voice and style, so every film sounds the same."""
         from common.storage import store_to_gcs
         from models.gemini_tts import synthesize_speech
 
         audio = synthesize_speech(
             text=text,
-            prompt="Narrate warmly and clearly, like a short film voiceover.",
+            prompt=_tts_style(voice),
             model_name=self.cfg.STORY_TTS_MODEL,
-            voice_name=story.voice_name,
+            voice_name=voice.tts_voice if voice else story.voice_name,
             language_code=LANGUAGES.get(story.language, "en-US"),
         )
         if not audio:
