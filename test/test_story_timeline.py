@@ -87,6 +87,16 @@ def test_gain_to_levels_loudness():
     assert T.gain_to(-80.0) == T.MAX_GAIN
 
 
+def test_clip_gain_keeps_omni_sound_low_under_the_narrator():
+    # Spoken clips: dialogue level (-20 LUFS).
+    assert T.clip_gain(-20.0, spoken=True) == 1.0
+    # Narrated clips: Omni's own sound stays, as an ambient bed at -30 LUFS.
+    assert T.clip_gain(-14.0, spoken=False) == pytest.approx(10 ** (-16 / 20), rel=0.01)
+    assert T.clip_gain(-30.0, spoken=False) == 1.0
+    assert 0 < T.clip_gain(-5.0, spoken=False) < 0.1  # never muted outright
+    assert T.clip_gain(None, spoken=False) == T.AMBIENT_GAIN
+
+
 # -- building -------------------------------------------------------------------
 
 
@@ -112,14 +122,16 @@ def test_build_timeline_keeps_speech_and_places_narration():
         height=720,
         voice_uris={0: "v0", 2: "v2"},
         voice_lengths={0: 1.5, 2: 9.0},
-        clip_gains={1: 1.7},
+        clip_gains={0: 0.16, 1: 1.7},
         music_uri="m",
         music_length=30,
     )
     vids = T.track(tl, "video")["clips"]
-    # Narrated clips are silent under the voiceover; the spoken one keeps its
-    # sound at the measured level.
-    assert [c["gain"] for c in vids] == [0.0, 1.7, 0.0]
+    # Every clip keeps its own sound: narrated clips as an ambient bed (the
+    # measured gain, or the default when unmeasured), the spoken one at
+    # dialogue level.
+    assert [c["gain"] for c in vids] == [0.16, 1.7, T.AMBIENT_GAIN]
+    assert [bool(c.get("ambient")) for c in vids] == [True, False, True]
     voices = T.track(tl, "voice")["clips"]
     assert [v["src"] for v in voices] == ["v0", "v2"]
     # A long line is cut to fit its scene.
@@ -128,22 +140,32 @@ def test_build_timeline_keeps_speech_and_places_narration():
     assert music["out"] == T.duration(tl)
 
 
-def test_build_timeline_dub_starts_when_the_person_speaks():
-    scenes = _scenes(1, spoken={0})
-    plan = build_stitch_plan(scenes, 0.5, dub=True)
-    tl = T.build_timeline(
-        Story(scenes=scenes),
-        plan,
-        width=640,
-        height=360,
-        voice_uris={0: "v"},
-        voice_lengths={0: 2.0},
-        dub_starts={0: 0.8},
-        dub_tempos={0: 1.05},
+def test_ambient_flag_survives_normalize():
+    tl = T.empty_timeline()
+    T.track(tl, "video")["clips"] = [{"src": "a", "in": 0, "out": 2, "ambient": 1}, {"src": "b", "in": 0, "out": 2}]
+    vids = T.track(T.normalize(tl), "video")["clips"]
+    assert vids[0]["ambient"] is True and "ambient" not in vids[1]
+
+
+def test_ambient_bed_neither_ducks_nor_is_ducked():
+    tl = T.empty_timeline(320, 180, 12)
+    T.track(tl, "video")["clips"] = [
+        {"src": "a", "in": 0, "out": 2, "gain": 0.2, "ambient": True},
+        {"src": "b", "in": 0, "out": 2, "gain": 1.0},
+    ]
+    T.track(tl, "voice")["clips"] = [{"src": "v", "in": 0, "out": 1, "start": 0.3}]
+    T.track(tl, "music")["clips"] = [{"src": "m", "in": 0, "out": 4}]
+    tl = T.normalize(tl)
+    args = T.render_args(
+        tl, {s: s for s in "abvm"}, {s: True for s in "abvm"}, {}, "out.mp4"
     )
-    assert T.track(tl, "video")["clips"][0]["gain"] == 0.0
-    voice = T.track(tl, "voice")["clips"][0]
-    assert voice["start"] == 0.8 and voice["tempo"] == 1.05
+    graph = args[args.index("-filter_complex") + 1]
+    dialogue_mix = next(f for f in graph.split(";") if f.endswith("[dlg]"))
+    final_mix = next(f for f in graph.split(";") if f.endswith("[mix]"))
+    # The narrated clip's sound (d0) is mixed after the ducking; the spoken
+    # clip (d1) and the narrator (s0) drive the music ducking.
+    assert "[d0]" not in dialogue_mix and "[d1]" in dialogue_mix and "[s0]" in dialogue_mix
+    assert "sidechaincompress" in graph and "[d0]" in final_mix
 
 
 def test_keep_edits_carries_text_and_music_level():
@@ -179,6 +201,25 @@ def test_stale_extension_still_trims_old_seconds():
     b = Scene(clip_uri="b", duration=7, extends_from="a-old", clip_in=8.0)
     plan = build_stitch_plan([a, b], 0.5, clip_durations=[8.0, 15.0])
     assert plan.segments[1].trim_head == 8.0
+
+
+def test_take_is_cut_after_the_take_cap():
+    """Omni continues a thread up to STORY_TAKE_MAX_SECONDS (30 s): two 15 s
+    spoken scenes are one take, the third starts a new one."""
+    from config.default import Default
+
+    assert Default.__dataclass_fields__["STORY_TAKE_MAX_SECONDS"].default == 30
+    s = Story(
+        scenes=[Scene(spoken=True, narration=f"line {i}", duration=d) for i, d in enumerate([15, 15, 10, 10])]
+    )
+    assert [s.continues_take(i) for i in range(4)] == [False, True, False, True]
+    assert [s.take_start(i) for i in range(4)] == [0, 0, 2, 2]
+
+
+def test_clear_clip_forgets_the_omni_thread():
+    sc = Scene(clip_uri="c", extends_from="b", clip_in=8.0, interaction_id="int-1")
+    sc.clear_clip()
+    assert (sc.clip_uri, sc.extends_from, sc.clip_in, sc.interaction_id) == ("", "", 0.0, "")
 
 
 def test_continues_take_needs_two_spoken_scenes():
@@ -295,10 +336,13 @@ class _TakeMock(story_service.MockStoryBackend):
         return f"local://{story.id}/clip{index}.mp4"
 
     def extend_clip(self, story, index, prev_clip_uri):
-        self.extended.append((index, prev_clip_uri))
+        self.extended.append((index, prev_clip_uri, story.scenes[index - 1].interaction_id))
         return f"local://{story.id}/take{index}.mp4", 8.0
 
-    def generate_voiceover(self, story, index, text, style="narrator", direction=""):
+    def interaction_of(self, clip_uri):
+        return "int-" + clip_uri.rsplit("/", 1)[-1]
+
+    def generate_voiceover(self, story, index, text):
         return f"local://v{index}.wav"
 
     def stitch(self, story, plan, music_uri, voice_uris):
@@ -317,11 +361,18 @@ def test_back_to_back_spoken_scenes_extend_the_previous_clip(demo):
     ]
     s = store.save(Story(approved=True, scenes=scenes, music_on=False), OWNER)
     job = _wait(story_jobs.start_video(s.id, OWNER))
-    assert "continuous take" in [t.label for t in job.tasks if t.scene_index == 1][0]
-    assert backend.extended == [(1, f"local://{s.id}/clip0.mp4")]
+    assert "same take as scene 1" in [t.label for t in job.tasks if t.scene_index == 1][0]
+    # The continuation sees the first clip's saved Omni thread.
+    assert backend.extended == [(1, f"local://{s.id}/clip0.mp4", "int-clip0.mp4")]
     s = store.get(s.id, OWNER)
     assert s.scenes[1].extends_from == s.scenes[0].clip_uri and s.scenes[1].clip_in == 8.0
+    assert [sc.interaction_id for sc in s.scenes] == ["int-clip0.mp4", "int-take1.mp4", "int-clip2.mp4"]
     assert backend.plan.segments[1].trim_head == 8.0
+
+
+def test_mock_backend_has_no_thread(demo):
+    _, backend = demo
+    assert backend.interaction_of("local://x.mp4") == ""
 
 
 def test_failed_extension_falls_back_to_a_normal_clip(demo):

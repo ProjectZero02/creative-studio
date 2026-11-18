@@ -55,7 +55,6 @@ from services.story_models import (
     default_music_prompt,
     furthest_step,
     max_words,
-    voice_label,
     reachable_steps,
     supported_durations,
 )
@@ -71,6 +70,10 @@ from state.state import AppState
 from state.story_state import StoryState
 
 logger = get_logger(__name__)
+
+# The two audio types of a scene: a narrator over Omni's own (ambient) sound,
+# or the person on screen speaking (Omni renders the speech).
+AUDIO_VOICEOVER, AUDIO_ON_CAMERA = "voiceover", "camera"
 
 EXAMPLE_IDEAS = [
     "A lighthouse keeper befriends a lost baby whale and helps it find its family.",
@@ -908,7 +911,7 @@ def create_step(story: Story | None) -> None:
                     ),
                     (
                         "movie",
-                        "Veo animates each still, then we add music and voice and stitch the film.",
+                        "Gemini Omni films each still with sound, then we add music and voice.",
                     ),
                 ]:
                     with me.box(classes="ss-next-row"):
@@ -1036,17 +1039,24 @@ def on_generate_scenario(e: me.ClickEvent):
 
 
 def _line_fields(story: Story, sc, prefix: str, disabled: bool) -> None:
-    """Who says the scene's line (switch), the line itself, and a hint.
+    """The scene's audio type (voiceover or on camera), the line itself, and
+    how many words fit.
 
     Keys: "<prefix>spk-<id>" and "<prefix>nar-<id>" (see _scene_id_from_key).
     """
-    me.slide_toggle(
-        "Person on screen says this line",
-        checked=sc.spoken,
-        disabled=disabled,
-        on_change=on_toggle_spoken,
-        key=f"{prefix}spk-{sc.id}",
-    )
+    with me.box(classes="gm-segmented ss-audio-type"):
+        me.button_toggle(
+            value=AUDIO_ON_CAMERA if sc.spoken else AUDIO_VOICEOVER,
+            buttons=[
+                me.ButtonToggleButton(label="Voiceover", value=AUDIO_VOICEOVER),
+                me.ButtonToggleButton(label="On camera", value=AUDIO_ON_CAMERA),
+            ],
+            multiple=False,
+            hide_selection_indicator=True,
+            disabled=disabled,
+            on_change=on_scene_audio,
+            key=f"{prefix}spk-{sc.id}",
+        )
     me.textarea(
         label="Line spoken on camera" if sc.spoken else "Narration (voiceover)",
         value=sc.narration,
@@ -1065,9 +1075,7 @@ def _line_fields(story: Story, sc, prefix: str, disabled: bool) -> None:
         )
     else:
         me.text(
-            f"The person on screen says this, lips in sync (about {fit} words fit)."
-            if sc.spoken
-            else "A narrator reads this over the picture.",
+            f"About {fit} words fit.",
             style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
         )
 
@@ -1178,7 +1186,10 @@ def _update_scene(
             if sc.id == scene_id and getattr(sc, field) != value:
                 setattr(sc, field, value)
                 for c in clear:
-                    setattr(sc, c, "")
+                    if c == "clip_uri":
+                        sc.clear_clip()
+                    else:
+                        setattr(sc, c, "")
                 story.clear_films()
 
     _edit(apply)
@@ -1204,44 +1215,21 @@ def on_scene_narration(e: me.InputBlurEvent):
     _update_scene(scene_id, "narration", e.value.strip(), clear=clear)
 
 
-def on_toggle_spoken(e: me.SlideToggleChangeEvent):
+def on_scene_audio(e: me.ButtonToggleChangeEvent):
+    """Voiceover or on camera for one scene (the clip changes with it)."""
+    if not e.value:  # clicking the selected option again changes nothing
+        return
     scene_id = _scene_id_from_key(e.key)
+    spoken = e.value == AUDIO_ON_CAMERA
 
     def apply(story: Story) -> None:
         for sc in story.scenes:
-            if sc.id == scene_id:
-                sc.spoken = not sc.spoken
-                sc.clip_uri = ""  # the clip changes between silent and speaking
+            if sc.id == scene_id and sc.spoken != spoken:
+                sc.spoken = spoken
+                sc.clear_clip()
                 story.clear_films()
 
     _edit(apply)
-
-
-def on_toggle_same_voice(e: me.SlideToggleChangeEvent):
-    story = _story()
-    _set_story_field("same_voice", not (story and story.same_voice))
-
-
-def on_speaker_tts_voice(e: me.SelectSelectionChangeEvent):
-    _set_story_field("speaker_tts_voice", e.value)
-
-
-def on_preview_voice(e: me.ClickEvent):
-    s = me.state(StoryState)
-    story = _story()
-    if not story:
-        return
-    s.error = ""
-    s.previewing = True
-    yield
-    try:
-        s.preview_uri = story_jobs.preview_voice(story, story.speaker_tts_voice)
-        s.preview_voice = story.speaker_tts_voice
-    except Exception as exc:
-        s.error = story_jobs.friendly_error(exc)
-    finally:
-        s.previewing = False
-    yield
 
 
 def on_speaker_voice(e: me.InputBlurEvent):
@@ -1613,84 +1601,23 @@ def editor_step(story: Story) -> None:
                     key="ss-voice",
                 )
             if story.has_spoken:
+                me.input(
+                    label="Voice of the person on screen",
+                    value=story.speaker_voice,
+                    placeholder="e.g. a calm, confident male voice, mid-30s",
+                    appearance="outline",
+                    disabled=busy,
+                    on_blur=on_speaker_voice,
+                    style=me.Style(width="100%"),
+                    key="ss-speaker-voice",
+                )
                 me.slide_toggle(
-                    "Continuous takes: back-to-back spoken scenes continue the "
-                    "same shot (Veo extension)",
+                    "One take for back-to-back spoken scenes",
                     checked=story.continuous_takes,
                     disabled=busy,
                     on_change=on_toggle_continuous_takes,
                     key="ss-takes",
                 )
-                me.text(
-                    "Keeps the same person, place and voice across a long speech. "
-                    "Those scenes render one after another.",
-                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-                )
-                me.slide_toggle(
-                    "Replace on-camera speech with one fixed voice",
-                    checked=story.same_voice,
-                    disabled=busy,
-                    on_change=on_toggle_same_voice,
-                    key="ss-same-voice",
-                )
-                if story.same_voice:
-                    me.select(
-                        label="Voice of the person on screen",
-                        options=[
-                            me.SelectOption(label=voice_label(v), value=v)
-                            for v in VOICES
-                        ],
-                        value=story.speaker_tts_voice,
-                        appearance="outline",
-                        disabled=busy,
-                        on_selection_change=on_speaker_tts_voice,
-                        style=me.Style(width="100%"),
-                        key="ss-speaker-tts",
-                    )
-                    st = me.state(StoryState)
-                    me.button(
-                        "Making a sample…"
-                        if st.previewing
-                        else f"Hear the {story.speaker_tts_voice} voice",
-                        type="stroked",
-                        disabled=busy or st.previewing,
-                        on_click=on_preview_voice,
-                        style=me.Style(width="100%"),
-                        key="ss-preview-voice",
-                    )
-                    if st.preview_uri and st.preview_voice == story.speaker_tts_voice:
-                        me.audio(
-                            src=display_url(st.preview_uri),
-                            autoplay=True,
-                            key=f"ss-preview-{st.preview_uri[-12:]}",
-                        )
-                    me.text(
-                        "Each line is voiced in this one voice and starts when the "
-                        "person starts talking, at a natural speed. The clip's own "
-                        "sound is removed and lips will not match exactly.",
-                        style=me.Style(
-                            font_size=13, color=me.theme_var("on-surface-variant")
-                        ),
-                    )
-                else:
-                    me.input(
-                        label="Voice of the person on screen",
-                        value=story.speaker_voice,
-                        placeholder="e.g. a calm, confident male voice, mid-30s",
-                        appearance="outline",
-                        disabled=busy,
-                        on_blur=on_speaker_voice,
-                        style=me.Style(width="100%"),
-                        key="ss-speaker-voice",
-                    )
-                    me.text(
-                        "Recommended. Veo's own voice and room sound, with exact lip "
-                        "sync. This description, one seed per film and continuous "
-                        "takes keep the voice steady between scenes.",
-                        style=me.Style(
-                            font_size=13, color=me.theme_var("on-surface-variant")
-                        ),
-                    )
             if story.voice_on or story.has_spoken:
                 me.slide_toggle(
                     f"Also make an {alt} version",
@@ -1699,24 +1626,13 @@ def editor_step(story: Story) -> None:
                     on_change=on_toggle_second,
                     key="ss-second-on",
                 )
-                me.text(
-                    (
-                        f"Same clips and music. Every line, narrated or spoken on "
-                        f"camera, is voiced again in {alt} (lips follow the "
-                        f"{story.language} words)."
-                        if story.has_spoken and story.same_voice
-                        else f"Same music. Narration is voiced again in {alt}, and "
-                        f"scenes spoken on camera are rendered again saying the {alt} "
-                        "line (one extra Veo clip each)."
-                        if story.has_spoken
-                        else f"Same clips and music, with the narration translated "
-                        f"and voiced in {alt}."
+                if story.second_on and story.has_spoken:
+                    me.text(
+                        f"Spoken scenes are filmed again in {alt}.",
+                        style=me.Style(
+                            font_size=13, color=me.theme_var("on-surface-variant")
+                        ),
                     )
-                    + f" Check the {alt} lines under each scene before rendering.",
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
                 if story.second_on:
                     me.button(
                         "Translating…"
@@ -1761,7 +1677,7 @@ def editor_step(story: Story) -> None:
                     if seamless
                     else f"Film length ≈ {_fmt_secs(film_len)} with {xf:g}s crossfades"
                 )
-                me.text(f"Veo clips to render: {to_render} of {len(story.scenes)}")
+                me.text(f"Clips to render: {to_render} of {len(story.scenes)}")
                 if story.makes_alt:
                     me.text(f"Films: {story.language} and {alt}")
                     alt_clips = sum(
@@ -1769,7 +1685,6 @@ def editor_step(story: Story) -> None:
                         for sc in story.scenes
                         if sc.spoken
                         and sc.narration.strip()
-                        and not story.same_voice
                         and not (sc.clip_uri and sc.has_alt_clip())
                     )
                     if alt_clips:
@@ -1804,7 +1719,7 @@ def _move(scene_id: str, delta: int) -> None:
             story.clear_films()
             if story.continuity:
                 for sc in story.scenes[min(i, j) :]:
-                    sc.clip_uri = ""
+                    sc.clear_clip()
 
     _edit(apply)
 
@@ -1842,14 +1757,12 @@ def _set_story_field(field: str, value) -> None:
             "voice_on",
             "voice_name",
             "seamless_joins",
-            "same_voice",
-            "speaker_tts_voice",
         ):
             story.clear_films()
         if field == "continuity":
             story.clear_films()
             for sc in story.scenes[1:]:
-                sc.clip_uri = ""
+                sc.clear_clip()
         if field == "music_prompt":
             # A new prompt means new music on the next render.
             story.music_uri = ""

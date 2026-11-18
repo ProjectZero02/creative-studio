@@ -26,7 +26,8 @@ can render it::
 
 Times are seconds. A clip plays its source from ``in`` to ``out`` at
 ``start`` on the film. Video clips also carry the clip's own sound (speech,
-ambience) at ``gain``. The video track is sequential: ``normalize`` lays its
+ambience) at ``gain``; ``ambient: true`` marks a narrated clip whose sound is
+a bed under the voice (it neither ducks the music nor is ducked). The video track is sequential: ``normalize`` lays its
 clips end to end, overlapping by ``fade_in`` (a crossfade).
 
 Everything above ``render_timeline`` is pure and unit tested.
@@ -44,8 +45,12 @@ import uuid
 TRACK_KINDS = ("video", "voice", "music", "text")
 TEXT_POSITIONS = ("top", "center", "bottom")
 MAX_GAIN = 4.0
-# Loudness targets (LUFS): each clip's dialogue, and the finished film.
+# Loudness targets (LUFS): each clip's dialogue, the model's own sound under
+# a narrator (an ambient bed), and the finished film.
 DIALOGUE_LUFS = -20.0
+AMBIENT_LUFS = -30.0
+# Gain for a narrated clip whose loudness could not be measured.
+AMBIENT_GAIN = 0.25
 MASTER_LUFS = -14.0
 # Short fade on every audio cut so joins never click.
 EDGE_FADE = 0.04
@@ -182,6 +187,8 @@ def _clean_clip(kind: str, c: dict) -> dict | None:
         clean["fade_in"] = round(_num(c.get("fade_in"), 0, 0, 3), 3)
         clean["label"] = str(c.get("label") or "")[:60]
         clean["scene"] = int(_num(c.get("scene"), -1, -1, 999))
+        if c.get("ambient"):
+            clean["ambient"] = True
         if c.get("src_max") is not None:
             clean["src_max"] = round(_num(c.get("src_max"), cout, cout, 36000), 3)
     if kind == "voice":
@@ -205,15 +212,6 @@ def _layout_video(clips: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # Building a timeline from a rendered story
 # ---------------------------------------------------------------------------
-
-
-class _Placed:
-    """A plan segment with its start and length as laid out on the timeline."""
-
-    def __init__(self, seg, start: float, length: float):
-        self.index, self.dub, self.spoken = seg.index, seg.dub, seg.spoken
-        self.fade_in = seg.fade_in
-        self.start, self.duration = start, length
 
 
 def keep_edits(new: dict, old: dict | str | None) -> dict:
@@ -240,18 +238,17 @@ def build_timeline(
     clip_lengths: dict[int, float] | None = None,
     voice_uris: dict[int, str] | None = None,
     voice_lengths: dict[int, float] | None = None,
-    dub_starts: dict[int, float] | None = None,
-    dub_tempos: dict[int, float] | None = None,
     clip_gains: dict[int, float] | None = None,
     music_uri: str = "",
     music_length: float = 0.0,
 ) -> dict:
     """The film as a timeline, from a stitch plan and the made media.
 
-    ``plan`` is a ``StitchPlan`` (segment order and crossfades). Spoken
-    scenes keep their clip's sound; with a dub, the clip is muted and the
-    voice line starts at ``dub_starts[index]`` seconds into the clip.
-    Narration starts just after each crossfade.
+    ``plan`` is a ``StitchPlan`` (segment order and crossfades). Every clip
+    keeps its own sound at ``clip_gains[index]``: spoken scenes levelled to
+    ``DIALOGUE_LUFS``, narrated scenes to ``AMBIENT_LUFS`` as a bed under the
+    narrator (see :func:`clip_gain`). Narration starts just after each
+    crossfade.
     """
     tl = empty_timeline(width, height, fps)
     vids, voices = track(tl, "video")["clips"], track(tl, "voice")["clips"]
@@ -262,47 +259,41 @@ def build_timeline(
         src_len = (clip_lengths or {}).get(i, cin + float(seg.duration))
         # The measured clip may be a little shorter than planned.
         length = max(0.1, min(float(seg.duration), src_len - cin))
-        gain = 0.0 if (not seg.spoken or seg.dub) else (clip_gains or {}).get(i, 1.0)
-        vids.append(
-            {
-                "id": new_clip_id(),
-                "src": seg.clip_uri,
-                "start": seg.start,
-                "in": round(cin, 3),
-                "out": round(cin + length, 3),
-                "src_max": round(max(src_len, cin + length), 3),
-                "gain": round(gain, 3),
-                "fade_in": seg.fade_in,
-                "label": f"Scene {i + 1}",
-                "scene": i,
-            }
-        )
+        default = 1.0 if seg.spoken else AMBIENT_GAIN
+        gain = (clip_gains or {}).get(i, default)
+        clip = {
+            "id": new_clip_id(),
+            "src": seg.clip_uri,
+            "start": seg.start,
+            "in": round(cin, 3),
+            "out": round(cin + length, 3),
+            "src_max": round(max(src_len, cin + length), 3),
+            "gain": round(gain, 3),
+            "fade_in": seg.fade_in,
+            "label": f"Scene {i + 1}",
+            "scene": i,
+        }
+        if not seg.spoken:
+            clip["ambient"] = True
+        vids.append(clip)
     _layout_video(vids)
     for seg, vclip in zip(plan.segments, vids):
-        i = seg.index
-        cin = vclip["in"]
-        length = clip_length(vclip)
-        seg = _Placed(seg, vclip["start"], length)
-        vuri = voice_uris.get(i, "")
+        vuri = voice_uris.get(seg.index, "")
         if not vuri:
             continue
-        vlen = float((voice_lengths or {}).get(i, length))
-        if seg.dub:
-            tempo = float((dub_tempos or {}).get(i, 1.0))
-            begin = max(0.0, float((dub_starts or {}).get(i, 0.3)) - cin)
-        else:
-            tempo = 1.0
-            begin = min(seg.fade_in + 0.25, length / 3)
+        length = clip_length(vclip)
+        vlen = float((voice_lengths or {}).get(seg.index, length))
+        begin = min(vclip["fade_in"] + 0.25, length / 3)
         room = max(0.3, length - begin - 0.05)
         voices.append(
             {
                 "id": new_clip_id(),
                 "src": vuri,
-                "start": round(seg.start + begin, 3),
+                "start": round(vclip["start"] + begin, 3),
                 "in": 0.0,
-                "out": round(min(vlen, room * tempo), 3),
+                "out": round(min(vlen, room), 3),
                 "gain": 1.0,
-                "tempo": round(tempo, 4),
+                "tempo": 1.0,
             }
         )
     if music_uri:
@@ -362,11 +353,24 @@ def measure_lufs(path: str) -> float | None:
     return None if value <= -60 else value
 
 
-def gain_to(lufs: float | None, target: float = DIALOGUE_LUFS) -> float:
+def gain_to(
+    lufs: float | None, target: float = DIALOGUE_LUFS, floor: float = 0.25
+) -> float:
     """Linear gain that brings `lufs` to `target` (1.0 when unknown)."""
     if lufs is None:
         return 1.0
-    return round(min(MAX_GAIN, max(0.25, 10 ** ((target - lufs) / 20))), 3)
+    return round(min(MAX_GAIN, max(floor, 10 ** ((target - lufs) / 20))), 3)
+
+
+def clip_gain(lufs: float | None, spoken: bool) -> float:
+    """Gain for a clip's own sound: speech levelled to DIALOGUE_LUFS; a
+    narrated clip's sound (ambience, effects) kept low at AMBIENT_LUFS so the
+    narrator sits on top of it."""
+    if spoken:
+        return gain_to(lufs, DIALOGUE_LUFS)
+    if lufs is None:
+        return AMBIENT_GAIN
+    return gain_to(lufs, AMBIENT_LUFS, floor=0.01)
 
 
 def _atempo(tempo: float) -> str:
@@ -410,6 +414,9 @@ def render_args(
     filters.append(f"color=c=black:s={w}x{h}:r={fps}:d={total:.3f}[base]")
     last = "base"
     dialogue: list[str] = []
+    # Narrated clips' own sound: a bed under the voice, mixed after the
+    # ducking so it neither ducks the music nor is ducked.
+    beds: list[str] = []
     for k, c in enumerate(track(timeline, "video")["clips"]):
         idx = add_input(paths[c["src"]])
         length = clip_length(c)
@@ -428,7 +435,8 @@ def render_args(
         )
         last = f"o{k}"
         if c.get("gain", 0) > 0 and has_audio.get(c["src"]):
-            dialogue.append(_audio_chain(filters, idx, c, length, f"d{k}"))
+            bucket = beds if c.get("ambient") else dialogue
+            bucket.append(_audio_chain(filters, idx, c, length, f"d{k}"))
     for k, c in enumerate(track(timeline, "text")["clips"]):
         png = overlays.get(c["id"])
         if not png:
@@ -456,7 +464,7 @@ def render_args(
         music.append(_audio_chain(filters, idx, c, clip_length(c), f"m{k}", fade=1.0))
 
     audio_out = ""
-    if dialogue or music:
+    if dialogue or music or beds:
         dlg = ""
         if dialogue:
             dlg = "dlg"
@@ -481,6 +489,7 @@ def render_args(
             parts = ["dlg1", "mducked"]
         else:
             parts = [p for p in (dlg, mus) if p]
+        parts += beds
         mix = parts[0]
         if len(parts) > 1:
             filters.append(

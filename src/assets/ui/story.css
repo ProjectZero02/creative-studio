@@ -238,6 +238,8 @@ html body.dark-theme .ss-root { --story-ring: #ffffff; }
 .ss-row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ss-row-tools { display: flex; gap: 2px; margin-left: auto; }
 .ss-sound { gap: 12px; }
+/* Scene audio type (Voiceover / On camera): left-aligned with the fields. */
+html body .gm-segmented.ss-audio-type { justify-content: flex-start; margin: 6px 0 8px; }
 
 /* ---------- Video ---------- */
 .ss-video { display: flex; flex-direction: column; gap: 16px; }
