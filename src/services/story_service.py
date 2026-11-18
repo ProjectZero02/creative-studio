@@ -52,6 +52,8 @@ from services.story_models import (
     Story,
     apply_caps,
     clip_prompt,
+    clip_refs,
+    frame_refs,
     frame_prompt,
     scenario_prompt,
     scene_regen_prompt,
@@ -1019,18 +1021,51 @@ def _tts_style(voice) -> str:
 OMNI_EXTEND_MAX_SECONDS = 10
 
 
-def clip_inputs(story: Story, scene: Scene, start_frame_uri: str) -> dict:
+def clip_reference_cap() -> int:
+    """Most reference images per clip: the video model's limit, capped by
+    STORY_MAX_CLIP_REFERENCES (Omni's real cap is unconfirmed)."""
+    from config.omni_models import get_omni_model_config
+
+    cfg = Default()
+    try:
+        model_cap = get_omni_model_config(cfg.STORY_VIDEO_MODEL).max_reference_images
+    except Exception:  # unknown model id: be conservative
+        model_cap = 3
+    return max(1, min(model_cap, cfg.STORY_MAX_CLIP_REFERENCES))
+
+
+def clip_inputs(
+    story: Story, scene: Scene, start_frame_uri: str, story_set=None
+) -> dict:
     """Omni mode and media for a scene's first clip (not a continuation).
 
     A clip that starts from the previous clip's last frame (continuity) must
     begin on that frame: image to video. A clip that starts fresh from its
-    storyboard frame, in a story with a character reference, is made as
-    reference to video from both images, so the person's face and outfit
-    follow the reference too. Otherwise image to video from the frame.
+    storyboard frame (or a new take after the take cap) is made as reference
+    to video: the frame first, then, with a set, the scene's cast faces and
+    fronts, the location plate and props (capped, see clip_reference_cap),
+    so every clip is anchored to the same images. Without a set, the story's
+    character reference is used. Otherwise image to video from the frame.
+    `ref_labels` names each reference for the prompt (pop it before
+    building the request).
     """
     from models.requests import APIReferenceImage
 
     fresh = bool(start_frame_uri) and start_frame_uri == scene.frame_uri
+    refs = (
+        clip_refs(story_set, scene, start_frame_uri, clip_reference_cap())
+        if story_set is not None and (fresh or not start_frame_uri)
+        else []
+    )
+    if any(r.group != "frame" for r in refs):
+        return {
+            "omni_mode": "ref2v",
+            "r2v_references": [
+                APIReferenceImage(gcs_uri=r.uri, mime_type=_image_mime(r.uri))
+                for r in refs
+            ],
+            "ref_labels": [r.label for r in refs],
+        }
     if story.reference_uri and (fresh or not start_frame_uri):
         refs = [u for u in (start_frame_uri, story.reference_uri) if u]
         return {
@@ -1048,7 +1083,9 @@ def clip_inputs(story: Story, scene: Scene, start_frame_uri: str) -> dict:
     return {"omni_mode": "t2v"}
 
 
-def take_history(story: Story, index: int, prev_clip_uri: str) -> list[dict]:
+def take_history(
+    story: Story, index: int, prev_clip_uri: str, story_set=None
+) -> list[dict]:
     """The Omni thread of scene `index`'s continuous take so far: each earlier
     scene's prompt (user turn) and clip (model turn), oldest first. The
     clip of the scene just before is `prev_clip_uri`."""
@@ -1060,7 +1097,12 @@ def take_history(story: Story, index: int, prev_clip_uri: str) -> list[dict]:
             {
                 "type": "user_input",
                 "content": [
-                    {"type": "text", "text": clip_prompt(story, sc, continuing=j > start)}
+                    {
+                        "type": "text",
+                        "text": clip_prompt(
+                            story, sc, continuing=j > start, story_set=story_set
+                        ),
+                    }
                 ],
             },
             {
@@ -1089,6 +1131,18 @@ class VertexStoryBackend:
 
     def _folder(self, story: Story) -> str:
         return f"story_studio/{story.id}"
+
+    def _set(self, story: Story):
+        """The story's set (owner-only lookup), or None."""
+        if not story.set_id or not story.owner:
+            return None
+        from services.story_sets import get_set_store
+
+        try:
+            return get_set_store().get(story.set_id, story.owner)
+        except Exception:
+            logger.exception("Story Studio: could not load set %s", story.set_id)
+            return None
 
     def interaction_of(self, clip_uri: str) -> str:
         """The Omni interaction that made `clip_uri` ("" if unknown)."""
@@ -1192,9 +1246,18 @@ class VertexStoryBackend:
         from models.gemini import generate_image_from_prompt_and_images
 
         scene = story.scenes[index]
-        refs = [reference_uri] if reference_uri else []
+        story_set = self._set(story)
+        set_refs = frame_refs(story_set, scene)
+        refs = [r.uri for r in set_refs]
+        labels = [r.label for r in set_refs]
+        if reference_uri and reference_uri not in refs:
+            refs.append(reference_uri)
+            if labels:
+                labels.append("the look, palette and art style of the film")
         uris, _, _, _, _ = generate_image_from_prompt_and_images(
-            prompt=frame_prompt(story, scene, bool(refs)),
+            prompt=frame_prompt(
+                story, scene, bool(reference_uri), story_set, labels or None
+            ),
             images=refs,
             aspect_ratio=story.aspect_ratio,
             gcs_folder=self._folder(story),
@@ -1210,9 +1273,12 @@ class VertexStoryBackend:
         from models.omni import generate_omni_video
 
         scene = story.scenes[index]
-        extra = clip_inputs(story, scene, start_frame_uri)
+        story_set = self._set(story)
+        extra = clip_inputs(story, scene, start_frame_uri, story_set)
+        labels = extra.pop("ref_labels", None)
+        prompt = clip_prompt(story, scene, story_set=story_set, ref_labels=labels)
         uri, interaction_id = generate_omni_video(
-            self._omni_request(story, index, clip_prompt(story, scene), **extra)
+            self._omni_request(story, index, prompt, **extra)
         )
         if not uri:
             raise GenerationError("Gemini Omni returned no video for this scene.")
@@ -1254,6 +1320,10 @@ class VertexStoryBackend:
         from common.storage import store_to_gcs
         from models.gemini_tts import synthesize_speech
 
+        if voice is None:  # the set narrator: pinned voice and style
+            story_set = self._set(story)
+            narrator = story_set.narrator() if story_set else None
+            voice = narrator.voice if narrator else None
         audio = synthesize_speech(
             text=text,
             prompt=_tts_style(voice),
@@ -1309,7 +1379,8 @@ class VertexStoryBackend:
         from services.story_timeline import probe
 
         scene = story.scenes[index]
-        prompt = clip_prompt(story, scene, continuing=True)
+        story_set = self._set(story)
+        prompt = clip_prompt(story, scene, continuing=True, story_set=story_set)
         prev = story.scenes[index - 1] if index > 0 else None
         prev_id = (prev.interaction_id if prev else "") or self.interaction_of(
             prev_clip_uri
@@ -1323,7 +1394,9 @@ class VertexStoryBackend:
                 prompt,
                 omni_mode="t2v",
                 previous_interaction_id=prev_id,
-                chat_history_json=json.dumps(take_history(story, index, prev_clip_uri)),
+                chat_history_json=json.dumps(
+                    take_history(story, index, prev_clip_uri, story_set)
+                ),
             )
         else:
             request = self._omni_request(

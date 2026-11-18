@@ -1003,33 +1003,200 @@ def _scene_speech_rule(story: Story, current: Scene) -> str:
     )
 
 
-def frame_prompt(story: Story, scene: Scene, has_reference: bool) -> str:
+# ---------------------------------------------------------------------------
+# Set references for frames and clips
+# ---------------------------------------------------------------------------
+
+# Most set images sent with one storyboard frame (Nano Banana takes more, but
+# a few clear references beat many).
+FRAME_MAX_REFERENCES = 8
+
+
+@dataclass
+class Ref:
+    """One reference image: what it is (named in the prompt) and its URI.
+    `group`: "face" / "front" (a character view), "plate" or "prop"."""
+
+    group: str
+    label: str
+    uri: str
+    owner_id: str = ""
+
+
+def scene_cast(story_set, scene: Scene) -> list:
+    """The scene's on-screen characters, in cast order."""
+    if story_set is None:
+        return []
+    out = []
+    for cid in scene.cast:
+        c = story_set.character(cid)
+        if c is not None and not c.narrator and c not in out:
+            out.append(c)
+    return out
+
+
+def scene_refs(story_set, scene: Scene) -> list[Ref]:
+    """The scene's set images in prompt order: each cast member's face then
+    full-body front, the location's wide plate, then the props."""
+    if story_set is None:
+        return []
+    from services.story_sets import image_of
+
+    refs: list[Ref] = []
+    for c in scene_cast(story_set, scene):
+        face, front = image_of(c, "face"), image_of(c, "front")
+        if face:
+            refs.append(Ref("face", f"{c.name}'s face", face.uri, c.id))
+        if front:
+            refs.append(
+                Ref("front", f"{c.name}, full body and outfit", front.uri, c.id)
+            )
+    loc = story_set.location(scene.location_id) if scene.location_id else None
+    plate = image_of(loc, "plate") if loc else None
+    if plate:
+        refs.append(Ref("plate", f"the place, {loc.name}", plate.uri, loc.id))
+    for pid in scene.prop_ids:
+        prop = story_set.prop(pid)
+        item = image_of(prop, "item") if prop else None
+        if item:
+            refs.append(Ref("prop", f"the {prop.name}", item.uri, prop.id))
+    seen: set[str] = set()
+    unique = []
+    for r in refs:
+        if r.uri not in seen:
+            seen.add(r.uri)
+            unique.append(r)
+    return unique
+
+
+def cap_refs(refs: list[Ref], cap: int) -> list[Ref]:
+    """Keep at most `cap` references, order unchanged. Props go first, then
+    extra character views (full-body fronts, last character first), then the
+    location, then whole characters from the end."""
+    out = list(refs)
+    cap = max(0, cap)
+
+    def drop_last(pred) -> bool:
+        for k in range(len(out) - 1, -1, -1):
+            if pred(out[k]):
+                del out[k]
+                return True
+        return False
+
+    while len(out) > cap:
+        faced = {r.owner_id for r in out if r.group == "face"}
+        if drop_last(lambda r: r.group == "prop"):
+            continue
+        # A character keeps one view: its face if it has one.
+        if drop_last(lambda r, faced=faced: r.group == "front" and r.owner_id in faced):
+            continue
+        if drop_last(lambda r: r.group == "plate"):
+            continue
+        out.pop()
+    return out
+
+
+def frame_refs(story_set, scene: Scene, cap: int = FRAME_MAX_REFERENCES) -> list[Ref]:
+    """Set images for a storyboard frame: cast face + front, plate, props."""
+    return cap_refs(scene_refs(story_set, scene), cap)
+
+
+def clip_refs(story_set, scene: Scene, frame_uri: str, cap: int) -> list[Ref]:
+    """Reference-to-video images for a clip: the storyboard frame first, then
+    the scene's set images, capped at `cap` in all (see cap_refs)."""
+    head = (
+        [Ref("frame", "the storyboard frame (how the shot looks)", frame_uri)]
+        if frame_uri
+        else []
+    )
+    rest = [r for r in scene_refs(story_set, scene) if r.uri != frame_uri]
+    return head + cap_refs(rest, cap - len(head))
+
+
+def refs_sentence(labels: list[str]) -> str:
+    """Name each reference image, in order, for the prompt."""
+    if not labels:
+        return ""
+    named = "; ".join(f"image {k + 1} is {label}" for k, label in enumerate(labels))
+    return f" Use the images as references: {named}. Keep every person, place and object exactly as shown."
+
+
+def _cast_text(story: Story, scene: Scene, story_set) -> str:
+    """Who is on screen: the scene's cast looks, else the story's character."""
+    cast = scene_cast(story_set, scene)
+    if cast:
+        return "; ".join(c.look() for c in cast)
+    return story.character
+
+
+def frame_prompt(
+    story: Story,
+    scene: Scene,
+    has_reference: bool,
+    story_set=None,
+    ref_labels: list[str] | None = None,
+) -> str:
+    """Image prompt for a storyboard frame. With a set, the scene's cast,
+    place and props are described and each reference image is named
+    (`ref_labels`, in image order)."""
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     keep = (
         " Keep the same main character, wardrobe, palette and art style as the "
         "reference image."
-        if has_reference
+        if has_reference and not ref_labels
         else ""
     )
-    character = f" Main character: {story.character}." if story.character else ""
+    cast = scene_cast(story_set, scene)
+    who = _cast_text(story, scene, story_set)
+    character = f" {'On screen' if cast else 'Main character'}: {who}." if who else ""
+    loc = (
+        story_set.location(scene.location_id)
+        if story_set and scene.location_id
+        else None
+    )
+    place = f" Place: {loc.look()}." if loc else ""
     return (
-        f"{scene.visual}{character} Style: {style['prompt']}. "
-        f"Aspect ratio {story.aspect_ratio}, one single frame, no text, no captions.{keep}"
+        f"{scene.visual}{character}{place} Style: {style['prompt']}. "
+        f"Aspect ratio {story.aspect_ratio}, one single frame, no text, no captions."
+        f"{keep}{refs_sentence(ref_labels or [])}"
     )
 
 
-def clip_prompt(story: Story, scene: Scene, continuing: bool = False) -> str:
+def speaker_voice(story: Story, scene: Scene, story_set=None) -> str:
+    """The on-camera voice line for a spoken scene: the speaking character's
+    fixed voice description (word for word), else the story's."""
+    if story_set is not None and scene.speaker_id:
+        c = story_set.character(scene.speaker_id)
+        if c is not None and c.voice.description.strip():
+            return c.voice.description.strip()
+    return story.speaker_voice
+
+
+def clip_prompt(
+    story: Story,
+    scene: Scene,
+    continuing: bool = False,
+    story_set=None,
+    ref_labels: list[str] | None = None,
+) -> str:
     """Video prompt for a scene. ``continuing``: the clip continues the
     previous one (a continuous take), so it carries on the same shot and voice.
 
     Every clip has its own sound. Narrated scenes ask for natural ambient
-    sound only, because the narrator's voiceover and the music go on top."""
+    sound only, because the narrator's voiceover and the music go on top.
+    With a set, the scene's cast replaces the story's character text, the
+    speaker's voice description is used word for word, and the reference
+    images (`ref_labels`, in order) are named."""
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cam = CAMERA_PRESETS.get(scene.camera, CAMERA_PRESETS["static"])["prompt"]
+    cast_text = _cast_text(story, scene, story_set)
     base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
+    if scene_cast(story_set, scene):
+        base += f" On screen: {cast_text}."
+    base += refs_sentence(ref_labels or [])
     if continuing:
         # Name the character again: each turn of the thread is its own prompt.
-        who = f" ({story.character})" if story.character else ""
+        who = f" ({cast_text})" if cast_text else ""
         base = (
             f"Continue this exact shot without a cut: the same person{who}, "
             "outfit, place, lighting and camera, and the same voice, pace and "
@@ -1040,8 +1207,20 @@ def clip_prompt(story: Story, scene: Scene, continuing: bool = False) -> str:
             f"{base} Sound: natural ambient sound and sound effects of the "
             "scene only. No speech, dialogue, narration, singing or music."
         )
-    voice = story.speaker_voice or "a voice that matches their age and gender"
-    who = f" ({story.character})" if story.character else ""
+    voice = (
+        speaker_voice(story, scene, story_set)
+        or "a voice that matches their age and gender"
+    )
+    speaker = (
+        story_set.character(scene.speaker_id)
+        if story_set and scene.speaker_id
+        else None
+    )
+    who = (
+        f" ({speaker.look() if speaker else cast_text})"
+        if (speaker or cast_text)
+        else ""
+    )
     return (
         f"{base} The person on screen{who} looks at the camera and says in "
         f'{story.language}: "{scene.narration.strip()}" '

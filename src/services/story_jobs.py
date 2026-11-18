@@ -132,6 +132,15 @@ def mutate_story(story_id: str, owner: str, fn: Callable[[Story], None]) -> Stor
         return store.save(story, owner)
 
 
+def _set_version(story: Story, owner: str) -> int:
+    """The version of the story's set now (0 = no set), recorded with each
+    film so the Edit step can tell when the set changed after it."""
+    if not story.set_id:
+        return 0
+    story_set = get_set_store().get(story.set_id, owner)
+    return story_set.version if story_set else 0
+
+
 def ensure_set(story_id: str, owner: str) -> Story | None:
     """Give a story from before sets its one-character set (lazy migration,
     run when the story is opened). Stories with a set are left alone."""
@@ -876,6 +885,7 @@ def start_video(story_id: str, owner: str) -> Job:
 
         def apply(s: Story) -> None:
             s.final_uri = film
+            s.set_version = _set_version(s, owner)
             s.step = "video"
             if made.get("timeline"):
                 s.timeline_json = json.dumps(made["timeline"])
@@ -973,6 +983,7 @@ def start_export(story_id: str, owner: str) -> Job:
         film = render_task.result_uri
 
         def apply(s: Story) -> None:
+            # Same clips as the render, so set_version stays as it was.
             s.final_uri = film
 
         mutate_story(story_id, owner, apply)

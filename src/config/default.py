@@ -380,6 +380,10 @@ class Default:
     )
     # Parallel model calls per film (storyboard frames, clips).
     STORY_MAX_PARALLEL: int = int(os.environ.get("STORY_MAX_PARALLEL", 3))
+    # Most reference images per clip with a set (the storyboard frame, cast
+    # faces and fronts, location plate, props). Also capped by the video
+    # model's max_reference_images; Omni's real cap is unconfirmed.
+    STORY_MAX_CLIP_REFERENCES: int = int(os.environ.get("STORY_MAX_CLIP_REFERENCES", 6))
 
     image_modifiers: list[str] = field(
         default_factory=lambda: [

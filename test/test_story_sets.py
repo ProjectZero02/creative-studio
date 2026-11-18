@@ -875,3 +875,295 @@ def test_save_as_new_keeps_scene_links(mock_backend, stores):
     assert kept.scenes[0].cast == story.scenes[0].cast
     cleared = story_jobs.attach_set(story.id, OWNER, story.set_id)
     assert cleared.scenes[0].cast == []
+
+
+# ---------------------------------------------------------------------------
+# Rendering with a set: reference order, the cap, prompts
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from services.story_models import (  # noqa: E402
+    Ref,
+    cap_refs,
+    clip_prompt,
+    clip_refs,
+    frame_prompt,
+    frame_refs,
+    scene_refs,
+)
+
+
+def _full_set() -> StorySet:
+    """Two people with face + front, a place with a plate, two props."""
+
+    def person(cid, name):
+        return Character(
+            id=cid,
+            name=name,
+            description=f"{name} look",
+            images=[
+                SetImage("front", f"gs://b/{cid}_front.png"),
+                SetImage("three_quarter", f"gs://b/{cid}_34.png"),
+                SetImage("face", f"gs://b/{cid}_face.png"),
+            ],
+            voice=Voice(description=f"{name} voice, fixed wording"),
+        )
+
+    return StorySet(
+        characters=[
+            person("a", "Ana"),
+            person("b", "Ben"),
+            Character(id="n", name="Narrator", narrator=True),
+        ],
+        locations=[
+            Location(
+                id="cafe",
+                name="Cafe",
+                description="small corner cafe",
+                images=[
+                    SetImage("plate", "gs://b/cafe.png"),
+                    SetImage("angle", "gs://b/cafe2.png"),
+                ],
+            )
+        ],
+        props=[
+            Prop(id="cup", name="cup", images=[SetImage("item", "gs://b/cup.png")]),
+            Prop(id="map", name="map", images=[SetImage("item", "gs://b/map.png")]),
+        ],
+    )
+
+
+def _set_scene(**over) -> Scene:
+    base = dict(
+        visual="They talk at the counter.",
+        frame_uri="gs://b/frame1.png",
+        cast=["a", "b", "n"],
+        location_id="cafe",
+        prop_ids=["cup", "map"],
+    )
+    base.update(over)
+    return Scene(**base)
+
+
+def test_scene_refs_order_faces_fronts_plate_props():
+    refs = scene_refs(_full_set(), _set_scene())
+    assert [r.uri.split("/")[-1] for r in refs] == [
+        "a_face.png",
+        "a_front.png",
+        "b_face.png",
+        "b_front.png",
+        "cafe.png",
+        "cup.png",
+        "map.png",
+    ]
+    assert refs[0].label == "Ana's face"
+    # The narrator is never a reference, and angles are not sent.
+    assert not any("n_" in r.uri or "cafe2" in r.uri for r in refs)
+
+
+def test_clip_refs_put_the_storyboard_frame_first():
+    refs = clip_refs(_full_set(), _set_scene(), "gs://b/frame1.png", cap=10)
+    assert refs[0].group == "frame" and refs[0].uri == "gs://b/frame1.png"
+    assert len(refs) == 8
+
+
+@pytest.mark.parametrize(
+    "cap,expected",
+    [
+        (8, ["frame1", "a_face", "a_front", "b_face", "b_front", "cafe", "cup", "map"]),
+        (
+            6,
+            ["frame1", "a_face", "a_front", "b_face", "b_front", "cafe"],
+        ),  # props first
+        (
+            5,
+            ["frame1", "a_face", "a_front", "b_face", "cafe"],
+        ),  # then extra views, last first
+        (4, ["frame1", "a_face", "b_face", "cafe"]),
+        (3, ["frame1", "a_face", "b_face"]),  # then the place
+        (2, ["frame1", "a_face"]),  # then whole characters from the end
+        (1, ["frame1"]),
+    ],
+)
+def test_clip_refs_cap_drops_props_then_extra_views(cap, expected):
+    refs = clip_refs(_full_set(), _set_scene(), "gs://b/frame1.png", cap=cap)
+    assert [r.uri.split("/")[-1].removesuffix(".png") for r in refs] == expected
+
+
+def test_cap_refs_keeps_order_and_never_goes_below_zero():
+    refs = [Ref("prop", "p", "u1"), Ref("face", "f", "u2", "x"), Ref("prop", "q", "u3")]
+    assert [r.uri for r in cap_refs(refs, 1)] == ["u2"]
+    assert cap_refs(refs, -3) == []
+
+
+def test_frame_refs_are_capped_too():
+    assert len(frame_refs(_full_set(), _set_scene(), cap=3)) == 3
+
+
+def test_clip_reference_cap_is_min_of_model_and_setting(monkeypatch):
+    monkeypatch.setattr(
+        story_service,
+        "Default",
+        lambda: SimpleNamespace(
+            STORY_VIDEO_MODEL="gemini-omni-1.2-flash", STORY_MAX_CLIP_REFERENCES=6
+        ),
+    )
+    assert story_service.clip_reference_cap() == 6  # model allows 10
+    monkeypatch.setattr(
+        story_service,
+        "Default",
+        lambda: SimpleNamespace(
+            STORY_VIDEO_MODEL="gemini-omni-1.2-flash", STORY_MAX_CLIP_REFERENCES=40
+        ),
+    )
+    assert story_service.clip_reference_cap() == 10
+    assert Default.__dataclass_fields__["STORY_MAX_CLIP_REFERENCES"].default == 6
+
+
+def test_clip_inputs_with_a_set_is_ref2v_in_order(monkeypatch):
+    monkeypatch.setattr(story_service, "clip_reference_cap", lambda: 6)
+    scene = _set_scene()
+    out = story_service.clip_inputs(Story(), scene, scene.frame_uri, _full_set())
+    assert out["omni_mode"] == "ref2v"
+    uris = [r.gcs_uri for r in out["r2v_references"]]
+    assert uris[0] == scene.frame_uri and len(uris) == 6
+    assert out["ref_labels"][1] == "Ana's face"
+
+
+def test_clip_inputs_continuity_and_no_set_paths_are_unchanged():
+    scene = _set_scene()
+    cont = story_service.clip_inputs(Story(), scene, "gs://b/last0.png", _full_set())
+    assert cont["omni_mode"] == "i2v"  # starts on the previous clip's last frame
+    plain = story_service.clip_inputs(Story(), scene, scene.frame_uri, None)
+    assert plain["omni_mode"] == "i2v" and "ref_labels" not in plain
+    legacy = story_service.clip_inputs(
+        Story(reference_uri="gs://b/ref.png"), scene, scene.frame_uri, None
+    )
+    assert [r.gcs_uri for r in legacy["r2v_references"]] == [
+        scene.frame_uri,
+        "gs://b/ref.png",
+    ]
+    # A set but nothing of it in this scene: same as without a set.
+    empty = story_service.clip_inputs(
+        Story(),
+        _set_scene(cast=[], location_id="", prop_ids=[]),
+        scene.frame_uri,
+        _full_set(),
+    )
+    assert empty["omni_mode"] == "i2v"
+
+
+def test_clip_prompt_uses_cast_and_speaker_voice_verbatim():
+    st = _full_set()
+    story = Story(character="OLD TEXT", speaker_voice="OLD VOICE")
+    spoken = _set_scene(spoken=True, narration="Hello there.", speaker_id="b")
+    text = clip_prompt(
+        story, spoken, story_set=st, ref_labels=["the storyboard frame", "Ana's face"]
+    )
+    assert "On screen: Ana (Ana look); Ben (Ben look)." in text
+    assert "They speak in Ben voice, fixed wording, the same voice" in text
+    assert "image 1 is the storyboard frame; image 2 is Ana's face" in text
+    assert "OLD TEXT" not in text and "OLD VOICE" not in text
+    cont = clip_prompt(story, spoken, continuing=True, story_set=st)
+    assert cont.startswith(
+        "Continue this exact shot without a cut: the same person (Ana (Ana look); Ben (Ben look))"
+    )
+
+
+def test_clip_prompt_without_a_set_is_unchanged():
+    story = Story(character="a keeper", speaker_voice="a deep voice")
+    sc = Scene(visual="V.", spoken=True, narration="Hi.")
+    text = clip_prompt(story, sc)
+    assert (
+        "The person on screen (a keeper)" in text
+        and "They speak in a deep voice" in text
+    )
+    assert "Use the images" not in text
+
+
+def test_frame_prompt_names_the_references_and_place():
+    st = _full_set()
+    labels = [r.label for r in frame_refs(st, _set_scene())]
+    text = frame_prompt(Story(), _set_scene(), True, st, labels)
+    assert "On screen: Ana (Ana look); Ben (Ben look)." in text
+    assert "Place: Cafe (small corner cafe)." in text
+    assert "image 1 is Ana's face" in text
+    assert "Keep the same main character" not in text  # named refs replace it
+    legacy = frame_prompt(Story(character="a keeper"), Scene(visual="V."), True)
+    assert (
+        "Main character: a keeper." in legacy
+        and "Keep the same main character" in legacy
+    )
+
+
+def test_vertex_frame_and_clip_send_set_references(monkeypatch, set_store):
+    import models.gemini as gemini
+    import models.omni as omni
+
+    st = set_store.save(_full_set(), OWNER)
+    story = Story(owner=OWNER, set_id=st.id, aspect_ratio="16:9", scenes=[_set_scene()])
+    sent = {}
+
+    def fake_image(**kw):
+        sent["image"] = kw
+        return ["gs://b/frame_new.png"], 0, [], None, []
+
+    def fake_omni(request):
+        sent["clip"] = request
+        return "gs://b/clip.mp4", "interaction-1"
+
+    monkeypatch.setattr(gemini, "generate_image_from_prompt_and_images", fake_image)
+    monkeypatch.setattr(omni, "generate_omni_video", fake_omni)
+    monkeypatch.setattr(story_service, "clip_reference_cap", lambda: 6)
+    backend = story_service.VertexStoryBackend.__new__(story_service.VertexStoryBackend)
+    backend.cfg = SimpleNamespace(
+        STORY_VIDEO_MODEL="gemini-omni-1.2-flash", STORY_VIDEO_RESOLUTION="720p"
+    )
+    backend._interactions = {}
+    backend.generate_frame(story, 0, "gs://b/anchor.png")
+    images = sent["image"]["images"]
+    assert images[0] == "gs://b/a_face.png" and images[-1] == "gs://b/anchor.png"
+    assert "image 1 is Ana's face" in sent["image"]["prompt"]
+    monkeypatch.setattr(
+        story_service,
+        "apply_caps",
+        lambda n, d: SimpleNamespace(duration=6, resolution="720p"),
+    )
+    monkeypatch.setattr(
+        "config.omni_models.clamp_duration", lambda model, s: s, raising=False
+    )
+    backend.generate_clip(story, 0, story.scenes[0].frame_uri)
+    req = sent["clip"]
+    assert req.omni_mode == "ref2v"
+    assert [r.gcs_uri for r in req.r2v_references][:2] == [
+        "gs://b/frame1.png",
+        "gs://b/a_face.png",
+    ]
+    assert "image 2 is Ana's face" in req.prompt
+
+
+def test_render_records_the_set_version(mock_backend, stores):
+    story_db, set_db = stores
+    st = set_db.save(_full_set(), OWNER)
+    story = _story_with_scenes(story_db, set_id=st.id, approved=True)
+
+    def frames(s):
+        for i, sc in enumerate(s.scenes):
+            sc.frame_uri = f"local://{s.id}/f{i}.png"
+
+    story_jobs.mutate_story(story.id, OWNER, frames)
+
+    class _Quick(story_service.MockStoryBackend):
+        def generate_clip(self, story, index, start_frame_uri):
+            return f"local://{story.id}/clip{index}.mp4"
+
+        def stitch(self, story, plan, music_uri, voice_uris):
+            return "local://film.mp4"
+
+    story_service.set_backend(_Quick(speed=0))
+    try:
+        _run(story_jobs.start_video(story.id, OWNER))
+    finally:
+        story_service.set_backend(mock_backend)
+    assert story_db.get(story.id, OWNER).set_version == st.version
