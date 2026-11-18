@@ -113,7 +113,8 @@ class Default:
     LIVE_AGENT_OFFLINE: bool = (
         os.environ.get("LIVE_AGENT_OFFLINE", "false").lower() == "true"
     )
-    MODEL_ID: str = os.environ.get("MODEL_ID", "gemini-3.5-flash")
+    # Newest Flash-tier Gemini (3.8 Flash; served from GEMINI_LOCATION=global).
+    MODEL_ID: str = os.environ.get("MODEL_ID", "gemini-3.8-flash")
     INIT_VERTEX: bool = True
     GEMINI_IMAGE_GEN_MODEL: str = os.environ.get(
         "GEMINI_IMAGE_GEN_MODEL",
@@ -129,7 +130,7 @@ class Default:
 
     GEMINI_AUDIO_ANALYSIS_MODEL_ID: str = os.environ.get(
         "GEMINI_AUDIO_ANALYSIS_MODEL_ID",
-        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",  # newest Flash-Lite; takes audio input
     )
     # Gemini Writers Workshop: the model picker offers exactly these models, and
     # GEMINI_WRITERS_WORKSHOP_MODEL_ID is the one preselected (it is added to the
@@ -155,7 +156,7 @@ class Default:
     )
     GEMINI_CRITIQUE_MODEL_ID: str = os.environ.get(
         "GEMINI_CRITIQUE_MODEL_ID",
-        "gemini-3-flash-preview",
+        "gemini-3.8-flash",
     )
     GEMINI_CRITIQUE_LOCATION: str = os.environ.get(
         "GEMINI_CRITIQUE_LOCATION",
