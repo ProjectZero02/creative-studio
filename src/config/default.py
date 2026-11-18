@@ -272,7 +272,12 @@ class Default:
 
     # Lyria
     LYRIA_LOCATION: str = os.environ.get("LYRIA_LOCATION", "us-central1")
+    # Endpoint id for the Lyria 2 predict path only (Lyria 3 uses Interactions).
     LYRIA_MODEL_VERSION: str = os.environ.get("LYRIA_MODEL_VERSION", "lyria-002")
+    # The Music page's preselected model (a config.lyria_models version_id).
+    # Lyria 3 Pro is the newest; set 3-clip-preview or 2 if your project lacks
+    # Lyria 3 Pro access.
+    LYRIA_DEFAULT_MODEL: str = os.environ.get("LYRIA_DEFAULT_MODEL", "3-pro-preview")
     LYRIA_PROJECT_ID: str = os.environ.get("LYRIA_PROJECT_ID", PROJECT_ID)
     MEDIA_BUCKET: str = os.environ.get("MEDIA_BUCKET", _BUCKET_BASE)
 

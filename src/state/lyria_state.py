@@ -2,6 +2,8 @@ import mesop as me
 from dataclasses import field
 from typing import Optional
 
+from config.default import Default
+
 @me.stateclass
 class AudioMetricsState:
     mean_pitch_hz: float = 0.0
@@ -32,7 +34,7 @@ class PageState:
     music_display_urls: list[str] = field(default_factory=list)
     selected_track_index: int = 0
 
-    selected_model_id: str = "3-clip-preview"
+    selected_model_id: str = Default().LYRIA_DEFAULT_MODEL
     sample_count: int = 1
     
     lyrics_input: str = ""
