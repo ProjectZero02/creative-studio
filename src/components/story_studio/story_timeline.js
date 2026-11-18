@@ -66,70 +66,120 @@ class StoryTimeline extends LitElement {
   };
 
   static styles = css`
-    :host { display: block; color: var(--sys-on-surface, #111); font: 14px/1.4 inherit; }
+    :host {
+      display: block; color: var(--sys-on-surface, #e7e9ed); font: 14px/1.4 inherit;
+      --tl-h: 40px;
+      --tl-radius: var(--gm-radius-md, 12px);
+      --tl-radius-sm: var(--gm-radius-sm, 8px);
+      --tl-tonal: var(--gm-tonal, rgba(255,255,255,.08));
+      --tl-tonal-hover: var(--gm-tonal-hover, rgba(255,255,255,.12));
+      --tl-tonal-press: var(--gm-tonal-press, rgba(255,255,255,.16));
+      --tl-field: var(--gm-field-bg, rgba(255,255,255,.05));
+      --tl-line: var(--gm-field-line, rgba(255,255,255,.10));
+      --tl-panel: var(--sys-surface-container-low, #16181d);
+      --tl-base: var(--sys-surface-container-high, #22252c);
+      --tl-muted: var(--sys-on-surface-variant, #a6abb5);
+      --tl-accent: var(--sys-primary, #8cb4ff);
+      --tl-video: color-mix(in srgb, var(--tl-accent) 34%, var(--tl-base));
+      --tl-voice: color-mix(in srgb, #3ccf9b 30%, var(--tl-base));
+      --tl-music: color-mix(in srgb, #b98cff 30%, var(--tl-base));
+      --tl-text: color-mix(in srgb, #ffb35c 30%, var(--tl-base));
+    }
     .wrap { display: grid; gap: 12px; }
-    .top { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+    /* Preview and inspector share one row height. */
+    .top { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: stretch; }
     @media (max-width: 900px) { .top { grid-template-columns: 1fr; } }
-    .stage { position: relative; background: #000; border-radius: 12px; overflow: hidden; width: 100%; }
+    .viewer { display: grid; gap: 8px; align-content: start; }
+    .stage { position: relative; background: #000; border-radius: var(--tl-radius); overflow: hidden; width: 100%; }
     .stage.ar169 { aspect-ratio: 16 / 9; }
-    .stage.ar916 { aspect-ratio: 9 / 16; max-height: 70vh; width: auto; margin: 0 auto; }
-    .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+    .stage.ar916 { aspect-ratio: 9 / 16; max-height: 64vh; width: auto; margin: 0 auto; }
+    .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; border-radius: 0; }
     .stage video.hide { visibility: hidden; }
     .title { position: absolute; left: 7%; right: 7%; text-align: center; color: #fff; font-weight: 600;
              text-shadow: 0 2px 6px rgba(0,0,0,.7); pointer-events: none; line-height: 1.25; }
     .title.top { top: 8%; } .title.center { top: 50%; transform: translateY(-50%); } .title.bottom { bottom: 8%; }
-    .empty { position: absolute; inset: 0; display: grid; place-items: center; color: #bbb; }
-    .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .bar .time { font-variant-numeric: tabular-nums; min-width: 120px; color: var(--sys-on-surface-variant, #555); }
+    .transport { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: var(--tl-h); }
+    .transport .time { font-variant-numeric: tabular-nums; color: var(--tl-muted); font-size: 13px; }
+    .transport .mid { display: flex; gap: 8px; }
+    .bar { display: flex; gap: 8px; align-items: center; height: var(--tl-h); }
+    .sep { width: 1px; height: 24px; background: var(--tl-line); margin: 0 4px; }
     .spacer { flex: 1; }
-    button { font: inherit; min-height: 40px; padding: 0 14px; border-radius: 20px; cursor: pointer;
-             border: 1px solid var(--sys-outline-variant, #c4c7c5); background: var(--sys-surface, #fff);
-             color: var(--sys-on-surface, #111); display: inline-flex; align-items: center; gap: 6px; }
-    button.primary { background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); border-color: transparent; }
-    button.icon { width: 40px; padding: 0; justify-content: center; }
-    button:disabled { opacity: .45; cursor: default; }
+    button { font: inherit; font-size: 14px; font-weight: 500; height: var(--tl-h); padding: 0 14px; border-radius: var(--tl-radius);
+             cursor: pointer; border: 0; background: var(--tl-tonal); color: var(--sys-on-surface, #e7e9ed);
+             display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+             transition: background-color 150ms ease, transform 150ms ease; }
+    button:hover:not(:disabled) { background: var(--tl-tonal-hover); }
+    button:active:not(:disabled) { background: var(--tl-tonal-press); transform: scale(.98); }
+    button.primary { background: var(--tl-accent); color: var(--sys-on-primary, #0b1d3f); }
+    button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--tl-accent) 88%, #fff); }
+    button.icon { width: var(--tl-h); padding: 0; }
+    button.ghost { background: transparent; }
+    button.ghost:hover:not(:disabled) { background: var(--tl-tonal); }
+    button:disabled { opacity: .4; cursor: default; }
     button:focus-visible, .clip:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
-      outline: 2px solid var(--gm-focus, var(--sys-primary, #1a5fd8)); outline-offset: 2px; }
-    svg { width: 20px; height: 20px; fill: currentColor; }
-    .panel { border: 1px solid var(--sys-outline-variant, #c4c7c5); border-radius: 12px; padding: 14px;
-             background: var(--sys-surface-container-low, #f7f8fa); display: grid; gap: 10px; }
-    .panel h3 { margin: 0; font-size: 15px; }
-    .panel p { margin: 0; color: var(--sys-on-surface-variant, #555); font-size: 13px; }
-    label { display: grid; gap: 4px; font-size: 13px; color: var(--sys-on-surface-variant, #555); }
-    input[type=range] { width: 100%; }
-    select, textarea, input[type=number] { font: inherit; padding: 8px; border-radius: 8px;
-             border: 1px solid var(--sys-outline-variant, #c4c7c5); background: var(--sys-surface, #fff);
-             color: var(--sys-on-surface, #111); }
-    textarea { resize: vertical; min-height: 60px; }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; }
-    .check { display: flex; gap: 8px; align-items: center; color: var(--sys-on-surface, #111); }
-    .tracks { border: 1px solid var(--sys-outline-variant, #c4c7c5); border-radius: 12px; overflow: hidden;
-              background: var(--sys-surface, #fff); display: grid; grid-template-columns: 76px minmax(0, 1fr); }
-    .labels { border-right: 1px solid var(--sys-outline-variant, #c4c7c5); background: var(--sys-surface-container-low, #f7f8fa); }
-    .labels div { height: 52px; display: flex; align-items: center; padding: 0 10px; font-size: 13px; font-weight: 600; }
-    .labels .rl { height: 28px; }
-    .scroll { overflow-x: auto; overflow-y: hidden; position: relative; }
+      outline: 2px solid var(--gm-focus, var(--tl-accent)); outline-offset: 2px; }
+    svg { width: 20px; height: 20px; fill: currentColor; flex: none; }
+    .panel { border-radius: var(--tl-radius); padding: 16px; background: var(--tl-panel); display: flex; flex-direction: column;
+             gap: 14px; min-height: 0; overflow-y: auto; }
+    .panel h3 { margin: 0; font-size: 15px; font-weight: 600; }
+    .panel .meta { margin: -10px 0 0; color: var(--tl-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+    .panel .empty { margin: auto; color: var(--tl-muted); text-align: center; }
+    .panel .foot { margin-top: auto; }
+    .field { display: grid; gap: 6px; font-size: 13px; color: var(--tl-muted); }
+    .field .val { float: right; color: var(--sys-on-surface, #e7e9ed); font-variant-numeric: tabular-nums; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    select, textarea, input[type=number] { font: inherit; font-size: 14px; color: var(--sys-on-surface, #e7e9ed);
+             background: var(--tl-field); border: 1px solid var(--tl-line); border-radius: var(--tl-radius-sm); box-sizing: border-box; width: 100%; }
+    select, input[type=number] { height: var(--tl-h); padding: 0 10px; }
+    select option { background: var(--tl-base); }
+    textarea { resize: vertical; min-height: 72px; padding: 10px; }
+    input[type=range] { width: 100%; accent-color: var(--tl-accent); height: 20px; margin: 0; }
+    .check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--sys-on-surface, #e7e9ed); }
+    .check input { width: 18px; height: 18px; accent-color: var(--tl-accent); margin: 0; }
+    .zoom { display: flex; align-items: center; gap: 4px; }
+    .zoom input { width: 120px; }
+    .tracks { border-radius: var(--tl-radius); overflow: hidden; background: var(--tl-panel);
+              display: grid; grid-template-columns: 120px minmax(0, 1fr); }
+    .heads { border-right: 1px solid var(--tl-line); }
+    .heads div { display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 13px; font-weight: 500;
+                 color: var(--tl-muted); border-bottom: 1px solid var(--tl-line); box-sizing: border-box; }
+    .heads svg { width: 18px; height: 18px; }
+    .heads .rl { height: 28px; }
+    .h-video { height: 64px; } .h-voice, .h-music { height: 44px; } .h-text { height: 40px; }
+    .scroll { overflow-x: auto; overflow-y: hidden; position: relative; scrollbar-width: thin; scrollbar-color: var(--tl-line) transparent; }
     .inner { position: relative; }
-    .ruler { height: 28px; position: relative; cursor: pointer; border-bottom: 1px solid var(--sys-outline-variant, #c4c7c5);
-             touch-action: none; user-select: none; }
-    .tick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--sys-outline-variant, #c4c7c5);
-            font-size: 11px; padding-left: 3px; color: var(--sys-on-surface-variant, #555); }
-    .lane { height: 52px; position: relative; border-bottom: 1px solid var(--sys-surface-container, #eceef1); }
-    .clip { position: absolute; top: 6px; height: 40px; border-radius: 8px; box-sizing: border-box; overflow: hidden;
-            padding: 0 14px; display: flex; align-items: center; font-size: 12px; font-weight: 600; white-space: nowrap;
-            cursor: grab; user-select: none; touch-action: none; border: 2px solid transparent; color: #fff; }
-    .clip.video { background: #3d5afe; } .clip.voice { background: #00897b; }
-    .clip.music { background: #8e24aa; } .clip.text { background: #ef6c00; }
-    .clip.sel { border-color: var(--sys-on-surface, #111); box-shadow: 0 0 0 2px var(--sys-surface, #fff) inset; }
-    .clip.drag { opacity: .8; cursor: grabbing; z-index: 2; }
-    .clip .fade { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(0,0,0,.35), transparent); pointer-events: none; }
-    .clip span { overflow: hidden; text-overflow: ellipsis; pointer-events: none; position: relative; }
-    .edge { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; }
+    .ruler { height: 28px; position: relative; cursor: pointer; border-bottom: 1px solid var(--tl-line); touch-action: none; user-select: none; box-sizing: border-box; }
+    .tick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--tl-line); font-size: 11px; padding: 6px 0 0 4px;
+            color: var(--tl-muted); font-variant-numeric: tabular-nums; box-sizing: border-box; }
+    .lane { position: relative; border-bottom: 1px solid var(--tl-line); box-sizing: border-box; }
+    .clip { position: absolute; top: 4px; bottom: 4px; border-radius: 6px; box-sizing: border-box; overflow: hidden;
+            padding: 0 12px; display: flex; align-items: center; font-size: 12px; font-weight: 500; white-space: nowrap;
+            cursor: grab; user-select: none; touch-action: none; outline: 2px solid transparent; outline-offset: -2px;
+            color: var(--sys-on-surface, #e7e9ed); background-size: auto 100%; background-repeat: repeat-x; }
+    .clip.video { background-color: var(--tl-video); } .clip.voice { background-color: var(--tl-voice); }
+    .clip.music { background-color: var(--tl-music); } .clip.text { background-color: var(--tl-text); }
+    .clip.thumbs { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+    .clip.thumbs::before { content: ''; position: absolute; inset: 0; background: linear-gradient(0deg, rgba(0,0,0,.55), rgba(0,0,0,0) 70%); }
+    .clip.sel { outline-color: var(--tl-accent); }
+    .clip.drag { opacity: .85; cursor: grabbing; z-index: 2; }
+    .clip .fade { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(0,0,0,.45), transparent); pointer-events: none; }
+    .clip span { overflow: hidden; text-overflow: ellipsis; pointer-events: none; position: relative; align-self: flex-end; padding-bottom: 6px; }
+    .clip.voice span, .clip.music span, .clip.text span { align-self: center; padding: 0; }
+    .edge { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 1; }
     .edge.l { left: 0; } .edge.r { right: 0; }
-    .edge::after { content: ''; position: absolute; top: 12px; bottom: 12px; left: 4px; width: 2px; background: rgba(255,255,255,.7); border-radius: 1px; }
-    .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #e53935; pointer-events: none; z-index: 3; }
-    .hint { font-size: 12px; color: var(--sys-on-surface-variant, #555); margin: 0; }
-    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .clip.sel .edge { background: var(--tl-accent); }
+    .head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--tl-accent); pointer-events: none; z-index: 3; }
+    .head::before { content: ''; position: absolute; top: 0; left: -5px; width: 12px; height: 10px; background: var(--tl-accent); border-radius: 2px 2px 6px 6px; }
+    .lbl { display: none; }
+    @media (max-width: 600px) {
+      .tracks { grid-template-columns: 48px minmax(0, 1fr); }
+      .heads div span { display: none; }
+      .bar .lbl-hide { display: none; }
+      .bar > button { width: var(--tl-h); padding: 0; flex: none; }
+      .bar { gap: 6px; }
+      .sep { margin: 0; }
+      .zoom input { display: none; }
+    }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   `;
 
@@ -148,6 +198,7 @@ class StoryTimeline extends LitElement {
     this._pps = 0;
     this._drag = null;
     this._undo = [];
+    this._redo = [];
     this._audio = new Map();
     this._raf = 0;
     this._onMove = (e) => this._dragMove(e);
@@ -210,7 +261,12 @@ class StoryTimeline extends LitElement {
   }
 
   // ---------- changes ----------
-  _snapshot() { this._undo.push(JSON.stringify(this._tl)); if (this._undo.length > 50) this._undo.shift(); }
+  _pushUndo(json) {
+    this._undo.push(json);
+    if (this._undo.length > 50) this._undo.shift();
+    this._redo = []; // a new change ends the redo chain
+  }
+  _snapshot() { this._pushUndo(JSON.stringify(this._tl)); }
   _commit() {
     this._layoutVideo();
     const json = JSON.stringify(this._tl);
@@ -226,7 +282,16 @@ class StoryTimeline extends LitElement {
   }
   _undoLast() {
     if (!this._undo.length || this.busy) return;
+    this._redo.push(JSON.stringify(this._tl));
     this._tl = JSON.parse(this._undo.pop());
+    if (this._sel && !this._find(this._sel)) this._sel = '';
+    this._commit();
+  }
+  _redoLast() {
+    if (!this._redo.length || this.busy) return;
+    this._undo.push(JSON.stringify(this._tl));
+    this._tl = JSON.parse(this._redo.pop());
+    if (this._sel && !this._find(this._sel)) this._sel = '';
     this._commit();
   }
   _addTitle() {
@@ -416,7 +481,7 @@ class StoryTimeline extends LitElement {
       rest.splice(at, 0, f.clip);
       this._track('video').clips = rest;
     }
-    this._undo.push(d.before);
+    this._pushUndo(d.before);
     this._commit();
     this._seek(this._t);
   }
@@ -436,7 +501,9 @@ class StoryTimeline extends LitElement {
     const tag = (e.composedPath()[0]?.tagName || '').toLowerCase();
     if (['input', 'textarea', 'select'].includes(tag)) return;
     if (e.key === ' ') { e.preventDefault(); this._togglePlay(); }
+    else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); this._redoLast(); }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this._undoLast(); }
+    else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); this._split(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && this._sel) { e.preventDefault(); this._remove(this._sel); }
     else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && this._sel) {
       const f = this._find(this._sel);
@@ -451,16 +518,22 @@ class StoryTimeline extends LitElement {
   // ---------- render ----------
   _zoom(f) { this._pps = clamp(this._pps * f, 4, 400); }
 
+  _thumb(c) {
+    if (c.scene === undefined || c.scene < 0) return '';
+    try { return (JSON.parse(this.mediaJson || '{}'))[`thumb:${c.scene}`] || ''; } catch (e) { return ''; }
+  }
+
   _clipEl(kind, c) {
     const left = (+c.start || 0) * this._pps + (kind === 'video' && c._dx ? c._dx * this._pps : 0);
     const width = Math.max(14, clipLen(c) * this._pps);
-    const label = kind === 'text' ? c.text : (c.label || (kind === 'music' ? 'Music' : kind === 'voice' ? 'Voice line' : 'Clip'));
+    const label = kind === 'text' ? c.text : (c.label || (kind === 'music' ? 'Music' : kind === 'voice' ? 'Voice' : 'Clip'));
     const sel = this._sel === c.id;
     const dragging = this._drag && this._drag.id === c.id;
-    return html`<div class="clip ${kind} ${sel ? 'sel' : ''} ${dragging ? 'drag' : ''}" tabindex="0" role="button"
+    const thumb = kind === 'video' ? this._thumb(c) : '';
+    return html`<div class="clip ${kind} ${thumb ? 'thumbs' : ''} ${sel ? 'sel' : ''} ${dragging ? 'drag' : ''}" tabindex="0" role="button"
         aria-pressed=${sel ? 'true' : 'false'}
         aria-label="${`${LANE_LABEL[kind]}: ${label}, ${fmt(c.start)} to ${fmt(clipEnd(c))}`}"
-        style="left:${left}px;width:${width}px"
+        style="left:${left}px;width:${width}px;${thumb ? `background-image:url('${thumb}')` : ''}"
         @pointerdown=${(e) => this._dragStart(e, kind, c, 'move')}
         @click=${() => { if (Date.now() - (this._dragEndedAt || 0) < 250) return; this._sel = c.id; }}
         @focus=${() => { this._sel = c.id; }}>
@@ -473,7 +546,7 @@ class StoryTimeline extends LitElement {
 
   _ticks(total) {
     const pps = this._pps;
-    const step = [0.5, 1, 2, 5, 10, 15, 30, 60].find((s) => s * pps >= 60) || 120;
+    const step = [0.5, 1, 2, 5, 10, 15, 30, 60].find((s) => s * pps >= 64) || 120;
     const out = [];
     for (let t = 0; t <= total + step; t += step) {
       out.push(html`<div class="tick" style="left:${t * pps}px">${fmt(t).replace('.0', '')}</div>`);
@@ -483,96 +556,125 @@ class StoryTimeline extends LitElement {
 
   _inspector() {
     const f = this._sel ? this._find(this._sel) : null;
-    if (!f) {
-      return html`<div class="panel">
-        <h3>Edit your film</h3>
-        <p>Select a clip to change it. Drag a clip to move it, drag its edges to trim it. Drag a video clip
-          sideways to change the scene order. Space plays, Ctrl+Z undoes, Delete removes the selected clip.</p>
-        <button @click=${this._addTitle} ?disabled=${this.busy}>${ICON.title} Add a title at the playhead</button>
-      </div>`;
-    }
+    if (!f) return html`<aside class="panel" aria-label="Clip settings"><p class="empty">Select a clip to edit it</p></aside>`;
     const { kind, clip: c } = f;
     const pct = Math.round((+c.gain || 0) * 100);
     const vid = this._clips('video');
     const vi = vid.findIndex((x) => x.id === c.id);
-    return html`<div class="panel">
-      <h3>${kind === 'text' ? 'Title' : kind === 'video' ? (c.label || 'Video clip') : kind === 'voice' ? 'Voice line' : 'Music'}</h3>
-      <p>${fmt(c.start)} to ${fmt(clipEnd(c))} (${clipLen(c).toFixed(1)} s)</p>
+    const name = kind === 'text' ? 'Title' : kind === 'video' ? (c.label || 'Clip') : kind === 'voice' ? 'Voice' : 'Music';
+    return html`<aside class="panel" aria-label="Clip settings">
+      <h3>${name}</h3>
+      <p class="meta">${fmt(c.start)} – ${fmt(clipEnd(c))} · ${clipLen(c).toFixed(1)} s</p>
       ${kind === 'text' ? html`
-        <label>Text<textarea .value=${c.text} @change=${(e) => this._set(c.id, 'text', e.target.value.slice(0, 300))}></textarea></label>
-        <div class="row">
-          <label>Position<select @change=${(e) => this._set(c.id, 'pos', e.target.value)}>
+        <label class="field">Text<textarea .value=${c.text} @change=${(e) => this._set(c.id, 'text', e.target.value.slice(0, 300))}></textarea></label>
+        <div class="grid2">
+          <label class="field">Position<select @change=${(e) => this._set(c.id, 'pos', e.target.value)}>
             ${['top', 'center', 'bottom'].map((p) => html`<option value=${p} ?selected=${c.pos === p}>${p[0].toUpperCase() + p.slice(1)}</option>`)}
           </select></label>
-          <label>Size<select @change=${(e) => this._set(c.id, 'size', +e.target.value)}>
+          <label class="field">Size<select @change=${(e) => this._set(c.id, 'size', +e.target.value)}>
             ${[[32, 'Small'], [48, 'Medium'], [72, 'Large'], [104, 'Huge']].map(([v, l]) => html`<option value=${v} ?selected=${+c.size === v}>${l}</option>`)}
           </select></label>
-          <label>Seconds<input type="number" min="0.5" max="60" step="0.5" .value=${String(c.dur)}
-            @change=${(e) => this._set(c.id, 'dur', clamp(+e.target.value || 1, 0.2, 3600))}></label>
         </div>` : html`
-        <label>${kind === 'video' ? 'Clip sound (speech and room)' : 'Volume'}: ${pct}%
+        <label class="field"><span>Volume <span class="val">${pct}%</span></span>
           <input type="range" min="0" max="200" step="5" .value=${String(pct)}
-            aria-label="${kind === 'video' ? 'Clip sound volume' : 'Volume'}"
             @change=${(e) => this._set(c.id, 'gain', +e.target.value / 100)}></label>`}
       ${kind === 'video' ? html`
-        <label>Fade in from the clip before<select ?disabled=${vi === 0} @change=${(e) => this._set(c.id, 'fade_in', +e.target.value)}>
-          ${[[0, 'Cut (no fade)'], [0.25, '0.25 s'], [0.5, '0.5 s'], [1, '1 s']].map(([v, l]) => html`<option value=${v} ?selected=${+c.fade_in === v}>${l}</option>`)}
+        <label class="field">Transition in<select ?disabled=${vi === 0} @change=${(e) => this._set(c.id, 'fade_in', +e.target.value)}>
+          ${[[0, 'Cut'], [0.25, 'Crossfade 0.25 s'], [0.5, 'Crossfade 0.5 s'], [1, 'Crossfade 1 s']].map(([v, l]) => html`<option value=${v} ?selected=${+c.fade_in === v}>${l}</option>`)}
         </select></label>
-        <div class="row">
-          <button ?disabled=${this.busy || vi <= 0} @click=${() => this._reorder(c.id, -1)}>Move earlier</button>
-          <button ?disabled=${this.busy || vi >= vid.length - 1} @click=${() => this._reorder(c.id, 1)}>Move later</button>
+        <div class="grid2">
+          <button ?disabled=${this.busy || vi <= 0} @click=${() => this._reorder(c.id, -1)}>${ICON.left} Earlier</button>
+          <button ?disabled=${this.busy || vi >= vid.length - 1} @click=${() => this._reorder(c.id, 1)}>Later ${ICON.right}</button>
         </div>` : nothing}
       ${kind === 'music' ? html`<label class="check"><input type="checkbox" .checked=${this._track('music').duck !== false}
           @change=${(e) => this._change(() => { this._track('music').duck = e.target.checked; })}>
-          Lower the music while someone speaks</label>` : nothing}
-      <div class="row">
-        <button @click=${() => this._remove(c.id)} ?disabled=${this.busy || (kind === 'video' && vid.length <= 1)}>${ICON.del} Remove</button>
-        <button @click=${() => { this._sel = ''; }}>Done</button>
-      </div>
-    </div>`;
+          Lower under speech</label>` : nothing}
+    </aside>`;
+  }
+
+  _canSplit() {
+    const f = this._sel ? this._find(this._sel) : null;
+    if (!f) return false;
+    const c = f.clip;
+    return this._t > c.start + MIN_LEN && this._t < clipEnd(c) - MIN_LEN;
+  }
+
+  _split() {
+    if (!this._canSplit()) return;
+    this._change(() => {
+      const f = this._find(this._sel);
+      const { kind, clip: c } = f;
+      const tr = this._track(kind);
+      const at = this._t - c.start;
+      const b = clone(c);
+      b.id = uid();
+      if (kind === 'text') {
+        b.start = r3(this._t); b.dur = r3(c.dur - at); c.dur = r3(at);
+      } else {
+        const mid = r3((+c.in || 0) + at * (+c.tempo || 1));
+        b.in = mid; c.out = mid; b.start = r3(this._t);
+        if (kind === 'video') b.fade_in = 0;
+      }
+      tr.clips.splice(tr.clips.indexOf(c) + 1, 0, b);
+      this._sel = b.id;
+    });
   }
 
   render() {
-    if (!this._tl) return html`<p class="hint">No timeline yet. Render the film first.</p>`;
+    if (!this._tl) return html`<p class="empty">No timeline yet.</p>`;
     if (!this._pps) this._fit();
     const total = this._duration();
     const width = Math.max(total * this._pps + 120, 200);
     const t = this._t;
     const titles = this._clips('text').filter((c) => t >= c.start && t < clipEnd(c));
     const h = this.renderRoot?.querySelector('.stage')?.clientHeight || 360;
+    const zoomVal = Math.round(Math.log(this._pps / 4) / Math.log(100) * 100);
     return html`<div class="wrap">
       <div class="top">
-        <div>
+        <div class="viewer">
           <div class="stage ${this.aspect === '9:16' ? 'ar916' : 'ar169'}">
             <video playsinline preload="auto" aria-label="Preview"></video>
             ${titles.map((c) => html`<div class="title ${c.pos}" style="font-size:${Math.max(10, (+c.size || 48) * h / 720)}px">${c.text}</div>`)}
-            ${total ? nothing : html`<div class="empty">Empty timeline</div>`}
           </div>
-          <div class="bar" style="margin-top:8px">
-            <button class="primary icon" aria-label=${this._playing ? 'Pause' : 'Play'} @click=${this._togglePlay}>${this._playing ? ICON.pause : ICON.play}</button>
-            <button class="icon" aria-label="Back to start" @click=${() => this._seek(0)}>${ICON.start}</button>
-            <span class="time" aria-live="off">${fmt(t)} / ${fmt(total)}</span>
-            <span class="spacer"></span>
-            <button @click=${this._addTitle} ?disabled=${this.busy}>${ICON.title} Add title</button>
-            <button class="icon" aria-label="Undo" ?disabled=${this.busy || !this._undo.length} @click=${this._undoLast}>${ICON.undo}</button>
-            <button class="icon" aria-label="Zoom out" @click=${() => this._zoom(1 / 1.5)}>${ICON.minus}</button>
-            <button class="icon" aria-label="Zoom in" @click=${() => this._zoom(1.5)}>${ICON.plus}</button>
+          <div class="transport">
+            <span class="time">${fmt(t)} / ${fmt(total)}</span>
+            <div class="mid">
+              <button class="icon ghost" aria-label="Back to start" @click=${() => this._seek(0)}>${ICON.start}</button>
+              <button class="icon primary" aria-label=${this._playing ? 'Pause' : 'Play'} @click=${this._togglePlay}>${this._playing ? ICON.pause : ICON.play}</button>
+            </div>
+            <span></span>
           </div>
         </div>
         ${this._inspector()}
       </div>
+      <div class="bar" role="toolbar" aria-label="Edit">
+        <button title="Split at playhead (S)" ?disabled=${this.busy || !this._canSplit()} @click=${this._split}>${ICON.split}<span class="lbl-hide">Split</span></button>
+        <button title="Delete (Del)" ?disabled=${this.busy || !this._sel} @click=${() => this._remove(this._sel)}>${ICON.del}<span class="lbl-hide">Delete</span></button>
+        <button title="Add a title at the playhead" ?disabled=${this.busy} @click=${this._addTitle}>${ICON.title}<span class="lbl-hide">Add title</span></button>
+        <span class="sep"></span>
+        <button class="icon" title="Undo (Ctrl+Z)" aria-label="Undo" ?disabled=${this.busy || !this._undo.length} @click=${this._undoLast}>${ICON.undo}</button>
+        <button class="icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" ?disabled=${this.busy || !this._redo.length} @click=${this._redoLast}>${ICON.redo}</button>
+        <span class="spacer"></span>
+        <div class="zoom">
+          <button class="icon ghost" aria-label="Zoom out" @click=${() => this._zoom(1 / 1.5)}>${ICON.minus}</button>
+          <input type="range" min="0" max="100" .value=${String(zoomVal)} aria-label="Zoom"
+            @input=${(e) => { this._pps = 4 * Math.pow(100, +e.target.value / 100); }}>
+          <button class="icon ghost" aria-label="Zoom in" @click=${() => this._zoom(1.5)}>${ICON.plus}</button>
+        </div>
+      </div>
       <div class="tracks" role="group" aria-label="Timeline">
-        <div class="labels"><div class="rl"></div>${KINDS.map((k) => html`<div>${LANE_LABEL[k]}</div>`)}</div>
-        <div class="scroll">
+        <div class="heads" aria-hidden="true"><div class="rl"></div>${KINDS.map((k) => html`<div class="h-${k}">${TRACK_ICON[k]}<span>${LANE_LABEL[k]}</span></div>`)}</div>
+        <div class="scroll" @pointerdown=${(e) => { if (e.target.classList.contains('lane')) this._sel = ''; }}>
           <div class="inner" style="width:${width}px">
             <div class="ruler" @pointerdown=${(e) => this._rulerDown(e)} aria-hidden="true">${this._ticks(total)}</div>
-            ${KINDS.map((k) => html`<div class="lane" aria-label="${LANE_LABEL[k]} track">${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c))}</div>`)}
+            ${KINDS.map((k) => html`<div class="lane h-${k}" aria-label="${LANE_LABEL[k]} track">${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c))}</div>`)}
             <div class="head" style="left:${t * this._pps}px"></div>
           </div>
         </div>
       </div>
     </div>`;
   }
+
 
   firstUpdated() {
     // Fit the whole film to the lane width once the lanes exist.
@@ -594,6 +696,16 @@ const ICON = {
   minus: svg('M19 13H5v-2h14z'),
   title: svg('M5 4v3h5.5v12h3V7H19V4z'),
   del: svg('M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z'),
+  redo: svg('M11.5 8c2.65 0 5.05 1 6.9 2.6L22 7v9h-9l3.62-3.62A7.95 7.95 0 0 0 3.6 16l-2.36-.78A10.5 10.5 0 0 1 11.5 8z'),
+  left: svg('M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z'),
+  right: svg('M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z'),
+  split: svg('M11 2h2v20h-2zM4 7h5v10H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm11 0h5a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-5z'),
+};
+const TRACK_ICON = {
+  video: svg('M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z'),
+  voice: svg('M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z'),
+  music: svg('M12 3v10.55A4 4 0 1 0 14 17V7h4V3z'),
+  text: ICON.title,
 };
 
 customElements.define('story-timeline', StoryTimeline);
