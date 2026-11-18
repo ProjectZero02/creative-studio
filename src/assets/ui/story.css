@@ -268,12 +268,19 @@ html body .gm-segmented.ss-audio-type { justify-content: flex-start; margin: 6px
 .ss-strip-running .ss-media-overlay { background: rgba(0, 0, 0, 0.45); color: #fff; }
 .ss-strip-label { display: flex; justify-content: space-between; gap: 6px; color: var(--sys-on-surface-variant); }
 
-/* ---------- Sticky action bar ---------- */
+/* ---------- Sticky action bar ----------
+   A floating dock with its own surface, so it reads as a toolbar over the
+   cards instead of a solid band cutting through them (the page background is
+   a gradient, so a flat background-colour strip showed as a dark bar). */
 .ss-actions {
-  position: sticky; bottom: 0; z-index: 2;
+  position: sticky; bottom: 12px; z-index: 2;
   display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 14px 0 10px;
-  background: linear-gradient(to bottom, transparent, var(--sys-background) 35%);
+  padding: 8px; margin-top: 4px;
+  border-radius: 20px;
+  border: 1px solid var(--sys-outline-variant);
+  background: color-mix(in srgb, var(--sys-surface-container) 84%, transparent);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
 }
 
 /* ---------- Responsive ---------- */
@@ -288,7 +295,7 @@ html body .gm-segmented.ss-audio-type { justify-content: flex-start; margin: 6px
   .ss-row-media { max-width: 100%; }
   .ss-new { min-height: 220px; }
   .ss-stories { grid-template-columns: minmax(0, 1fr); }
-  .ss-actions { position: static; background: none; }
+  .ss-actions { position: static; background: none; border: 0; box-shadow: none; padding: 0; backdrop-filter: none; }
   .ss-actions > * { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
