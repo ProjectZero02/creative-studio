@@ -298,3 +298,8 @@ html body.dark-theme .ss-root { --story-ring: #ffffff; }
    text flips: mirroring the whole outlined field breaks its label notch. */
 .ss-rtl textarea { direction: rtl; text-align: right; }
 .ss-rtl-text { direction: rtl; text-align: right; }
+
+/* Edit step: timeline editor, then export and music side by side. */
+.ss-edit-main { padding: 16px; }
+.ss-edit-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; align-items: start; }
+.ss-edit-buttons { display: flex; gap: 8px; flex-wrap: wrap; }

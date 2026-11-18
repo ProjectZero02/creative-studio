@@ -33,6 +33,7 @@ from components.story_studio.widgets import (
     story_stepper,
     story_style_picker,
     story_ticker,
+    story_timeline,
 )
 from config.default import Default
 from services import story_jobs
@@ -58,7 +59,13 @@ from services.story_models import (
     reachable_steps,
     supported_durations,
 )
-from services.story_service import display_url, get_backend, is_mock_mode
+from services import story_timeline as timeline_mod
+from services.story_service import (
+    AUDIO_MIME_TYPES,
+    display_url,
+    get_backend,
+    is_mock_mode,
+)
 from services.story_store import StoryAccessError, get_store
 from state.state import AppState
 from state.story_state import StoryState
@@ -433,7 +440,11 @@ def on_tick(e: me.WebEvent):
             and story.final_uri
             and snap["status"] == "done"
         ):
-            s.notice = "Your film is ready."
+            s.notice = "Your film is ready. Edit it below, then export."
+        elif snap["kind"] == "export" and snap["status"] == "done":
+            s.notice = "Export finished. The new video is saved to your library."
+        elif snap["kind"] == "music" and snap["status"] == "done":
+            s.notice = "New music is on the timeline."
 
 
 def on_dismiss_error(e: me.ClickEvent):
@@ -1412,7 +1423,7 @@ def storyboard_step(story: Story) -> None:
     with me.box(classes="ss-actions"):
         me.button("Back to scenario", type="stroked", on_click=on_back_scenario)
         me.button(
-            "Continue to editor",
+            "Continue to scenes",
             type="flat",
             color="primary",
             disabled=busy or not ready,
@@ -1603,7 +1614,20 @@ def editor_step(story: Story) -> None:
                 )
             if story.has_spoken:
                 me.slide_toggle(
-                    "Same voice in every scene",
+                    "Continuous takes: back-to-back spoken scenes continue the "
+                    "same shot (Veo extension)",
+                    checked=story.continuous_takes,
+                    disabled=busy,
+                    on_change=on_toggle_continuous_takes,
+                    key="ss-takes",
+                )
+                me.text(
+                    "Keeps the same person, place and voice across a long speech. "
+                    "Those scenes render one after another.",
+                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+                )
+                me.slide_toggle(
+                    "Replace on-camera speech with one fixed voice",
                     checked=story.same_voice,
                     disabled=busy,
                     on_change=on_toggle_same_voice,
@@ -1641,9 +1665,9 @@ def editor_step(story: Story) -> None:
                             key=f"ss-preview-{st.preview_uri[-12:]}",
                         )
                     me.text(
-                        "Veo films the person speaking; their lines are then voiced "
-                        "in this one voice, timed to their lips. Lip sync is close "
-                        "but not exact.",
+                        "Each line is voiced in this one voice and starts when the "
+                        "person starts talking, at a natural speed. The clip's own "
+                        "sound is removed and lips will not match exactly.",
                         style=me.Style(
                             font_size=13, color=me.theme_var("on-surface-variant")
                         ),
@@ -1660,9 +1684,9 @@ def editor_step(story: Story) -> None:
                         key="ss-speaker-voice",
                     )
                     me.text(
-                        "Veo's own voice with exact lip sync. Veo picks the voice "
-                        "for each clip, so it can change between scenes; this "
-                        "description only steers it.",
+                        "Recommended. Veo's own voice and room sound, with exact lip "
+                        "sync. This description, one seed per film and continuous "
+                        "takes keep the voice steady between scenes.",
                         style=me.Style(
                             font_size=13, color=me.theme_var("on-surface-variant")
                         ),
@@ -1826,8 +1850,16 @@ def _set_story_field(field: str, value) -> None:
             story.clear_films()
             for sc in story.scenes[1:]:
                 sc.clip_uri = ""
+        if field == "music_prompt":
+            # A new prompt means new music on the next render.
+            story.music_uri = ""
 
     _edit(apply)
+
+
+def on_toggle_continuous_takes(e: me.SlideToggleChangeEvent):
+    story = _story()
+    _set_story_field("continuous_takes", not (story and story.continuous_takes))
 
 
 def on_toggle_music(e: me.SlideToggleChangeEvent):
@@ -1908,9 +1940,158 @@ def on_to_video(e: me.ClickEvent):
 # ---------------------------------------------------------------------------
 
 
+def _media_map(story: Story) -> dict[str, str]:
+    """Browser URL for every file the timeline plays."""
+    tl = timeline_mod.normalize(story.timeline_json)
+    srcs = {c["src"] for t in tl["tracks"] for c in t["clips"] if c.get("src")}
+    return {src: display_url(src) for src in srcs}
+
+
+def edit_view(story: Story) -> None:
+    """The film as an editable timeline, with export and music."""
+    busy = _job_active_for("export", "music", "video")
+    exporting = _job_active_for("export")
+    tl = timeline_mod.normalize(story.timeline_json)
+    with me.box(classes="ss-video"):
+        with me.box(classes="ss-card ss-edit-main"):
+            story_timeline(
+                timeline_json=story.timeline_json,
+                media=_media_map(story),
+                aspect=story.aspect_ratio,
+                busy=busy,
+                on_change=on_timeline_change,
+                key="ss-timeline",
+            )
+        with me.box(classes="ss-edit-actions"):
+            with me.box(classes="ss-card ss-summary"):
+                me.text(
+                    story.title or "Your film",
+                    style=me.Style(font_size=18, font_weight=600),
+                )
+                me.text(
+                    f"{_fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio} · "
+                    f"{len(timeline_mod.track(tl, 'text')['clips'])} titles",
+                    style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
+                )
+                me.button(
+                    "Exporting…" if exporting else "Export video",
+                    type="flat",
+                    color="primary",
+                    disabled=busy,
+                    on_click=on_export,
+                    style=me.Style(width="100%", height=48, font_size=15),
+                    key="ss-export",
+                )
+                me.text(
+                    "Renders your edit to an MP4 and saves it to your library. "
+                    "Sound is levelled and the music dips under speech.",
+                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+                )
+                if story.final_uri and not exporting:
+                    with me.box(classes="ss-player-actions"):
+                        me.markdown(f"[Download last export]({display_url(story.final_uri)})")
+                        if not is_mock_mode():
+                            me.markdown("[Open library](/library)")
+                progress_panel("Exporting your edit", ("export",))
+                me.button(
+                    "Change scenes and render again",
+                    type="stroked",
+                    disabled=busy,
+                    on_click=on_back_editor,
+                    style=me.Style(width="100%"),
+                    key="ss-back-scenes",
+                )
+            with me.box(classes="ss-card ss-summary"):
+                me.text("Music", style=me.Style(font_size=16, font_weight=600))
+                me.text(
+                    "Make a new score with Lyria, or upload your own track. It "
+                    "replaces the music on the timeline.",
+                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+                )
+                me.textarea(
+                    label="Music prompt",
+                    value=story.music_prompt or default_music_prompt(story),
+                    rows=3,
+                    appearance="outline",
+                    disabled=busy,
+                    on_blur=on_music_prompt,
+                    style=me.Style(width="100%"),
+                    key="ss-edit-music",
+                )
+                with me.box(classes="ss-edit-buttons"):
+                    me.button(
+                        "Making music…" if _job_active_for("music") else "Make music (Lyria)",
+                        type="stroked",
+                        disabled=busy,
+                        on_click=on_make_music,
+                        key="ss-make-music",
+                    )
+                    me.uploader(
+                        label="Upload music",
+                        accepted_file_types=AUDIO_MIME_TYPES,
+                        type="stroked",
+                        disabled=busy,
+                        on_upload=on_upload_music,
+                        key="ss-upload-music",
+                    )
+                progress_panel("Making music", ("music",))
+        if story.final_alt_uri:
+            with me.box(classes="ss-card ss-player"):
+                _alt_film(story)
+
+
+def on_timeline_change(e: me.WebEvent):
+    s = me.state(StoryState)
+    raw = (e.value or {}).get("timeline", "")
+    try:
+        story = story_jobs.save_timeline(s.story_id, _owner(), raw)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _set_story(story)
+
+
+def on_export(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    try:
+        job = story_jobs.start_export(s.story_id, _owner())
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
+
+
+def on_make_music(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    try:
+        job = story_jobs.start_music(s.story_id, _owner())
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
+
+
+def on_upload_music(e: me.UploadEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    try:
+        uri = get_backend().save_audio_upload(e.file.getvalue(), e.file.mime_type)
+        story = story_jobs.set_music(s.story_id, _owner(), uri)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _set_story(story)
+    s.notice = "Your music is on the timeline."
+
+
 def video_step(story: Story) -> None:
     job = _job()
     rendering = _job_active_for("video")
+    if story.timeline_json and not rendering:
+        edit_view(story)
+        return
     with me.box(classes="ss-video"):
         with me.box(classes="ss-card ss-player"):
             if story.final_uri and not rendering:
@@ -1970,11 +2151,11 @@ def video_step(story: Story) -> None:
                             "movie", style=me.Style(font_size=36, width=36, height=36)
                         )
                         me.text(
-                            "No film yet. Render it from the Editor.",
+                            "No film yet. Render it from the Scenes step.",
                             style=me.Style(font_size=15),
                         )
                         me.button(
-                            "Go to editor",
+                            "Go to scenes",
                             type="flat",
                             color="primary",
                             on_click=on_back_editor,

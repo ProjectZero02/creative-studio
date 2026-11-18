@@ -68,3 +68,31 @@ def story_ticker(
         properties={"active": active, "interval": interval_ms},
         events={"tickEvent": on_tick},
     )
+
+
+@me.web_component(path="./story_timeline.js")
+def story_timeline(
+    *,
+    timeline_json: str,
+    media: dict[str, str],
+    aspect: str,
+    busy: bool,
+    on_change: typing.Callable[[me.WebEvent], None],
+    key: str | None = None,
+):
+    """Video editor: preview plus video, voice, music and title tracks.
+
+    `media` maps each clip's stored URI to a browser URL. `on_change` gets
+    {"timeline": json} after every finished edit.
+    """
+    return me.insert_web_component(
+        key=key,
+        name="story-timeline",
+        properties={
+            "timelineJson": timeline_json,
+            "mediaJson": json.dumps(media),
+            "aspect": aspect,
+            "busy": busy,
+        },
+        events={"changeEvent": on_change},
+    )
