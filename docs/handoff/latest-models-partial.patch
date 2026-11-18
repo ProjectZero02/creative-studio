@@ -1,0 +1,218 @@
+diff --git a/src/config/default.py b/src/config/default.py
+index 4773e174..9db9bd3d 100644
+--- a/src/config/default.py
++++ b/src/config/default.py
+@@ -186,6 +186,12 @@ class Default:
+     LIBRARY_MEDIA_PER_PAGE: int = int(os.environ.get("LIBRARY_MEDIA_PER_PAGE", 15))
+ 
+     # Veo
++    # Gemini Omni is the default video model everywhere. Veo stays available for
++    # upstream merges: set SHOW_VEO_MODELS=true to list Veo in the video model
++    # pickers again (a ?veo_model= deep link to a Veo model always works).
++    SHOW_VEO_MODELS: bool = (
++        os.environ.get("SHOW_VEO_MODELS", "false").lower() == "true"
++    )
+     DEFAULT_VEO_MODEL_NAME: str = os.environ.get(
+         "DEFAULT_VEO_MODEL_NAME",
+         "veo-3.1-fast-generate-001",
+@@ -250,7 +256,7 @@ class Default:
+     # Gemini Image (Nano Banana) adapter, which uses GEMINI_IMAGE_GEN_MODEL.
+     CHARACTER_CONSISTENCY_VEO_MODEL: str = os.environ.get(
+         "CHARACTER_CONSISTENCY_VEO_MODEL",
+-        "veo-3.1-fast-generate-001",
++        "gemini-omni-1.2-flash",  # a veo-* name switches back to Veo
+     )
+     CHARACTER_CONSISTENCY_GEMINI_MODEL: str = os.environ.get(
+         "CHARACTER_CONSISTENCY_GEMINI_MODEL",
+diff --git a/src/models/character_consistency.py b/src/models/character_consistency.py
+index 004e7307..40684c75 100644
+--- a/src/models/character_consistency.py
++++ b/src/models/character_consistency.py
+@@ -47,6 +47,14 @@ cfg = Default()
+ 
+ from typing import Generator
+ 
++from models.workflow_video import (
++    generate_workflow_image_to_video,
++    is_omni_model_name,
++)
++
++# Clip length for the final video (Veo's 8 s; Omni clamps to its own range).
++CHARACTER_CONSISTENCY_VIDEO_SECONDS = 8
++
+ def generate_character_video(
+     user_email: str, reference_image_gcs_uris: list[str], scene_prompt: str
+ ) -> Generator[WorkflowStepResult, None, None]:
+@@ -195,17 +203,30 @@ def generate_character_video(
+     yield WorkflowStepResult(
+         step_name="generate_video",
+         status="processing",
+-        message="Step 7 of 7: Generating final video with Veo...",
++        message="Step 7 of 7: Generating final video...",
+         duration_seconds=0,
+         data={},
+     )
+-    video_bytes, veo_prompt = _generate_video_from_image(outpainted_image_bytes, scene_prompt)
+-    video_gcs_uri = store_to_gcs(
+-        folder="character_consistency_videos",
+-        file_name=f"video_{uuid.uuid4()}.mp4",
+-        mime_type="video/mp4",
+-        contents=video_bytes,
+-    )
++    if is_omni_model_name(cfg.CHARACTER_CONSISTENCY_VEO_MODEL):
++        veo_prompt = _write_video_prompt(outpainted_image_bytes, scene_prompt)
++        video_gcs_uri = generate_workflow_image_to_video(
++            cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
++            outpainted_image_gcs_uri,
++            veo_prompt,
++            CHARACTER_CONSISTENCY_VIDEO_SECONDS,
++        )
++        if not video_gcs_uri:
++            raise RuntimeError("Gemini Omni returned no video.")
++    else:
++        video_bytes, veo_prompt = _generate_video_from_image(
++            outpainted_image_bytes, scene_prompt
++        )
++        video_gcs_uri = store_to_gcs(
++            folder="character_consistency_videos",
++            file_name=f"video_{uuid.uuid4()}.mp4",
++            mime_type="video/mp4",
++            contents=video_bytes,
++        )
+     step_duration = time.time() - step_start_time
+     yield WorkflowStepResult(
+         step_name="generate_video",
+@@ -306,29 +327,18 @@ def _generate_gemini_candidates(
+     return candidate_image_gcs_uris, candidate_image_bytes_list
+ 
+ 
+-def _generate_video_from_image(
+-    image_bytes: bytes, provided_prompt: str | None = None
+-) -> tuple[bytes, str]:
+-    """Generates a video from an image."""
++def _write_video_prompt(image_bytes: bytes, provided_prompt: str | None = None) -> str:
++    """Asks Gemini for a detailed video prompt from the image and user prompt."""
+     gemini_client = genai.Client(
+         vertexai=True,
+         project=cfg.PROJECT_ID,
+-        location=cfg.LOCATION,
++        # Gemini 3.x is served from the global endpoint, not LOCATION.
++        location=cfg.CHARACTER_CONSISTENCY_GEMINI_LOCATION,
+         http_options={"api_version": cfg.VERTEX_API_VERSION},
+     )
+-    veo_client = genai.Client(
+-        vertexai=True,
+-        project=cfg.PROJECT_ID,
+-        location=cfg.LOCATION,
+-        http_options={"api_version": cfg.VERTEX_API_VERSION},
+-    )
+-
+     pil_image = PIL_Image.open(io.BytesIO(image_bytes))
+-    width, height = pil_image.size
+-    aspect_ratio = "9:16" if height > width else "16:9"
+-
+     gemini_contents = [
+-        "You are an expert Cinematic Prompt Engineer and a creative director for Veo. Your purpose is to transform a user's basic prompt and optional reference image into a masterful, detailed, and technically rich Veo prompt that will guide the model to generate a high-quality video.",
++        "You are an expert Cinematic Prompt Engineer and a creative director for AI video. Your purpose is to transform a user's basic prompt and optional reference image into a masterful, detailed, and technically rich video prompt that will guide the model to generate a high-quality video.",
+         pil_image,
+     ]
+     if provided_prompt:
+@@ -343,7 +353,22 @@ def _generate_video_from_image(
+             thinking_config=genai.types.ThinkingConfig(thinking_budget=-1)
+         ),
+     )
+-    video_prompt = video_prompt_response.text.strip()
++    return video_prompt_response.text.strip()
++
++
++def _generate_video_from_image(
++    image_bytes: bytes, provided_prompt: str | None = None
++) -> tuple[bytes, str]:
++    """Generates a video from an image with Veo (when the model is a Veo id)."""
++    veo_client = genai.Client(
++        vertexai=True,
++        project=cfg.PROJECT_ID,
++        location=cfg.LOCATION,
++        http_options={"api_version": cfg.VERTEX_API_VERSION},
++    )
++    width, height = PIL_Image.open(io.BytesIO(image_bytes)).size
++    aspect_ratio = "9:16" if height > width else "16:9"
++    video_prompt = _write_video_prompt(image_bytes, provided_prompt)
+ 
+     input_image = genai.types.Image(image_bytes=image_bytes, mime_type="image/png")
+ 
+diff --git a/src/models/workflow_video.py b/src/models/workflow_video.py
+index 96500055..6e146f6c 100644
+--- a/src/models/workflow_video.py
++++ b/src/models/workflow_video.py
+@@ -21,7 +21,7 @@ module routes the call and hides the two request shapes.
+ """
+ 
+ from common.error_handling import GenerationError
+-from config.omni_models import clamp_duration, modes_for_model
++from config.omni_models import clamp_duration, get_omni_model_config, modes_for_model
+ from config.omni_models import get_version_id_by_model_name as omni_version_id
+ from config.veo_models import get_veo_model_config
+ from config.veo_models import get_version_id_by_model_name as veo_version_id
+@@ -47,6 +47,61 @@ def is_omni_model_name(model_name: str) -> bool:
+     return omni_version_id(model_name) is not None
+ 
+ 
++def generate_video_any_model(request: VideoGenerationRequest) -> list[str]:
++    """Run a Veo-shaped request on Gemini Omni or Veo, whichever it names.
++
++    Pages written for Veo build a ``VideoGenerationRequest``. When its
++    ``model_version_id`` is a Gemini Omni model, the request is translated to
++    Omni (mode from the inputs: references, first + last frame, one image, or
++    text; length, aspect ratio and resolution kept inside the model's limits).
++    Any other id goes to Veo unchanged, so the Veo path stays one setting away.
++
++    Returns:
++        The GCS URIs of the generated clips (Omni returns at most one).
++
++    """
++    omni_version = omni_version_id(request.model_version_id)
++    omni = get_omni_model_config(omni_version or request.model_version_id)
++    if not omni:
++        video_uris, _ = generate_video(request)
++        return list(video_uris or [])
++
++    if request.r2v_references:
++        mode = "ref2v"
++    elif request.reference_image_gcs and request.last_reference_image_gcs:
++        mode = "first_last"
++    elif request.reference_image_gcs:
++        mode = "i2v"
++    else:
++        mode = "t2v"
++    if mode not in omni.supported_modes:
++        raise GenerationError(f"{omni.display_name} does not support '{mode}'.")
++
++    aspect = request.aspect_ratio
++    if aspect not in omni.supported_aspect_ratios:
++        aspect = omni.supported_aspect_ratios[0]
++    resolution = request.resolution
++    if resolution not in omni.resolutions:
++        resolution = "720p" if "720p" in omni.resolutions else omni.resolutions[0]
++
++    gcs_uri, _ = generate_omni_video(
++        OmniVideoGenerationRequest(
++            prompt=request.prompt,
++            duration_seconds=clamp_duration(omni.version_id, request.duration_seconds),
++            aspect_ratio=aspect,
++            resolution=resolution,
++            omni_mode=mode,
++            model_version_id=omni.version_id,
++            reference_image_gcs=request.reference_image_gcs,
++            reference_image_mime_type=request.reference_image_mime_type,
++            last_reference_image_gcs=request.last_reference_image_gcs,
++            last_reference_image_mime_type=request.last_reference_image_mime_type,
++            r2v_references=request.r2v_references,
++        ),
++    )
++    return [gcs_uri] if gcs_uri else []
++
++
+ def generate_workflow_image_to_video(
+     model_name: str,
+     image_gcs_uri: str,
