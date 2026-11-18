@@ -66,6 +66,15 @@ def test_video_studio_lists_omni_first_and_defaults_to_it() -> None:
 
     ids = studio_model_ids()
     assert ids[0] == "gemini-omni-1.2-flash"
-    assert ids[1:] == [m.version_id for m in VEO_MODELS]
+    # Veo is hidden unless SHOW_VEO_MODELS is on (the default is off).
+    assert ids[1:] == []
+    import config.video_studio_models as vsm
+
+    vsm_shown = vsm.veo_models_shown
+    try:
+        vsm.veo_models_shown = lambda: True
+        assert studio_model_ids()[1:] == [m.version_id for m in VEO_MODELS]
+    finally:
+        vsm.veo_models_shown = vsm_shown
     defaults = {f.name: f.default for f in dataclasses.fields(PageState)}
     assert defaults["veo_model"] == "gemini-omni-1.2-flash"

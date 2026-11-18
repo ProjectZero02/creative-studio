@@ -603,8 +603,8 @@ def test_websocket_live_flow_with_fake_session(monkeypatch):
     assert config.system_instruction and config.tools
 
 
-def test_video_jobs_open_video_studio_on_veo():
-    from config.veo_models import DEFAULT_VEO_VERSION_ID
+def test_video_jobs_open_video_studio_on_omni():
+    from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID
     from services.live_agent import page_params
 
     jobs = LiveJobs(instant_runners())
@@ -612,7 +612,7 @@ def test_video_jobs_open_video_studio_on_veo():
     vid = jobs.submit(OWNER, "video", "fox runs", source=img, run_async=False)
     assert page_params(img) == {}
     assert page_params(vid) == {
-        "veo_model": DEFAULT_VEO_VERSION_ID,
+        "veo_model": DEFAULT_STUDIO_MODEL_ID,
         "image_path": img.gcs_uri,
     }
 
