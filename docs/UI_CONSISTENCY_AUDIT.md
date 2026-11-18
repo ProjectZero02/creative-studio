@@ -103,3 +103,14 @@ secondary buttons, toggle groups without bright outlines).
 - Tests: `test_app_imports`, `test_i18n`, `test_interiors_layout`,
   `test_live_agent`, `test_object_rotation_library`, `test_page_headers`,
   `test_read_authz`, `test_ui_layering` (95 passed).
+
+## Re-running the audit fast
+Start one local server with auto-reload (`.claude/launch.json` config
+`genmedia-ui-audit`, port 8099: mock generation, reloads on `.py` and `.js`
+edits, so no restarts). Then run `scripts/ui/audit_pages.js` in the browser
+console on any page: it loads every route in hidden iframes at 1440 and 390 px
+and returns only the pages with problems (sibling buttons that differ,
+bright borders, uneven side-by-side cards, mixed button heights, horizontal
+scroll). All 11 pages at both widths take about 40 s. Screenshot only what it
+flags. Last run: only the 38 px pill switch on Fashion and Brand kit (a
+segmented track, by design).
