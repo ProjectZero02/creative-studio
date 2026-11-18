@@ -42,14 +42,45 @@ def cicon(name: str, cls: str) -> None:
         me.icon(name)
 
 
-def demo_card_head(number: str, title: str, hint: str) -> None:
-    """Numbered card heading used by the workflow pages (number may be "")."""
+def demo_card_head(number: str, title: str, hint: str = "") -> None:
+    """Numbered card heading used by the workflow pages.
+
+    ``number`` and ``hint`` may be "". Keep a hint only for what a good input
+    looks like; skip it when the title already says it.
+    """
     with me.box(classes="gm-demo-card-head"):
         if number:
             ctext(number, "gm-demo-card-num")
         with me.box(classes="gm-demo-card-titles"):
             ctext(title, "gm-demo-card-title")
-            ctext(hint, "gm-demo-card-hint")
+            if hint:
+                ctext(hint, "gm-demo-card-hint")
+
+
+def demo_upload_button(
+    label: str,
+    on_upload: typing.Callable[[me.UploadEvent], typing.Any],
+    *,
+    key: str,
+    disabled: bool = False,
+    accepted_file_types: list[str] | None = None,
+) -> None:
+    """Upload button with an icon, the same look as ``From library``.
+
+    Put it in a ``gm-demo-actions`` row, which gives every button there the
+    same width and height (assets/ui/demos.css).
+    """
+    with me.content_uploader(
+        on_upload=on_upload,
+        accepted_file_types=accepted_file_types
+        or ["image/jpeg", "image/png", "image/webp"],
+        type="stroked",
+        key=key,
+        disabled=disabled,
+    ):
+        with me.box(classes="gm-btn-label"):
+            me.icon("upload")
+            me.text(label)
 
 
 @me.component
