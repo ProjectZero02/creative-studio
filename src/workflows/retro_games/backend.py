@@ -24,7 +24,9 @@ from common.analytics import track_model_call
 from common.storage import download_from_gcs, store_to_gcs
 from config.default import Default as cfg
 from models.gemini import generate_image_from_prompt_and_images, generate_text
-from models.veo import generate_video, VideoGenerationRequest
+from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID
+from models.requests import VideoGenerationRequest
+from models.workflow_video import generate_video_any_model
 from models.requests import APIReferenceImage
 from models.video_processing import process_videos
 from workflows.retro_games.retro_games_config import RetroGameConfig
@@ -45,7 +47,7 @@ class RetroGameWorkflowState:
     # Configuration
     theme_context: str = ""
     include_bumper: bool = True
-    model_version: str = "veo-3.1"
+    model_version: str = DEFAULT_STUDIO_MODEL_ID  # Gemini Omni unless set to Veo
     duration: int = 8
     scene_count: int = 1
     
@@ -76,7 +78,7 @@ def initialize_workflow(
     player2_image_uri: str | None = None,
     theme_context: str = "",
     include_bumper: bool = True,
-    model_version: str = "veo-3.1",
+    model_version: str = DEFAULT_STUDIO_MODEL_ID,
     duration: int = 8,
     scene_count: int = 1
 ) -> RetroGameWorkflowState:
@@ -344,7 +346,7 @@ def step_3_generate_video(state: RetroGameWorkflowState) -> RetroGameWorkflowSta
                 person_generation="allow_all"
             )
             
-            video_uris, _ = generate_video(request)
+            video_uris, _ = generate_video_any_model(request)
             if video_uris:
                 state.raw_video_uris.append(video_uris[0])
             else:
