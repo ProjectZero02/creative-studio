@@ -134,6 +134,14 @@ Specific configuration for the Interior Design workflow.
 | **`INTERIOR_DESIGN_IMAGE_MODEL`** | `gemini-nano-banana-2.1` | The specific Gemini image model used for floor plan to 3D and styled images. |
 | **`INTERIOR_DESIGN_VIDEO_DURATION`** | `6` | The duration in seconds for each generated video segment. |
 
+## 🎬 Story Studio Sets
+Sets hold a story's characters (with their voices), locations, props and style, and can be reused across stories. The other `STORY_*` settings are listed in `src/config/default.py`.
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| **`STORY_SETS_COLLECTION_NAME`** | `story_sets` | Firestore collection for saved sets. Each set is owner-only; the list query filters on `owner` alone and sorts in the app, so no composite index is needed. |
+| **`STORY_MAX_CLIP_REFERENCES`** | `6` | Most reference images sent with one clip when a story uses a set (storyboard frame, cast faces and fronts, location plate, props). The video model's own `max_reference_images` also caps it, so the lower of the two wins. When over the cap, props are dropped first, then extra character views. |
+
 ## 🎵 Lyria (Music Generation)
 Configuration for the Lyria music generation model.
 

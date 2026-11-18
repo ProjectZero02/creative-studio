@@ -38,3 +38,10 @@ Date: 2026-11-18. Scope: `src/services/story_*`, `src/pages/story_studio.py`, `s
 ### Later (needs the owner's yes: GPU cost)
 - Voice conversion of the dialogue stem to one voice per character (Chatterbox VC or Seed-VC on a Cloud Run L4 job).
 - Lip-sync pass (LatentSync) for TTS-first dialogue.
+
+## Sets (added later, see `docs/handoff/STORY_SETS_PLAN.md`)
+- A **Set** holds a story's characters (looks, views and voice), locations, props and style. It is owner-only and can be reused: a new story picks a set on the Create step, or one is made from the story on the new **Set** step (between Scenario and Storyboard).
+- Auto-build makes one Gemini casting call, then the images with Nano Banana: a character's front first and its other views from it, a location's plate then an angle, one image per prop, plus a voice sample per character. Each image can be regenerated, locked, uploaded or picked from the library.
+- Rendering sends the set as references: the storyboard frame, then the cast faces and fronts, the location plate and props, capped at the lower of the model's limit and `STORY_MAX_CLIP_REFERENCES` (6). Props are dropped first, then extra views. Prompts describe the cast and use the speaker's voice description word for word.
+- Each change bumps the set's version; a film made with an older version shows "Set changed since this film was made" on the Edit step.
+- Voice limits: the narrator's Gemini TTS preset is consistent. The on-camera voice is best effort (a fixed description plus the Omni thread per take), so sets fix the look but cannot promise an identical on-camera voice across takes.
