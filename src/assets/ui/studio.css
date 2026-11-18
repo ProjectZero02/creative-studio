@@ -266,11 +266,19 @@ html body .mat-mdc-outlined-button:not(:disabled):active { transform: scale(0.98
 html body .mat-mdc-raised-button { box-shadow: none; }
 html body .mat-mdc-raised-button:not(:disabled):hover { box-shadow: var(--gm-card-shadow); }
 
-/* Sibling buttons in a row share one height. */
+/* One control height everywhere: 40px on desktop, a 44px tap target on
+   phones. Sibling buttons in a row share it (docs/UI_CONSISTENCY_AUDIT.md). */
+html body { --gm-control-h: 40px; }
+@media (max-width: 600px) {
+  html body { --gm-control-h: 44px; }
+}
 html body .mat-mdc-button,
 html body .mat-mdc-unelevated-button,
 html body .mat-mdc-raised-button,
-html body .mat-mdc-outlined-button { height: 40px; }
+html body .mat-mdc-outlined-button { height: var(--gm-control-h); }
+/* Icon + label inside a content button or uploader (e.g. "Upload photo"),
+   laid out like the library chooser's "From library". */
+html body .gm-btn-label { display: flex; align-items: center; justify-content: center; gap: 8px; }
 
 /* Secondary ("stroked") buttons are tonal: a quiet fill, no outline. A bright
    1px outline on a dark surface looks cheap (owner, 2026-11-18). */
@@ -728,6 +736,14 @@ html body .gm-segmented .mat-button-toggle-checked {
 html body .gm-segmented .mat-button-toggle-label-content {
   line-height: 38px !important; padding: 0 16px !important; font-size: 14px; font-weight: 500; white-space: nowrap;
 }
+/* Any other toggle group (upstream pages): no bright outline or dividers. */
+html body .mat-button-toggle-group,
+html body .mat-button-toggle-group .mat-button-toggle + .mat-button-toggle {
+  border-color: var(--gm-field-line) !important;
+}
+/* Library filters: several pill switches on one centred, wrapping row. */
+html body .gm-filter-row { flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+html body .gm-filter-row .mat-button-toggle-label-content { line-height: 34px !important; padding: 0 14px !important; }
 
 /* Advanced settings panel */
 html body .gm-advanced {
@@ -801,7 +817,7 @@ html body .gm-empty-icon {
   html body .gm-composer-btn .mdc-icon-button,
   html body .gm-hero-info .mat-mdc-icon-button { width: 44px !important; height: 44px !important; padding: 10px !important; }
   /* Four modes do not fit one row on a phone: a 2 x 2 grid with 44px rows. */
-  html body .gm-segmented .mat-button-toggle-group {
+  html body .gm-segmented:not(.gm-filter-row) .mat-button-toggle-group {
     display: grid !important;
     grid-template-columns: 1fr 1fr;
     width: 100%;
@@ -910,8 +926,10 @@ html body .gm-aurora-c {
 }
 /* The colour fields sit behind every page (page_scaffold draws them first). */
 html body .gm-page { position: relative; }
-/* Room under the last row for the floating mic button (live_agent.js), so it
-   never covers a page's last buttons on a phone. */
+/* Room under the last row for the floating "Talk to the studio" button
+   (live_agent.js), so it never covers a page's last buttons. On desktop it sat
+   on top of the bottom-right primary action (Brand kit, Fashion). */
+html body:has([data-gm-live]) .gm-page { padding-bottom: 88px; }
 @media (max-width: 600px) {
   html body:has([data-gm-live]) .gm-page { padding-bottom: 84px; }
 }
