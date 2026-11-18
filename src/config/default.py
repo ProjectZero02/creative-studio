@@ -355,6 +355,10 @@ class Default:
     STORIES_COLLECTION_NAME: str = os.environ.get(
         "STORIES_COLLECTION_NAME", "stories"
     )
+    # Sets: reusable characters, voices, locations and props (owner-only).
+    STORY_SETS_COLLECTION_NAME: str = os.environ.get(
+        "STORY_SETS_COLLECTION_NAME", "story_sets"
+    )
     # Cost guardrails: every film is capped by these values.
     STORY_MIN_SCENES: int = 3
     STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 16))
