@@ -194,15 +194,9 @@ def library_content():
     with page_frame():  # pylint: disable=E1129:not-context-manager
         header("Library", "perm_media", centered=True)
 
-        with me.box(
-            style=me.Style(
-                display="flex",
-                flex_direction="row",
-                flex_wrap="wrap",
-                gap=10,
-                margin=me.Margin(bottom=20),
-            ),
-        ):
+        # Filters use the studio's pill switch (.gm-segmented), not Material's
+        # outlined toggle group with check marks.
+        with me.box(classes="gm-segmented gm-filter-row"):
             me.button_toggle(
                 value=pagestate.type_filters,
                 buttons=[
@@ -212,6 +206,7 @@ def library_content():
                     me.ButtonToggleButton(label="Audio", value="audio"),
                 ],
                 multiple=True,
+                hide_selection_indicator=True,
                 on_change=on_type_filter_change,
             )
             if cfg().SHARED_LIBRARY:
@@ -221,6 +216,7 @@ def library_content():
                         me.ButtonToggleButton(label="All Users", value="all"),
                         me.ButtonToggleButton(label="Mine Only", value="mine"),
                     ],
+                    hide_selection_indicator=True,
                     on_change=on_user_filter_change,
                 )
             me.button_toggle(
@@ -230,6 +226,7 @@ def library_content():
                     me.ButtonToggleButton(label="No Errors", value="no_errors"),
                     me.ButtonToggleButton(label="Only Errors", value="only_errors"),
                 ],
+                hide_selection_indicator=True,
                 on_change=on_error_filter_change,
             )
 
@@ -278,7 +275,7 @@ def library_content():
                     me.icon("photo_library", style=me.Style(font_size=36, width=36, height=36, color=me.theme_var("primary")))
                     me.text("Nothing here yet", style=me.Style(font_size=18, font_weight=600))
                     me.text(
-                        "Images, videos and audio you create appear here. Try another filter, or make something new.",
+                        "Your images, videos and audio show up here.",
                         style=me.Style(color=me.theme_var("on-surface-variant"), max_width=420),
                     )
                     me.button("Create an image", type="flat", on_click=on_empty_create_click)
@@ -332,11 +329,13 @@ def library_content():
                         pills_json=get_pills_for_item(item, https_url),
                     )
 
-        scroll_sentinel(
-            on_visible=on_load_more,
-            is_loading=pagestate.is_loading,
-            all_items_loaded=pagestate.all_items_loaded,
-        )
+        # An empty library already says "Nothing here yet"; skip "End of list".
+        if media_items or not pagestate.all_items_loaded:
+            scroll_sentinel(
+                on_visible=on_load_more,
+                is_loading=pagestate.is_loading,
+                all_items_loaded=pagestate.all_items_loaded,
+            )
 
         library_dialog(pagestate)
         extend_dialog(pagestate.extend_dialog_state, on_close=on_close_extend_dialog)

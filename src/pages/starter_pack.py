@@ -48,8 +48,10 @@ from components.demo_flow.demo_flow import (  # noqa: E402
     cicon,
     ctext,
     demo_alert,
+    demo_card_head,
     demo_segmented,
     demo_steps,
+    demo_upload_button,
 )
 from components.edit_button.edit_button import edit_button  # noqa: E402
 from components.generation_progress.generation_progress import (  # noqa: E402
@@ -126,13 +128,7 @@ def _image_well(url: str, alt: str, empty_icon: str, empty_text: str, busy: bool
             ctext(empty_text, "gm-demo-drop-text")
 
 
-@me.component
-def _card_head(number: str, title: str, hint: str):
-    with me.box(classes="gm-demo-card-head"):
-        ctext(number, "gm-demo-card-num")
-        with me.box(classes="gm-demo-card-titles"):
-            ctext(title, "gm-demo-card-title")
-            ctext(hint, "gm-demo-card-hint")
+_card_head = demo_card_head
 
 
 def _result_actions(uri: str):
@@ -161,11 +157,9 @@ def _kit_from_look_flow():
             _card_head("1", "Look", "A photo of a product, outfit or campaign shot.")
             _image_well(state.look_image_display_url, "Chosen look", "add_photo_alternate", "No photo yet")
             with me.box(classes="gm-demo-actions"):
-                me.uploader(
-                    label="Upload photo",
-                    on_upload=on_brand_upload_look,
-                    accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                    type="stroked",
+                demo_upload_button(
+                    "Upload photo",
+                    on_brand_upload_look,
                     key="brand_look_uploader",
                     disabled=busy,
                 )
@@ -178,7 +172,7 @@ def _kit_from_look_flow():
                 if mock_enabled():
                     me.button("Use a sample", on_click=on_brand_mock_sample, key="look", type="stroked")
         with me.box(classes="gm-demo-card"):
-            _card_head("2", "Brand kit", "A collage of matching pieces, colours and props.")
+            _card_head("2", "Brand kit")
             _image_well(
                 state.generated_starter_pack_display_url,
                 "Generated brand kit",
@@ -234,11 +228,9 @@ def _look_from_kit_flow():
                 state.starter_pack_image_display_url, "Chosen brand kit", "auto_awesome_mosaic", "No kit yet"
             )
             with me.box(classes="gm-demo-actions"):
-                me.uploader(
-                    label="Upload kit",
-                    on_upload=on_brand_upload_kit,
-                    accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                    type="stroked",
+                demo_upload_button(
+                    "Upload kit",
+                    on_brand_upload_kit,
                     key="brand_kit_uploader",
                     disabled=busy,
                 )
@@ -260,11 +252,9 @@ def _look_from_kit_flow():
                 busy=state.is_generating_virtual_model,
             )
             with me.box(classes="gm-demo-actions"):
-                me.uploader(
-                    label="Upload photo",
-                    on_upload=on_brand_upload_model,
-                    accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                    type="stroked",
+                demo_upload_button(
+                    "Upload photo",
+                    on_brand_upload_model,
                     key="brand_model_uploader",
                     disabled=busy,
                 )
@@ -275,7 +265,7 @@ def _look_from_kit_flow():
                     disabled=busy,
                 )
                 me.button(
-                    "Create virtual model",
+                    "Generate model",
                     on_click=on_brand_create_model,
                     type="stroked",
                     disabled=busy or state.is_generating_virtual_model,
