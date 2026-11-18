@@ -339,6 +339,8 @@ def _watch(job_id: str) -> None:
     s.job_json = json.dumps(snap) if snap else ""
     s.job_running = bool(snap and snap["status"] == "running")
     s.job_tasks_done = 0
+    s.job_kind = snap["kind"] if snap else ""
+    s.job_misses = 0
 
 
 def _edit(fn, clear_media: bool = False) -> Story | None:
@@ -446,6 +448,39 @@ def on_step_select(e: me.WebEvent):
     yield
 
 
+# Ticks to keep checking the store after a job's snapshot goes missing.
+JOB_MISS_LIMIT = 180
+
+
+def _outputs_ready(story: Story | None, kind: str) -> bool:
+    """The stored story already has what a job of `kind` makes."""
+    if story is None:
+        return True
+    if kind == "storyboard":
+        return bool(story.scenes) and all(sc.frame_uri for sc in story.scenes)
+    if kind in ("video", "export"):
+        return bool(story.final_uri)
+    if kind == "scenario":
+        return bool(story.scenes)
+    return False
+
+
+def _on_missing_job(s: StoryState) -> None:
+    """A job lives in the memory of the server instance that started it. A
+    tick served by another instance (or after a restart) cannot see it, which
+    used to stop polling with a stale story on screen ("No frame yet" until
+    you left the step and came back). Show what the store has, and keep
+    checking it for a while in case the job is still running elsewhere."""
+    s.job_json = ""
+    s.job_misses += 1
+    story = _reload_story()
+    if s.job_kind in ("set", "scenario"):
+        _load_set(story)
+    if s.job_misses >= JOB_MISS_LIMIT or _outputs_ready(story, s.job_kind):
+        s.job_running = False
+        s.job_misses = 0
+
+
 def on_tick(e: me.WebEvent):
     s = me.state(StoryState)
     if not s.job_id:
@@ -453,9 +488,10 @@ def on_tick(e: me.WebEvent):
         return
     snap = story_jobs.job_snapshot(s.job_id, _owner())
     if snap is None:
-        s.job_running = False
-        s.job_json = ""
+        _on_missing_job(s)
         return
+    s.job_misses = 0
+    s.job_kind = snap["kind"]
     s.job_json = json.dumps(snap)
     finished = sum(
         1 for t in snap["tasks"] if t["status"] in ("done", "failed", "skipped")
