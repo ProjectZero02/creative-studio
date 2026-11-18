@@ -156,5 +156,7 @@ def get_version_id_by_model_name(model_name: str) -> Optional[str]:
 
 from config.default import Default
 cfg = Default()
-# Resolve or fallback safely
+# The default Veo version, for code that runs Veo itself. DEFAULT_VEO_MODEL_NAME
+# now names Gemini Omni by default, so this falls back to 3.1 Fast; the
+# app-wide default video model is config.video_studio_models.DEFAULT_STUDIO_MODEL_ID.
 DEFAULT_VEO_VERSION_ID = get_version_id_by_model_name(cfg.DEFAULT_VEO_MODEL_NAME) or "3.1-fast"

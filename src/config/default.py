@@ -186,9 +186,17 @@ class Default:
     LIBRARY_MEDIA_PER_PAGE: int = int(os.environ.get("LIBRARY_MEDIA_PER_PAGE", 15))
 
     # Veo
+    # Gemini Omni is the default video model everywhere. Veo stays available for
+    # upstream merges: set SHOW_VEO_MODELS=true to list Veo in the video model
+    # pickers again (a ?veo_model= deep link to a Veo model always works).
+    SHOW_VEO_MODELS: bool = (
+        os.environ.get("SHOW_VEO_MODELS", "false").lower() == "true"
+    )
+    # The default video model for every page (name kept so existing deploys
+    # work). A veo-* name makes Veo the default again.
     DEFAULT_VEO_MODEL_NAME: str = os.environ.get(
         "DEFAULT_VEO_MODEL_NAME",
-        "veo-3.1-fast-generate-001",
+        "gemini-omni-1.2-flash",
     )
     VEO_LOCATION: str = os.environ.get("VEO_LOCATION", "us-central1")
     PREVIEW_LOCATION: str = os.environ.get("PREVIEW_LOCATION", "global")
@@ -250,7 +258,7 @@ class Default:
     # Gemini Image (Nano Banana) adapter, which uses GEMINI_IMAGE_GEN_MODEL.
     CHARACTER_CONSISTENCY_VEO_MODEL: str = os.environ.get(
         "CHARACTER_CONSISTENCY_VEO_MODEL",
-        "veo-3.1-fast-generate-001",
+        "gemini-omni-1.2-flash",  # a veo-* name switches back to Veo
     )
     CHARACTER_CONSISTENCY_GEMINI_MODEL: str = os.environ.get(
         "CHARACTER_CONSISTENCY_GEMINI_MODEL",
