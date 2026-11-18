@@ -86,7 +86,7 @@ variable "initial_container_image" {
 variable "model_id" {
   description = "Primary Gemini model ID to use for text and multimodal reasoning tasks"
   type        = string
-  default     = "gemini-3.5-flash"
+  default     = "gemini-3.8-flash"
 }
 
 variable "gemini_location" {
@@ -98,7 +98,7 @@ variable "gemini_location" {
 variable "gemini_audio_analysis_model_id" {
   description = "Gemini model ID to use for audio analysis features"
   type        = string
-  default     = "gemini-3.1-flash-lite"
+  default     = "gemini-3.5-flash-lite"
 }
 
 variable "veo_model_id" {
@@ -165,7 +165,7 @@ variable "sleep_time" {
 variable "gemini_critique_model_id" {
   description = "Gemini model ID to use for Imagen critiques"
   type        = string
-  default     = "gemini-3-flash-preview"
+  default     = "gemini-3.8-flash"
 }
 
 variable "gemini_critique_location" {

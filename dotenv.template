@@ -60,8 +60,8 @@ PROJECT_ID=
 # ==============================================================================
 
 # [OPTIONAL] The primary Gemini model used for general text and reasoning tasks.
-# Default: gemini-3.5-flash
-# MODEL_ID=gemini-3.5-flash
+# Default: gemini-3.8-flash
+# MODEL_ID=gemini-3.8-flash
 
 # [OPTIONAL] The endpoint used for Gemini text/multimodal calls. Gemini 3.x models
 # are NOT served from single regions such as us-central1 (requests 404); keep this
@@ -83,8 +83,8 @@ PROJECT_ID=
 # GEMINI_IMAGE_GEN_API_BASE_URL=
 
 # [OPTIONAL] The model used specifically for analyzing audio content.
-# Default: gemini-3.1-flash-lite
-# GEMINI_AUDIO_ANALYSIS_MODEL_ID=gemini-3.1-flash-lite
+# Default: gemini-3.5-flash-lite
+# GEMINI_AUDIO_ANALYSIS_MODEL_ID=gemini-3.5-flash-lite
 
 # [OPTIONAL] Comma-separated models offered in the Gemini Writers Workshop picker.
 # Default: gemini-4-argon,gemini-3.8-flash
@@ -97,6 +97,16 @@ PROJECT_ID=
 # ==============================================================================
 # 🎥 Veo (Video Generation)
 # ==============================================================================
+
+# Gemini Omni is the default video model on every page. Veo stays available:
+# [OPTIONAL] List Veo models in the video model pickers again.
+# Default: false
+# SHOW_VEO_MODELS=false
+
+# [OPTIONAL] The default video model for every page. A veo-* name (for example
+# veo-3.1-fast-generate-001) makes Veo the default again.
+# Default: gemini-omni-1.2-flash
+# DEFAULT_VEO_MODEL_NAME=gemini-omni-1.2-flash
 
 # [OPTIONAL] The standard Veo model version.
 # Default: veo-3.1-fast-generate-001
@@ -170,6 +180,11 @@ PROJECT_ID=
 # Default: lyria-002
 # LYRIA_MODEL_VERSION=lyria-002
 
+# [OPTIONAL] The Music page's preselected model: 3-pro-preview (Lyria 3 Pro),
+# 3-clip-preview (Lyria 3 Clip) or 2 (Lyria 2).
+# Default: 3-pro-preview
+# LYRIA_DEFAULT_MODEL=3-pro-preview
+
 # [OPTIONAL] Project ID for Lyria quota.
 # Default: Same as PROJECT_ID
 # LYRIA_PROJECT_ID=
@@ -221,9 +236,10 @@ PROJECT_ID=
 # Default: true
 # USE_MEDIA_PROXY=true
 
-# [OPTIONAL] Model used specifically in the Character Consistency workflow.
-# Default: veo-3.1-fast-generate-001
-# CHARACTER_CONSISTENCY_VEO_MODEL=veo-3.1-fast-generate-001
+# [OPTIONAL] Video model for the Character Consistency workflow. A Gemini Omni
+# name runs on Omni; a veo-* name switches back to Veo.
+# Default: gemini-omni-1.2-flash
+# CHARACTER_CONSISTENCY_VEO_MODEL=gemini-omni-1.2-flash
 
 # [OPTIONAL] Gemini model used in the Character Consistency workflow.
 # Default: Same as MODEL_ID
