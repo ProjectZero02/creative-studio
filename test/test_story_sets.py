@@ -213,6 +213,14 @@ def test_locking_an_image_keeps_the_version(set_store):
     assert set_store.get(s.id, OWNER).characters[0].images[0].locked
 
 
+def test_renaming_a_set_keeps_the_version(set_store):
+    s = set_store.save(_sample_set(), OWNER)
+    s.name = "Renamed cast"
+    s = set_store.save(s, OWNER)
+    assert s.version == 1  # a label only: films made with it still match
+    assert set_store.get(s.id, OWNER).name == "Renamed cast"
+
+
 class _Snap:
     def __init__(self, data):
         self._data = data

@@ -230,7 +230,15 @@ class StorySet:
         `filled` (URIs new since the stored copy, put in empty slots) is left
         out, because no film can have used a picture that did not exist."""
         data = self.to_dict()
-        for key in ("owner", "version", "created_at", "updated_at"):
+        # The set's name is a label only: renaming changes nothing a film uses.
+        for key in (
+            "owner",
+            "name",
+            "created_from",
+            "version",
+            "created_at",
+            "updated_at",
+        ):
             data.pop(key, None)
         skip = filled or set()
         for kind in ("characters", "locations", "props"):
