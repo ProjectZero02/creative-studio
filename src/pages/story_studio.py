@@ -1090,10 +1090,10 @@ def on_idea_live(e: me.WebEvent):
         yield
 
 
-def on_reset_auto(e: me.ClickEvent):
-    """Let auto settings change every field again."""
+def _reapply_auto() -> None:
+    """Apply the last settings read from the idea again (after a pin
+    changed): a film length is planned afresh around what is pinned."""
     s = me.state(StoryState)
-    s.pinned_json = "[]"
     try:
         found = json.loads(s.auto_json) if s.auto_json else {}
     except ValueError:
@@ -1103,6 +1103,12 @@ def on_reset_auto(e: me.ClickEvent):
             found["film_seconds"]
         )
     _apply_auto(found)
+
+
+def on_reset_auto(e: me.ClickEvent):
+    """Let auto settings change every field again."""
+    me.state(StoryState).pinned_json = "[]"
+    _reapply_auto()
 
 
 def _auto_note() -> None:
@@ -1117,12 +1123,12 @@ def _auto_note() -> None:
         return
     with me.box(classes="ss-auto-note", key="ss-auto-note"):
         me.icon("auto_awesome", style=me.Style(font_size=18, width=18, height=18))
-        me.text(
-            f"Set from your idea: {summary}"
-            if summary
-            else "Settings you picked stay as they are.",
-            style=me.Style(flex_grow=1),
-        )
+        with me.box(classes="ss-auto-text"):
+            me.text(
+                f"Set from your idea: {summary}"
+                if summary
+                else "Settings you picked stay as they are."
+            )
         if pinned:
             me.button(
                 "Use auto", type="stroked", on_click=on_reset_auto, key="ss-auto-reset"
@@ -1156,11 +1162,13 @@ def on_speech_mode(e: me.SelectSelectionChangeEvent):
 def on_scene_count(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).scene_count = int(e.value)
     _pin("scene_count")
+    _reapply_auto()  # keep the film length the idea asked for
 
 
 def on_duration(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).duration = int(e.value)
     _pin("duration")
+    _reapply_auto()  # keep the film length the idea asked for
 
 
 def on_aspect(e: me.SelectSelectionChangeEvent):

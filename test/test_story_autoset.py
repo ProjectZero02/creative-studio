@@ -281,3 +281,9 @@ def test_pinned_scene_length_replans_the_scene_count():
     assert auto.merge_settings(current, found, {"duration"}) == {"scene_count": 4}
     current = {"scene_count": 3, "duration": 10}
     assert auto.merge_settings(current, found, {"scene_count"}) == {"duration": 30}
+
+
+def test_picking_a_scene_length_replans_the_film_length(state):
+    state.auto_json = json.dumps({"film_seconds": 60, "scene_count": 6, "duration": 10})
+    page.on_duration(SimpleNamespace(value="20"))
+    assert (state.scene_count, state.duration) == (3, 20)

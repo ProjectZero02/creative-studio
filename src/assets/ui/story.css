@@ -402,6 +402,7 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
   color: var(--sys-on-surface);
 }
 .ss-auto-note .mat-icon { color: var(--sys-primary); flex: none; }
-.ss-auto-note .mat-mdc-button-base { height: 32px; flex: none; }
+.ss-auto-text { flex: 1 1 auto; min-width: 0; }
+.ss-auto-note .mat-mdc-button-base { height: 32px; flex: none; margin-left: auto; }
 .ss-brief { display: flex; flex-direction: column; gap: 4px; }
 .ss-brief .mat-mdc-form-field-subscript-wrapper { display: none; }
