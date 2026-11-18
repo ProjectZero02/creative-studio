@@ -44,6 +44,7 @@ def _caps_cfg(**over):
         STORY_MAX_FILM_SECONDS=64,
         STORY_VIDEO_RESOLUTION="720p",
         STORY_VIDEO_MODEL="gemini-omni-1.2-flash",
+        STORY_MAX_SCENE_SECONDS=30,
     )
     base.update(over)
     return lambda: SimpleNamespace(**base)
@@ -157,6 +158,12 @@ def test_caps_snap_duration_to_supported_values(monkeypatch):
     caps = apply_caps(4, 5)
     assert caps.duration in (4, 6)
     assert any("supported by the video model" in n for n in caps.notes)
+    # 30 s scenes fit when the film allows it; 4 x 30 s is over 64 s, so the
+    # film drops to 3 scenes of the longest length that fits.
+    assert apply_caps(4, 30).duration == 20
+    monkeypatch.setattr(story_models, "Default", _caps_cfg(STORY_MAX_FILM_SECONDS=180))
+    assert apply_caps(4, 30).duration == 30
+    monkeypatch.setattr(story_models, "Default", _caps_cfg(STORY_MAX_SCENE_SECONDS=15))
     assert apply_caps(4, 30).duration == 15
 
 
@@ -1234,8 +1241,144 @@ def test_take_history_starts_at_the_take():
     assert [h["content"][0].get("gcs_uri") for h in history[1::2]] == ["gs://b/c1.mp4"]
 
 
-def test_scene_lengths_go_up_to_fifteen_seconds():
-    assert story_models.supported_durations() == [4, 6, 8, 10, 12, 15]
+def test_scene_lengths_go_up_to_thirty_seconds_with_omni_extension():
+    assert story_models.supported_durations() == [4, 6, 8, 10, 12, 15, 20, 25, 30]
+    assert story_models.single_clip_max() == 15
+
+
+def test_scene_lengths_stop_at_the_clip_limit_without_extension(monkeypatch):
+    monkeypatch.setattr(
+        story_models,
+        "Default",
+        _caps_cfg(STORY_VIDEO_MODEL="gemini-omni-1.1-flash-preview"),
+    )
+    assert max(story_models.supported_durations()) == 10
+
+
+@pytest.mark.parametrize(
+    "seconds,parts",
+    [
+        (8, [8]),
+        (15, [15]),
+        (16, [13, 3]),
+        (17, [14, 3]),
+        (20, [15, 5]),
+        (25, [15, 10]),
+        (30, [15, 8, 7]),
+    ],
+)
+def test_clip_parts_first_clip_then_extensions(seconds, parts):
+    got = story_models.clip_parts(seconds, 15)
+    assert got == parts and sum(got) == seconds
+    assert all(3 <= p <= 10 for p in got[1:])
+
+
+@pytest.mark.parametrize(
+    "lengths,keep",
+    [
+        ([15.0, 5.0], [0, 1]),  # each turn returned only its new seconds
+        ([15.0, 20.1], [1]),  # the turn returned the whole video
+        ([15.0, 8.0, 30.0], [2]),
+        ([15.0, 23.0, 7.0], [1, 2]),
+    ],
+)
+def test_join_plan(lengths, keep):
+    assert story_service.join_plan(lengths) == keep
+
+
+def test_concat_args_join_real_clips(tmp_path):
+    import subprocess
+
+    from services.story_timeline import probe
+
+    ff = story_service._ffmpeg()
+    a, b = str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x36:d=1.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=440:d=1.5",
+            "-shortest",
+            "-pix_fmt",
+            "yuv420p",
+            a,
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=64x36:d=1",
+            "-pix_fmt",
+            "yuv420p",
+            b,
+        ],
+        check=True,
+    )
+    out = str(tmp_path / "out.mp4")
+    args = story_service.concat_args([a, b], [True, False], [1.5, 1.0], out)
+    subprocess.run(args, check=True)
+    length, audio = probe(out)
+    assert 2.3 < length < 2.8 and audio
+
+
+def test_long_scene_starts_its_own_take():
+    story = _omni_story(durations=[8, 20])
+    assert story.continues_take(1) is False
+    story = _omni_story(durations=[8, 12])
+    assert story.continues_take(1) is True
+
+
+def test_vertex_long_scene_extends_in_the_thread_and_joins(monkeypatch):
+    import models.omni as omni
+
+    story = _omni_story(durations=[25])
+    story.scenes[0].frame_uri = "gs://b/f0.png"
+    calls = []
+
+    def fake_omni(request):
+        calls.append(request)
+        return f"gs://b/part{len(calls)}.mp4", f"turn{len(calls)}"
+
+    monkeypatch.setattr(omni, "generate_omni_video", fake_omni)
+    backend = story_service.VertexStoryBackend.__new__(story_service.VertexStoryBackend)
+    backend.cfg = SimpleNamespace(
+        STORY_VIDEO_MODEL="gemini-omni-1.2-flash", STORY_VIDEO_RESOLUTION="720p"
+    )
+    backend._interactions = {}
+    backend._set = lambda s: None
+    joined = {}
+
+    def fake_join(st, index, pieces):
+        joined["pieces"] = pieces
+        return "gs://b/joined.mp4"
+
+    backend._join_parts = fake_join
+    uri = backend.generate_clip(story, 0, "gs://b/f0.png")
+    assert uri == "gs://b/joined.mp4"
+    assert [c.duration_seconds for c in calls] == [15, 10]
+    follow = calls[1]
+    assert follow.previous_interaction_id == "turn1"
+    history = json.loads(follow.chat_history_json)
+    assert history[1]["content"][0]["gcs_uri"] == "gs://b/part1.mp4"
+    assert follow.prompt.startswith("Continue this exact shot")
+    assert joined["pieces"] == ["gs://b/part1.mp4", "gs://b/part2.mp4"]
+    assert backend.interaction_of(uri) == "turn2"  # a next take continues from here
 
 
 def test_scenario_writer_prefers_fewer_longer_spoken_scenes():
