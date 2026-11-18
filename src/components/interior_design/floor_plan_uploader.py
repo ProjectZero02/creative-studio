@@ -1,30 +1,14 @@
 """
-Component for uploading a floor plan.
+Component for uploading a floor plan (card 1 on the Interiors page).
 """
 
 from typing import Callable
+
 import mesop as me
 
-from common.storage import store_to_gcs
 from common.utils import create_display_url
-from components.library.events import LibrarySelectionChangeEvent
+from components.demo_flow.demo_flow import cicon, ctext, demo_card_head
 from components.library.library_chooser_button import library_chooser_button
-from state.interior_design_v2_state import PageState
-
-
-IMAGE_PLACEHOLDER_STYLE = me.Style(
-    width=400,
-    height=400,
-    border=me.Border.all(
-        me.BorderSide(width=2, style="dashed", color=me.theme_var("outline-variant")),
-    ),
-    border_radius=8,
-    display="flex",
-    align_items="center",
-    justify_content="center",
-    flex_direction="column",
-    gap=8,
-)
 
 
 @me.component
@@ -33,47 +17,30 @@ def floor_plan_uploader(
     on_upload: Callable,
     on_library_select: Callable,
 ):
+    """Floor plan card: numbered heading, drop area, Upload / From library.
+
+    Rendered inside a ``gm-demo-card``, the same layout as Product 360 and
+    Fashion.
     """
-    Component for uploading a floor plan.
-    """
-    with me.box(
-        style=me.Style(
-            display="flex",
-            flex_direction="column",
-            gap=10,
-            align_items="center",
+    uri = storyboard.get("original_floor_plan_uri") if storyboard else None
+    demo_card_head("1", "Floor plan", "A clear top-down plan with room names.")
+    with me.box(classes="gm-demo-drop"):
+        if uri:
+            with me.box(classes="gm-demo-img"):
+                me.image(src=create_display_url(uri), alt="Floor plan")
+        else:
+            cicon("floorplan", "gm-demo-drop-icon")
+            ctext("No floor plan yet", "gm-demo-drop-text")
+    with me.box(classes="gm-demo-actions"):
+        me.uploader(
+            label="Replace plan" if uri else "Upload plan",
+            on_upload=on_upload,
+            accepted_file_types=["image/jpeg", "image/png", "image/webp"],
+            type="stroked",
+            key="interior_floor_plan_uploader",
         )
-    ):
-        me.text("Floor Plan", type="headline-6")
-        with me.box(
-            style=me.Style(
-                display="flex",
-                flex_direction="row",
-                gap=8,
-                align_items="center",
-                min_height=48,
-            )
-        ):
-            me.uploader(
-                label="Upload Floor Plan",
-                on_upload=on_upload,
-                accepted_file_types=["image/jpeg", "image/png", "image/webp"],
-                style=me.Style(width="100%"),
-            )
-            library_chooser_button(
-                key="floor_plan", on_library_select=on_library_select
-            )
-        with me.box(style=IMAGE_PLACEHOLDER_STYLE):
-            if storyboard and storyboard.get("original_floor_plan_uri"):
-                me.image(
-                    src=create_display_url(storyboard["original_floor_plan_uri"]),
-                    style=me.Style(
-                        height="100%",
-                        width="100%",
-                        border_radius=8,
-                        object_fit="contain",
-                    ),
-                )
-            else:
-                me.icon("floorplan")
-                me.text("Add a floor plan")
+        library_chooser_button(
+            key="floor_plan",
+            on_library_select=on_library_select,
+            button_label="From library",
+        )

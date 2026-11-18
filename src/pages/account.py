@@ -312,7 +312,10 @@ def account_content():
     email = current_user_email()
     with page_frame():  # pylint: disable=not-context-manager
         header(
-            t("account.title"), "manage_accounts", description=t("account.description"),
+            t("account.title"),
+            "manage_accounts",
+            description=t("account.description"),
+            centered=True,
         )
         if email is None:
             _banner(t("account.err_signed_out"), error=True)

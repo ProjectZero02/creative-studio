@@ -150,6 +150,13 @@ const STYLE = `
   .gml-viewer { inset-inline: 8px; width: auto; top: 64px; }
   .gml-state { min-width: 0; } .gml-state span { display: none; }
 }
+/* Phones: a round mic button instead of the wide pill, so it covers less of
+   the page (the label stays as aria-label). */
+@media (max-width: 600px) {
+  .gml-launch { width: 52px; height: 52px; padding: 0; inset-inline-end: 16px; bottom: 16px; }
+  .gml-launch span { display: none; }
+  .gml-launch svg { width: 22px; height: 22px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .gml-cursor, .gml-job, .gml-viewer { transition: none; animation: none; }
 }

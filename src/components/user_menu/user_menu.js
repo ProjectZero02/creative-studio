@@ -259,6 +259,12 @@ class UserMenu extends LitElement {
     this._open ? this._close(true) : this._openPanel();
   }
 
+  updated(changed) {
+    // Lets page CSS lift the top bar over the page only while the panel is
+    // open (studio.src.css, .gm-page > :has(user-menu[data-open])).
+    if (changed.has('_open')) this.toggleAttribute('data-open', this._open);
+  }
+
   async _openPanel() {
     this._open = true;
     await this.updateComplete;

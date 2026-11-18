@@ -192,7 +192,7 @@ def library_content():
     pagestate = me.state(PageState)
 
     with page_frame():  # pylint: disable=E1129:not-context-manager
-        header("Library", "perm_media")
+        header("Library", "perm_media", centered=True)
 
         with me.box(
             style=me.Style(

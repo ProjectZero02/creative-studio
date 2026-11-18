@@ -42,6 +42,16 @@ def cicon(name: str, cls: str) -> None:
         me.icon(name)
 
 
+def demo_card_head(number: str, title: str, hint: str) -> None:
+    """Numbered card heading used by the workflow pages (number may be "")."""
+    with me.box(classes="gm-demo-card-head"):
+        if number:
+            ctext(number, "gm-demo-card-num")
+        with me.box(classes="gm-demo-card-titles"):
+            ctext(title, "gm-demo-card-title")
+            ctext(hint, "gm-demo-card-hint")
+
+
 @me.component
 def demo_steps(steps: list[str], current: int):
     """Numbered steps. `current` is 1-based; earlier steps show as done.
