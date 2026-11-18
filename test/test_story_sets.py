@@ -268,7 +268,7 @@ def test_firestore_set_store_owner_only_and_versions():
     assert store.get(s.id, OTHER) is None
     with pytest.raises(StoryAccessError):
         store.save(StorySet(id=s.id), OTHER)
-    s.name = "Renamed"
+    s.style_notes = "warmer light"
     assert store.save(s, OWNER).version == 2
     assert store.delete(s.id, OTHER) is False
     assert store.delete(s.id, OWNER) is True
