@@ -55,3 +55,13 @@ class StoryState:
     notice: str = ""
     confirm_delete_id: str = ""
     edit_music_open: bool = False  # Edit step: music row shown
+
+    # Sets. `set_json` is the Set step's working copy of the story's set:
+    # text edits stay here (set_dirty) until Update set / Regenerate saves them.
+    create_set_id: str = ""  # Create step picker ("" = make one from the story)
+    set_json: str = ""
+    set_dirty: bool = False
+    sets_json: str = ""  # the owner's sets (library and pickers)
+    play_sample_id: str = ""  # character whose voice sample is playing
+    rename_set_id: str = ""
+    confirm_delete_set_id: str = ""

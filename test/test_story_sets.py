@@ -204,13 +204,13 @@ def test_filling_empty_slots_keeps_the_version(set_store):
             img.uri = "gs://b/other_profile.png"
     assert set_store.save(s, OWNER).version == 2  # replaced: a real change
 
+
 def test_locking_an_image_keeps_the_version(set_store):
     s = set_store.save(_sample_set(), OWNER)
     s.characters[0].images[0].locked = True
     s = set_store.save(s, OWNER)
     assert s.version == 1
     assert set_store.get(s.id, OWNER).characters[0].images[0].locked
-
 
 
 class _Snap:
@@ -808,3 +808,70 @@ def test_scenario_with_a_saved_set_casts_its_people(mock_backend, stores):
     assert all(sc.cast == ["maya"] for sc in story.scenes)
     assert story.scenes[0].location_id == "cafe"
     assert story.scenes[0].visual.startswith("Maya")
+
+
+# ---------------------------------------------------------------------------
+# Set step wiring (steps, Create picker data, page helpers)
+# ---------------------------------------------------------------------------
+
+
+def test_set_step_sits_between_scenario_and_storyboard():
+    from services.story_models import STEP_IDS, can_enter
+
+    assert STEP_IDS == [
+        "stories",
+        "create",
+        "scenario",
+        "set",
+        "storyboard",
+        "editor",
+        "video",
+    ]
+    story = Story(scenes=[Scene(visual="v")])
+    assert not can_enter("set", story)
+    story.approved = True
+    assert can_enter("set", story)
+
+
+def test_reference_photo_becomes_the_locked_front_of_the_lead(mock_backend, stores):
+    story_db, set_db = stores
+    story = _story_with_scenes(
+        story_db, reference_uri="local://uploads/me.png", character="a keeper"
+    )
+    _run(story_jobs.start_set(story.id, OWNER))
+    made = set_db.get(story_db.get(story.id, OWNER).set_id, OWNER)
+    front = next(i for i in made.on_screen()[0].images if i.view == "front")
+    assert front.uri == "local://uploads/me.png" and front.locked
+
+
+def test_set_build_prompt_keeps_the_create_step_character():
+    story = _three_scene_story()
+    story.character = "an old keeper with a grey beard"
+    assert "Main character (keep this look, list them first): an old keeper" in (
+        set_build_prompt(story)
+    )
+
+
+def test_snapshot_maps_tasks_to_set_pieces(mock_backend, stores):
+    story_db, _ = stores
+    story = _story_with_scenes(story_db)
+    job = _run(story_jobs.start_set(story.id, OWNER))
+    snap = story_jobs.job_snapshot(job.id, OWNER)
+    pieces = {tuple(v) for v in snap["targets"].values()}
+    assert len(pieces) == len(snap["tasks"]) - 1  # every task but casting
+    assert all(view for _, _, view in pieces)
+
+
+def test_save_as_new_keeps_scene_links(mock_backend, stores):
+    story_db, set_db = stores
+    story = _story_with_scenes(story_db)
+    _run(story_jobs.start_set(story.id, OWNER))
+    story = story_db.get(story.id, OWNER)
+    copy = set_db.save(
+        story_sets.duplicate(set_db.get(story.set_id, OWNER), OWNER), OWNER
+    )
+    kept = story_jobs.attach_set(story.id, OWNER, copy.id, keep_links=True)
+    assert kept.set_id == copy.id
+    assert kept.scenes[0].cast == story.scenes[0].cast
+    cleared = story_jobs.attach_set(story.id, OWNER, story.set_id)
+    assert cleared.scenes[0].cast == []

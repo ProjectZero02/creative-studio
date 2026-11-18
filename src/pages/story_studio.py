@@ -27,8 +27,17 @@ import mesop as me
 
 from common.analytics import get_logger
 from common.prompt_prefill import is_new_prompt_arrival, read_prompt_param
+from components.dialog import dialog, dialog_actions
 from components.header import header
+from components.library.events import LibrarySelectionChangeEvent
+from components.library.library_chooser_button import library_chooser_button
 from components.page_scaffold import page_frame, page_scaffold
+from components.story_studio.set_cards import (
+    SetHandlers,
+    asset_card,
+    card_key,
+    parse_key,
+)
 from components.story_studio.widgets import (
     story_stepper,
     story_style_picker,
@@ -65,6 +74,17 @@ from services.story_service import (
     get_backend,
     is_mock_mode,
 )
+from services.story_sets import (
+    KINDS,
+    Character,
+    Location,
+    Prop,
+    StorySet,
+    anchor_view,
+    ensure_views,
+    get_set_store,
+)
+from services.story_sets import duplicate as set_duplicate
 from services.story_store import StoryAccessError, get_store
 from state.state import AppState
 from state.story_state import StoryState
@@ -105,6 +125,7 @@ def on_load(e: me.LoadEvent):
     if not s.loaded:
         s.loaded = True
         _refresh_stories()
+        _refresh_sets()
         story_id = me.query_params.get("id", "")
         if story_id:
             _open_story(story_id)
@@ -186,6 +207,8 @@ def story_studio_content():
             create_step(story)
         elif step == "scenario" and story:
             scenario_step(story)
+        elif step == "set" and story:
+            set_step(story)
         elif step == "storyboard" and story:
             storyboard_step(story)
         elif step == "editor" and story:
@@ -273,6 +296,7 @@ def _load_form(story: Story) -> None:
     s.style = story.style
     s.camera = story.camera
     s.reference_uri = story.reference_uri
+    s.create_set_id = story.set_id
 
 
 def _open_story(story_id: str) -> None:
@@ -287,6 +311,7 @@ def _open_story(story_id: str) -> None:
         logger.exception("Story Studio: set migration failed")
     _set_story(story)
     _load_form(story)
+    _load_set(story, force=True)
     s.step = furthest_step(story)
     job = story_jobs.latest_job_for(story.id, _owner())
     if job is not None:
@@ -437,7 +462,9 @@ def on_tick(e: me.WebEvent):
     )
     if finished != s.job_tasks_done or snap["status"] != "running":
         s.job_tasks_done = finished
-        _reload_story()
+        story = _reload_story()
+        if snap["kind"] in ("set", "scenario"):
+            _load_set(story)
     if snap["status"] != "running":
         s.job_running = False
         story = _story()
@@ -452,6 +479,8 @@ def on_tick(e: me.WebEvent):
             s.notice = "Export finished. The new video is saved to your library."
         elif snap["kind"] == "music" and snap["status"] == "done":
             s.notice = "New music is on the timeline."
+        elif snap["kind"] == "set" and snap["status"] == "done":
+            _refresh_sets()
 
 
 def on_dismiss_error(e: me.ClickEvent):
@@ -603,6 +632,7 @@ def stories_step() -> None:
             "No stories yet. Your stories are saved here as you work.",
             style=me.Style(color=me.theme_var("on-surface-variant"), font_size=14),
         )
+    sets_library()
 
 
 def story_card(r: dict) -> None:
@@ -681,6 +711,8 @@ def _start_new_story() -> None:
     s.idea = ""
     s.character = ""
     s.reference_uri = ""
+    s.create_set_id = ""
+    _put_set(None)
     s.job_id = ""
     s.job_json = ""
     s.job_running = False
@@ -750,15 +782,35 @@ def create_step(story: Story | None) -> None:
                         on_click=on_example,
                         key=f"ex-{i}",
                     )
-            me.input(
-                label="Main character (optional)",
-                value=s.character,
+            set_rows = _sets_rows()
+            picked = next((r for r in set_rows if r["id"] == s.create_set_id), None)
+            me.select(
+                label="Set",
+                options=[
+                    me.SelectOption(label="None (make one from my story)", value="none")
+                ]
+                + [
+                    me.SelectOption(
+                        label=f"{r['name']} · {r['summary']}", value=r["id"]
+                    )
+                    for r in set_rows
+                ],
+                value=picked["id"] if picked else "none",
                 appearance="outline",
-                placeholder="e.g. an old keeper with a grey beard and a yellow raincoat",
-                on_blur=on_character_blur,
+                on_selection_change=on_pick_set,
                 style=me.Style(width="100%"),
-                key="ss-character",
+                key="ss-set-pick",
             )
+            if picked is None:
+                me.input(
+                    label="Main character (optional)",
+                    value=s.character,
+                    appearance="outline",
+                    placeholder="e.g. an old keeper with a grey beard and a yellow raincoat",
+                    on_blur=on_character_blur,
+                    style=me.Style(width="100%"),
+                    key="ss-character",
+                )
             with me.box(classes="ss-fields"):
                 me.select(
                     label="Language",
@@ -845,7 +897,7 @@ def create_step(story: Story | None) -> None:
                 on_change=on_style,
                 key="ss-style",
             )
-            with me.box(classes="ss-ref"):
+            with me.box(classes="ss-ref" + (" is-hidden" if picked else "")):
                 with me.box(classes="ss-ref-text"):
                     me.text(
                         "Character reference (optional)",
@@ -952,6 +1004,10 @@ def on_character_blur(e: me.InputBlurEvent):
     me.state(StoryState).character = e.value
 
 
+def on_pick_set(e: me.SelectSelectionChangeEvent):
+    me.state(StoryState).create_set_id = "" if e.value == "none" else e.value
+
+
 def on_example(e: me.ClickEvent):
     me.state(StoryState).idea = EXAMPLE_IDEAS[int(e.key.split("-")[1])]
 
@@ -1021,12 +1077,18 @@ def on_generate_scenario(e: me.ClickEvent):
         story.style = s.style
         story.camera = s.camera
         story.reference_uri = s.reference_uri
+        picked = s.create_set_id
+        if picked and get_set_store().get(picked, owner) is None:
+            picked = ""
+        story.set_id = picked
+        story.set_version = 0
         story.scenes = []
         story.approved = False
         story.clear_films()
         story.step = "scenario"
         story = get_store().save(story, owner)
         _set_story(story)
+        _load_set(story, force=True)
         job = story_jobs.start_scenario(story.id, owner)
     except Exception as exc:
         logger.exception("Story Studio: could not start scenario")
@@ -1169,7 +1231,7 @@ def scenario_step(story: Story) -> None:
     with me.box(classes="ss-actions"):
         me.button("Back to idea", type="stroked", on_click=on_back_create)
         me.button(
-            "Approve and paint storyboard",
+            "Approve and make set",
             type="flat",
             color="primary",
             disabled=busy_any,
@@ -1296,6 +1358,484 @@ def on_approve(e: me.ClickEvent):
 
     def apply(story: Story) -> None:
         story.approved = True
+        story.step = "set"
+
+    story = _edit(apply)
+    if story is None:
+        return
+    _load_set(story)
+    s.step = "set"
+
+
+# ---------------------------------------------------------------------------
+# Sets: helpers
+# ---------------------------------------------------------------------------
+
+
+def _set() -> StorySet | None:
+    """The Set step's working copy of the story's set."""
+    s = me.state(StoryState)
+    if not s.set_json:
+        return None
+    try:
+        return StorySet.from_dict(json.loads(s.set_json))
+    except ValueError:
+        return None
+
+
+def _put_set(story_set: StorySet | None, dirty: bool = False) -> None:
+    s = me.state(StoryState)
+    s.set_json = json.dumps(story_set.to_dict()) if story_set else ""
+    s.set_dirty = dirty if story_set else False
+
+
+def _load_set(story: Story | None, force: bool = False) -> None:
+    """Copy the story's stored set into the page (keeps unsaved edits)."""
+    s = me.state(StoryState)
+    if s.set_dirty and not force:
+        return
+    st = (
+        get_set_store().get(story.set_id, _owner())
+        if story is not None and story.set_id
+        else None
+    )
+    _put_set(st)
+
+
+def _refresh_sets() -> None:
+    s = me.state(StoryState)
+    try:
+        rows = get_set_store().list(_owner())
+    except Exception:
+        logger.exception("Story Studio: could not list sets")
+        rows = []
+    out = []
+    for r in rows:
+        cover = next((u for u in r.media_uris() if not u.endswith(".wav")), "")
+        out.append(
+            {
+                "id": r.id,
+                "name": r.name,
+                "summary": r.summary(),
+                "version": r.version,
+                "updated": r.updated_at,
+                "cover": cover,
+            }
+        )
+    s.sets_json = json.dumps(out)
+
+
+def _sets_rows() -> list[dict]:
+    return json.loads(me.state(StoryState).sets_json or "[]")
+
+
+def _merge_into(stored: StorySet, draft: StorySet) -> None:
+    """Write the draft's text and asset list into the stored set, keeping
+    images and samples the stored copy has that the draft lacks."""
+    old = {(k, a.id): a for k in KINDS for a in stored.assets(k)}
+    for kind in KINDS:
+        for asset in draft.assets(kind):
+            before = old.get((kind, asset.id))
+            if before is None:
+                continue
+            have = {i.view: i for i in before.images}
+            for img in asset.images:
+                if not img.uri and have.get(img.view) and have[img.view].uri:
+                    img.uri, img.prompt = have[img.view].uri, have[img.view].prompt
+                    img.locked = have[img.view].locked
+            if isinstance(asset, Character) and not asset.voice.sample_uri:
+                same = (
+                    before.voice.tts_voice == asset.voice.tts_voice
+                    and before.voice.style == asset.voice.style
+                )
+                if same:
+                    asset.voice.sample_uri = before.voice.sample_uri
+    stored.name = draft.name
+    stored.style_notes = draft.style_notes
+    stored.characters = draft.characters
+    stored.locations = draft.locations
+    stored.props = draft.props
+
+
+def _save_draft() -> StorySet | None:
+    """Save the Set step's edits (if any). Returns the saved set."""
+    s = me.state(StoryState)
+    draft = _set()
+    if draft is None:
+        return None
+    if not s.set_dirty:
+        return draft
+    try:
+        saved = story_jobs.mutate_set(
+            draft.id, _owner(), lambda st: _merge_into(st, draft)
+        )
+    except StoryAccessError as exc:
+        s.error = str(exc)
+        return None
+    _put_set(saved)
+    return saved
+
+
+def _edit_draft(fn) -> None:
+    """Change the working copy; nothing is saved or regenerated yet."""
+    draft = _set()
+    if draft is None:
+        return
+    before = json.dumps(draft.to_dict(), sort_keys=True)
+    fn(draft)
+    if json.dumps(draft.to_dict(), sort_keys=True) != before:
+        _put_set(draft, dirty=True)
+
+
+def _set_tasks() -> dict:
+    """(kind, asset id, view) -> task of the set job being watched."""
+    job = _job()
+    if not job or job.get("kind") != "set":
+        return {}
+    targets = job.get("targets") or {}
+    return {
+        tuple(targets[t["id"]]): t
+        for t in job.get("tasks", [])
+        if t["id"] in targets and t["status"] != "done"
+    }
+
+
+def _start_set(targets: list | None = None) -> None:
+    s = me.state(StoryState)
+    if _save_draft() is None and _set() is not None:
+        return
+    try:
+        job = story_jobs.start_set(s.story_id, _owner(), targets)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Set
+# ---------------------------------------------------------------------------
+
+SET_HANDLERS: SetHandlers | None = None
+
+
+def _handlers() -> SetHandlers:
+    global SET_HANDLERS
+    if SET_HANDLERS is None:
+        SET_HANDLERS = SetHandlers(
+            on_field=on_set_field,
+            on_voice=on_set_voice,
+            on_regen=on_set_regen,
+            on_lock=on_set_lock,
+            on_upload=on_set_upload,
+            on_library=on_set_library,
+            on_play=on_set_play,
+            on_remove=on_set_remove,
+            library_button=library_chooser_button,
+        )
+    return SET_HANDLERS
+
+
+def set_step(story: Story) -> None:
+    s = me.state(StoryState)
+    busy = _job_active_for("set")
+    st = _set()
+    progress_panel("Making your set", ("set",))
+    if st is None:
+        with me.box(classes="ss-card ss-set-empty"):
+            _section_title(
+                "Set",
+                "Characters, places and props, made once and reused in every shot.",
+            )
+            me.text(
+                "Gemini casts your story, then makes about 4 images per "
+                "character, 2 per place and 1 per prop.",
+                style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
+            )
+            with me.box(classes="ss-set-tools"):
+                me.button(
+                    "Making…" if busy else "Make set",
+                    type="flat",
+                    color="primary",
+                    disabled=busy,
+                    on_click=on_make_set,
+                    key="ss-make-set",
+                )
+                me.button(
+                    "Skip",
+                    type="stroked",
+                    disabled=busy,
+                    on_click=on_to_storyboard,
+                    key="ss-skip-set",
+                )
+        with me.box(classes="ss-actions"):
+            me.button("Back to scenario", type="stroked", on_click=on_back_scenario)
+        return
+
+    missing = st.missing_images()
+    tasks = _set_tasks() if busy or (_job() or {}).get("kind") == "set" else {}
+    with me.box(classes="ss-card ss-set-head"):
+        with me.box(classes="ss-set-name"):
+            me.input(
+                label="Set name",
+                value=st.name,
+                appearance="outline",
+                disabled=busy,
+                on_blur=on_set_field,
+                style=me.Style(width="100%"),
+                key=card_key("setname", "", st.id),
+            )
+            meta = f"{st.summary()} · version {st.version}"
+            if missing:
+                meta += f" · {missing} image{'s' if missing != 1 else ''} to make"
+            if s.set_dirty:
+                meta += " · unsaved"
+            me.text(
+                meta,
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+            )
+        with me.box(classes="ss-set-tools"):
+            me.button(
+                "Making…" if busy else "Make set",
+                type="flat",
+                color="primary",
+                disabled=busy or not missing,
+                on_click=on_make_set,
+                key="ss-make-set",
+            )
+            me.button(
+                "Update set",
+                type="stroked",
+                disabled=busy or not s.set_dirty,
+                on_click=on_update_set,
+                key="ss-update-set",
+            )
+            me.button(
+                "Save as new",
+                type="stroked",
+                disabled=busy,
+                on_click=on_save_set_as_new,
+                key="ss-save-new-set",
+            )
+    h = _handlers()
+    demo = is_mock_mode()
+    for kind, title, assets, add in (
+        ("character", "Characters", st.characters, "Add character"),
+        ("location", "Locations", st.locations, "Add location"),
+        ("prop", "Props", st.props, "Add prop"),
+    ):
+        with me.box(classes="ss-set-section"):
+            with me.box(classes="ss-set-section-head"):
+                me.text(
+                    title,
+                    type="headline-6",
+                    style=me.Style(
+                        margin=me.Margin.all(0), font_size=18, font_weight=600
+                    ),
+                )
+                me.button(
+                    add,
+                    type="stroked",
+                    disabled=busy,
+                    on_click=on_add_asset,
+                    key=f"add|{kind}",
+                )
+            if assets:
+                with me.box(classes="ss-set-grid"):
+                    for asset in assets:
+                        asset_card(
+                            kind,
+                            asset,
+                            tasks=tasks,
+                            h=h,
+                            busy=busy,
+                            playing=s.play_sample_id,
+                            demo=demo,
+                        )
+    with me.box(classes="ss-actions"):
+        me.button("Back to scenario", type="stroked", on_click=on_back_scenario)
+        me.button(
+            "Paint storyboard",
+            type="flat",
+            color="primary",
+            disabled=busy,
+            on_click=on_to_storyboard,
+            style=me.Style(height=44),
+        )
+
+
+_TEXT_FIELDS = {"name", "description", "outfit", "time_of_day"}
+
+
+def on_set_field(e: me.InputBlurEvent):
+    action, kind, asset_id, _ = parse_key(e.key)
+    value = (e.value or "").strip()
+
+    def apply(draft: StorySet) -> None:
+        if action == "setname":
+            draft.name = value or draft.name
+            return
+        asset = draft.asset(kind, asset_id)
+        if asset is None:
+            return
+        if action in _TEXT_FIELDS:
+            setattr(asset, action, value)
+        elif action == "style" and asset.voice.style != value:
+            asset.voice.style = value
+            asset.voice.sample_uri = ""  # the sample no longer matches
+        elif action == "voice_description":
+            asset.voice.description = value
+
+    _edit_draft(apply)
+
+
+def on_set_voice(e: me.SelectSelectionChangeEvent):
+    _, kind, asset_id, _ = parse_key(e.key)
+
+    def apply(draft: StorySet) -> None:
+        asset = draft.asset(kind, asset_id)
+        if asset is not None and e.value in VOICES and asset.voice.tts_voice != e.value:
+            asset.voice.tts_voice = e.value
+            asset.voice.sample_uri = ""
+
+    _edit_draft(apply)
+
+
+def on_set_regen(e: me.ClickEvent):
+    _, kind, asset_id, view = parse_key(e.key)
+    me.state(StoryState).play_sample_id = ""
+    _start_set([[kind, asset_id, view]])
+
+
+def _change_stored(fn) -> None:
+    """Save the draft, then change the stored set (lock, uploads)."""
+    s = me.state(StoryState)
+    draft = _save_draft()
+    if draft is None:
+        return
+    try:
+        _put_set(story_jobs.mutate_set(draft.id, _owner(), fn))
+    except StoryAccessError as exc:
+        s.error = str(exc)
+
+
+def on_set_lock(e: me.ClickEvent):
+    _, kind, asset_id, view = parse_key(e.key)
+
+    def apply(st: StorySet) -> None:
+        asset = st.asset(kind, asset_id)
+        for img in asset.images if asset else []:
+            if img.view == view and img.uri:
+                img.locked = not img.locked
+
+    _change_stored(apply)
+
+
+def _replace_main_image(kind: str, asset_id: str, uri: str) -> None:
+    """Use the user's own picture as the asset's main image (locked)."""
+
+    def apply(st: StorySet) -> None:
+        asset = st.asset(kind, asset_id)
+        if asset is None:
+            return
+        ensure_views(asset)
+        main = anchor_view(asset) if kind != "prop" else "item"
+        for img in asset.images:
+            if img.view == main:
+                img.uri, img.prompt, img.locked = uri, "", True
+
+    _change_stored(apply)
+
+
+def on_set_upload(e: me.UploadEvent):
+    s = me.state(StoryState)
+    _, kind, asset_id, _ = parse_key(e.key)
+    try:
+        uri = get_backend().save_upload(e.file.getvalue(), e.file.mime_type)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _replace_main_image(kind, asset_id, uri)
+
+
+def on_set_library(e: LibrarySelectionChangeEvent):
+    _, kind, asset_id, _ = parse_key(e.chooser_id)
+    if e.gcs_uri:
+        _replace_main_image(kind, asset_id, e.gcs_uri)
+
+
+def on_set_play(e: me.ClickEvent):
+    s = me.state(StoryState)
+    _, _, asset_id, _ = parse_key(e.key)
+    s.play_sample_id = "" if s.play_sample_id == asset_id else asset_id
+
+
+def on_set_remove(e: me.ClickEvent):
+    _, kind, asset_id, _ = parse_key(e.key)
+
+    def apply(draft: StorySet) -> None:
+        items = draft.assets(kind)
+        items[:] = [a for a in items if a.id != asset_id]
+
+    _edit_draft(apply)
+
+
+def on_add_asset(e: me.ClickEvent):
+    kind = e.key.split("|", 1)[1]
+
+    def apply(draft: StorySet) -> None:
+        n = len(draft.assets(kind)) + 1
+        made = {
+            "character": lambda: Character(name=f"Character {n}"),
+            "location": lambda: Location(name=f"Location {n}"),
+            "prop": lambda: Prop(name=f"Prop {n}"),
+        }[kind]()
+        ensure_views(made)
+        draft.assets(kind).append(made)
+
+    _edit_draft(apply)
+
+
+def on_make_set(e: me.ClickEvent):
+    me.state(StoryState).error = ""
+    _start_set()
+
+
+def on_update_set(e: me.ClickEvent):
+    s = me.state(StoryState)
+    if _save_draft() is not None:
+        s.notice = "Set updated."
+        _refresh_sets()
+
+
+def on_save_set_as_new(e: me.ClickEvent):
+    s = me.state(StoryState)
+    draft = _set()
+    if draft is None:
+        return
+    owner = _owner()
+    try:
+        current = get_set_store().get(draft.id, owner)
+        name = draft.name
+        if current is not None and name == current.name:
+            name = f"{name} copy"
+        made = get_set_store().save(set_duplicate(draft, owner, name), owner)
+        story_jobs.attach_set(s.story_id, owner, made.id, keep_links=True)
+    except StoryAccessError as exc:
+        s.error = str(exc)
+        return
+    _reload_story()
+    _put_set(made)
+    _refresh_sets()
+    s.notice = f"Saved as “{made.name}”. This story now uses it."
+
+
+def on_to_storyboard(e: me.ClickEvent):
+    s = me.state(StoryState)
+    if s.set_dirty and _save_draft() is None:
+        return
+
+    def apply(story: Story) -> None:
         story.step = "storyboard"
 
     story = _edit(apply)
@@ -1312,7 +1852,149 @@ def on_approve(e: me.ClickEvent):
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Storyboard
+# Sets library (on the Stories step)
+# ---------------------------------------------------------------------------
+
+
+def sets_library() -> None:
+    s = me.state(StoryState)
+    rows = _sets_rows()
+    if not rows:
+        return
+    _section_title("Your sets", "Reuse the same cast and places in any story.")
+    with me.box(classes="ss-stories ss-sets"):
+        for r in rows:
+            with me.box(classes="ss-story ss-set-row"):
+                with me.box(classes="ss-story-cover"):
+                    if r.get("cover"):
+                        me.image(
+                            src=display_url(r["cover"]),
+                            alt="",
+                            style=me.Style(
+                                width="100%", height="100%", object_fit="cover"
+                            ),
+                        )
+                    else:
+                        with me.box(classes="ss-media-overlay"):
+                            me.icon("groups")
+                with me.box(classes="ss-story-body"):
+                    if s.rename_set_id == r["id"]:
+                        me.input(
+                            label="Set name",
+                            value=r["name"],
+                            appearance="outline",
+                            on_blur=on_rename_set,
+                            style=me.Style(width="100%"),
+                            key=f"rename-{r['id']}",
+                        )
+                    else:
+                        me.text(
+                            r["name"],
+                            style=me.Style(font_weight=600, font_size=16),
+                        )
+                    with me.box(classes="ss-meta"):
+                        me.text(r["summary"], style=me.Style(font_size=13))
+                        me.text("·", style=me.Style(font_size=13))
+                        me.text(
+                            f"Updated {_fmt_date(r['updated'])}",
+                            style=me.Style(font_size=13),
+                        )
+                    with me.box(classes="ss-set-lib-tools"):
+                        me.button(
+                            "Rename",
+                            type="stroked",
+                            on_click=on_ask_rename_set,
+                            key=f"rn-{r['id']}",
+                        )
+                        me.button(
+                            "Duplicate",
+                            type="stroked",
+                            on_click=on_duplicate_set,
+                            key=f"dup-{r['id']}",
+                        )
+                        me.button(
+                            "Delete",
+                            type="stroked",
+                            on_click=on_ask_delete_set,
+                            key=f"dset-{r['id']}",
+                        )
+    target = next((r for r in rows if r["id"] == s.confirm_delete_set_id), None)
+    with dialog(is_open=target is not None, key="ss-delete-set-dialog"):  # pylint: disable=not-context-manager
+        me.text(
+            f"Delete “{target['name']}”?" if target else "Delete set?",
+            type="headline-6",
+            style=me.Style(margin=me.Margin(bottom=8)),
+        )
+        me.text(
+            "Stories that use it keep their films, but new renders won't use it.",
+            style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
+        )
+        with dialog_actions():  # pylint: disable=not-context-manager
+            me.button("Cancel", type="stroked", on_click=on_cancel_delete_set)
+            me.button(
+                "Delete", type="flat", color="warn", on_click=on_confirm_delete_set
+            )
+
+
+def on_ask_rename_set(e: me.ClickEvent):
+    me.state(StoryState).rename_set_id = e.key.split("-", 1)[1]
+
+
+def on_rename_set(e: me.InputBlurEvent):
+    s = me.state(StoryState)
+    set_id = e.key.split("-", 1)[1]
+    name = (e.value or "").strip()
+    s.rename_set_id = ""
+    if name:
+
+        def apply(st: StorySet) -> None:
+            st.name = name[:60]
+
+        try:
+            saved = story_jobs.mutate_set(set_id, _owner(), apply)
+        except StoryAccessError as exc:
+            s.error = str(exc)
+            return
+        if _set() is not None and _set().id == set_id and not s.set_dirty:
+            _put_set(saved)
+    _refresh_sets()
+
+
+def on_duplicate_set(e: me.ClickEvent):
+    s = me.state(StoryState)
+    owner = _owner()
+    original = get_set_store().get(e.key.split("-", 1)[1], owner)
+    if original is None:
+        s.error = "That set was not found."
+        return
+    get_set_store().save(set_duplicate(original, owner), owner)
+    _refresh_sets()
+
+
+def on_ask_delete_set(e: me.ClickEvent):
+    me.state(StoryState).confirm_delete_set_id = e.key.split("-", 1)[1]
+
+
+def on_cancel_delete_set(e: me.ClickEvent):
+    me.state(StoryState).confirm_delete_set_id = ""
+
+
+def on_confirm_delete_set(e: me.ClickEvent):
+    s = me.state(StoryState)
+    set_id = s.confirm_delete_set_id
+    s.confirm_delete_set_id = ""
+    if not get_set_store().delete(set_id, _owner()):
+        s.error = "Could not delete that set."
+    if s.create_set_id == set_id:
+        s.create_set_id = ""
+    current = _set()
+    if current is not None and current.id == set_id:
+        _put_set(None)
+    _refresh_sets()
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Storyboard
 # ---------------------------------------------------------------------------
 
 
@@ -1413,7 +2095,7 @@ def storyboard_step(story: Story) -> None:
                             me.text("Regenerate frame")
     ready = bool(story.scenes) and all(sc.frame_uri for sc in story.scenes)
     with me.box(classes="ss-actions"):
-        me.button("Back to scenario", type="stroked", on_click=on_back_scenario)
+        me.button("Back to set", type="stroked", on_click=on_back_set)
         me.button(
             "Continue to scenes",
             type="flat",
@@ -1440,6 +2122,10 @@ def on_back_scenario(e: me.ClickEvent):
     me.state(StoryState).step = "scenario"
 
 
+def on_back_set(e: me.ClickEvent):
+    me.state(StoryState).step = "set"
+
+
 def on_to_editor(e: me.ClickEvent):
     s = me.state(StoryState)
 
@@ -1453,7 +2139,7 @@ def on_to_editor(e: me.ClickEvent):
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Editor
+# Step 6: Editor
 # ---------------------------------------------------------------------------
 
 
@@ -1887,12 +2573,19 @@ def edit_view(story: Story) -> None:
                     story.title or "Your film",
                     style=me.Style(font_size=18, font_weight=600),
                 )
+                used = _set() if story.set_id else None
                 me.text(
-                    f"{_fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}",
+                    f"{_fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}"
+                    + (f" · Set: {used.name}" if used else ""),
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
                 )
+                if used and story.set_version and story.set_version != used.version:
+                    me.text(
+                        "Set changed since this film was made",
+                        style=me.Style(font_size=13, color=me.theme_var("error")),
+                    )
             with me.box(classes="ss-edit-tools"):
                 me.button(
                     "Scenes",

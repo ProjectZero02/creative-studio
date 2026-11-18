@@ -294,6 +294,8 @@ def job_snapshot(job_id: str, owner: str) -> dict | None:
         "done": done,
         "total": len(tasks),
         "tasks": tasks,
+        # Set jobs: task id -> [kind, asset id, view], so cards show progress.
+        "targets": dict(job.params.get("task_targets") or {}),
     }
 
 
@@ -1045,14 +1047,19 @@ def mutate_set(set_id: str, owner: str, fn: Callable[[StorySet], None]) -> Story
         return store.save(story_set, owner)
 
 
-def attach_set(story_id: str, owner: str, set_id: str) -> Story:
-    """Make a story use one of the owner's sets ("" = no set)."""
+def attach_set(
+    story_id: str, owner: str, set_id: str, keep_links: bool = False
+) -> Story:
+    """Make a story use one of the owner's sets ("" = no set). The scenes'
+    cast and places are cleared unless `keep_links` (a copy of the same set)."""
     if set_id and get_set_store().get(set_id, owner) is None:
         raise StoryAccessError("Set not found.")
 
     def apply(s: Story) -> None:
         if s.set_id != set_id:
             s.set_id = set_id
+            if keep_links:
+                return
             for sc in s.scenes:
                 sc.cast, sc.location_id, sc.prop_ids, sc.speaker_id = [], "", [], ""
 
@@ -1080,6 +1087,18 @@ def _set_work(story_set: StorySet, targets: list | None) -> list[tuple]:
                 ):
                     out.append(key)
     return out
+
+
+def _seed_lead(story_set: StorySet, story: Story) -> None:
+    """The Create step's reference photo becomes the lead's front image
+    (locked, so it is kept), the base for the lead's other views."""
+    lead = next(iter(story_set.on_screen()), None)
+    if lead is None or not story.reference_uri:
+        return
+    ensure_views(lead)
+    for img in lead.images:
+        if img.view == "front":
+            img.uri, img.locked = story.reference_uri, True
 
 
 def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
@@ -1115,6 +1134,7 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
                 for _ in range(2):  # one automatic retry on malformed JSON
                     try:
                         made = parse_set_build(backend.write_set(current), current)
+                        _seed_lead(made, current)
                         break
                     except ScenarioError as exc:
                         last = exc

@@ -646,7 +646,10 @@ class MockStoryBackend:
         three of the scenes' places and one prop."""
         self._sleep(1.2, 2.0)
         hero = _hero_from_idea(story.idea)
-        name = hero.split()[-1].capitalize() if hero else "Hero"
+        words = hero.split()
+        name = (
+            (words[1] if len(words) > 1 else words[0]).capitalize() if words else "Hero"
+        )
         characters = [
             {
                 "key": "c1",

@@ -38,6 +38,7 @@ STEPS: list[tuple[str, str, str]] = [
     ("stories", "Stories", "collections_bookmark"),
     ("create", "Create", "edit_note"),
     ("scenario", "Scenario", "description"),
+    ("set", "Set", "groups"),
     ("storyboard", "Storyboard", "view_carousel"),
     ("editor", "Scenes", "tune"),
     ("video", "Edit", "movie"),
@@ -930,11 +931,16 @@ def set_build_prompt(story: Story) -> str:
         f"{sc.visual} | Line: {sc.narration}"
         for i, sc in enumerate(story.scenes)
     )
+    lead = (
+        f"\nMain character (keep this look, list them first): {story.character.strip()}"
+        if story.character.strip()
+        else ""
+    )
     return f"""You are a casting director and production designer.
 Read this short film and list everything that must look and sound the same
 in every shot. Visual style: {style["label"]}.
 
-Idea: \"\"\"{story.idea.strip()}\"\"\"
+Idea: \"\"\"{story.idea.strip()}\"\"\"{lead}
 Scenes:
 {scenes}
 
@@ -1134,6 +1140,7 @@ def reachable_steps(story: Story | None) -> set[str]:
     if story.scenes:
         reach.add("scenario")
     if story.approved and story.scenes:
+        reach.add("set")
         reach.add("storyboard")
         if all(s.frame_uri for s in story.scenes):
             reach.add("editor")

@@ -15,7 +15,7 @@
  */
 
 /**
- * <story-stepper>: Stories → Create → Scenario → Storyboard → Editor → Video.
+ * <story-stepper>: Stories → Create → Scenario → Set → Storyboard → Scenes → Edit.
  *
  * Each step is a real <button> (keyboard and screen reader friendly) with an
  * icon, a label and a connecting line. States: done, current, upcoming.
@@ -28,6 +28,7 @@ const ICONS = {
   stories: svg`<rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/>`,
   create: svg`<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>`,
   scenario: svg`<path d="M6 3h9l4 4v14H6z"/><path d="M14.5 3v4.5H19"/><path d="M9 12h7M9 16h7"/>`,
+  set: svg`<circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c.6-3.3 3-5.2 6-5.2s5.4 1.9 6 5.2"/><circle cx="17" cy="9" r="2.4"/><path d="M16.2 14.4c2.4.1 4.2 1.6 4.8 4.4"/>`,
   storyboard: svg`<rect x="2.5" y="5" width="8.5" height="6.5" rx="1.5"/><rect x="13" y="5" width="8.5" height="6.5" rx="1.5"/><rect x="2.5" y="13.5" width="8.5" height="6.5" rx="1.5"/><rect x="13" y="13.5" width="8.5" height="6.5" rx="1.5"/>`,
   editor: svg`<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>`,
   video: svg`<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.2v5.6l4.6-2.8z" fill="currentColor"/>`,
