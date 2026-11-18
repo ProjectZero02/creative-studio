@@ -277,7 +277,7 @@ def build_timeline(
             clip["ambient"] = True
         vids.append(clip)
     _layout_video(vids)
-    for seg, vclip in zip(plan.segments, vids):
+    for seg, vclip in zip(plan.segments, vids, strict=True):
         vuri = voice_uris.get(seg.index, "")
         if not vuri:
             continue
