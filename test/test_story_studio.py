@@ -1063,6 +1063,7 @@ def test_arabic_clips_chain_from_each_other_with_continuity(local_store):
             Story(
                 approved=True,
                 continuity=True,
+                continuous_takes=False,
                 second_on=True,
                 same_voice=False,
                 scenes=scenes,
@@ -1182,10 +1183,9 @@ def test_tts_voice_follows_speaker_gender():
 def test_dubbed_story_keeps_main_clips_for_second_language():
     sc = Scene(narration="a", narration_alt="b", spoken=True, clip_uri="main")
     sc.clip_alt_uri, sc.clip_alt_key = "refilmed", sc.alt_clip_key()
-    assert story_models.alt_story(Story(scenes=[sc])).scenes[0].clip_uri == "main"
+    assert story_models.alt_story(Story(scenes=[sc], same_voice=True)).scenes[0].clip_uri == "main"
     refilm = Story(scenes=[sc], same_voice=False)
     assert story_models.alt_story(refilm).scenes[0].clip_uri == "refilmed"
-
 
 
 class _VoiceMock(_SpeechMock):
@@ -1204,7 +1204,7 @@ def test_same_voice_voices_spoken_lines_with_the_fixed_voice(local_store):
     backend = _VoiceMock()
     story_service.set_backend(backend)
     try:
-        s = _spoken_story(local_store, speaker_tts_voice="Orus", voice_name="Kore")
+        s = _spoken_story(local_store, speaker_tts_voice="Orus", voice_name="Kore", same_voice=True)
         job = _run(story_jobs.start_video(s.id, OWNER))
         assert job.status == "done", [(t.label, t.error) for t in job.tasks]
         # Spoken scene: the fixed presenter voice; narrated scene: the narrator.
@@ -1221,7 +1221,7 @@ def test_same_voice_dubs_second_language_over_the_same_clips(local_store):
     backend = _VoiceMock()
     story_service.set_backend(backend)
     try:
-        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus")
+        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus", same_voice=True)
         job = _run(story_jobs.start_video(s.id, OWNER))
         assert job.status == "done", [(t.label, t.error) for t in job.tasks]
         assert "clip_alt" not in {t.kind for t in job.tasks}  # no re-filming
@@ -1241,7 +1241,7 @@ def test_same_voice_works_with_narrator_voiceover_off(local_store):
     backend = _VoiceMock()
     story_service.set_backend(backend)
     try:
-        s = _spoken_story(local_store, voice_on=False)
+        s = _spoken_story(local_store, voice_on=False, same_voice=True)
         job = _run(story_jobs.start_video(s.id, OWNER))
         assert [t.scene_index for t in job.tasks if t.kind == "voice"] == [0]
     finally:
@@ -1271,54 +1271,9 @@ def test_scenario_picks_fixed_voice_from_speaker_gender(fast_backend, local_stor
     assert local_store.get(s.id, OWNER).speaker_tts_voice == "Kore"
 
 
-
 # ---------------------------------------------------------------------------
 # Word-level lip timing, stage sound and voice preview
 # ---------------------------------------------------------------------------
-
-
-def test_match_words_pairs_the_same_words_in_order():
-    voice = [("Hello", 0.0, 0.4), ("everyone,", 0.5, 1.0), ("welcome", 1.1, 1.6)]
-    clip = [("hello", 0.8, 1.1), ("um", 1.2, 1.3), ("everyone", 1.4, 2.0), ("welcome", 2.2, 2.9)]
-    pairs = story_service.match_words(voice, clip)
-    assert pairs == [(0.0, 0.4, 0.8, 1.1), (0.5, 1.0, 1.4, 2.0), (1.1, 1.6, 2.2, 2.9)]
-    assert story_service.match_words(voice, []) == []
-
-
-def test_warp_points_are_monotonic_and_keep_lead_in_and_tail():
-    pairs = [(0.2, 0.5, 1.0, 1.4), (0.6, 1.0, 1.5, 2.0)]
-    points = story_service.warp_points(pairs, 1.3)
-    assert points[0] == (0.0, pytest.approx(0.8))
-    assert points[-1] == (1.3, pytest.approx(2.3))
-    assert all(b[0] > a[0] and b[1] > a[1] for a, b in zip(points, points[1:]))
-
-
-def test_atempo_chain_splits_extreme_tempos():
-    assert story_service._atempo_chain(1.2) == "atempo=1.2000"
-    assert story_service._atempo_chain(3.0).count("atempo") == 2
-
-
-def test_warp_voice_moves_each_word_to_its_clip_time(tmp_path):
-    import numpy as np
-
-    rate = 24000
-    v = np.zeros(int(rate * 1.0), dtype=np.float32)
-    t = np.arange(int(rate * 0.2)) / rate
-    v[: len(t)] = 0.3 * np.sin(2 * np.pi * 200 * t)  # word 1: 0.0-0.2s
-    v[int(rate * 0.5) : int(rate * 0.5) + len(t)] = 0.3 * np.sin(2 * np.pi * 300 * t)  # word 2
-    src = story_service._write_wav(str(tmp_path / "v.wav"), v, rate)
-    # Word 1 lands at 0.4s, word 2 at 1.4s in the clip.
-    points = [(0.0, 0.4), (0.2, 0.6), (0.5, 1.4), (0.7, 1.6), (1.0, 1.9)]
-    out = story_service.warp_voice(src, points, str(tmp_path / "w.wav"))
-    a = story_service.read_mono(out, 16000)
-
-    def loud(t0, t1):
-        return np.abs(a[int(t0 * 16000) : int(t1 * 16000)]).max()
-
-    assert loud(0.0, 0.35) < 0.02
-    assert loud(0.42, 0.58) > 0.1
-    assert loud(0.7, 1.3) < 0.05
-    assert loud(1.42, 1.58) > 0.1
 
 
 def test_stage_voice_keeps_the_voice_without_echo(tmp_path):
@@ -1363,20 +1318,6 @@ def test_transcribe_words_falls_back_quietly(tmp_path, monkeypatch):
     assert story_service.transcribe_words(src, "en-US") == []
 
 
-def test_sync_words_only_for_same_language(tmp_path):
-    import numpy as np
-
-    src = story_service._write_wav(
-        str(tmp_path / "v.wav"), np.zeros(16000, dtype=np.float32), 16000
-    )
-    words = [("a", 0.1, 0.2), ("b", 0.3, 0.4), ("c", 0.5, 0.6)]
-    timer = lambda path, lang: words  # noqa: E731
-    out = str(tmp_path / "o.wav")
-    assert story_service._sync_words(src, src, out, timer, "ar-SA", "en-US") == ""
-    assert story_service._sync_words(src, src, out, None, "en-US", "en-US") == ""
-    assert story_service._sync_words(src, src, out, timer, "en-US", "en-US") == out
-
-
 def test_dubbed_second_language_remembers_clip_language():
     sc = Scene(narration="a", narration_alt="b", spoken=True, clip_uri="main")
     alt = story_models.alt_story(Story(scenes=[sc], second_on=True))
@@ -1408,7 +1349,6 @@ def test_presenter_lines_use_the_speaker_model():
     cfg = Default()
     assert cfg.STORY_SPEAKER_TTS_MODEL == "gemini-2.5-pro-tts"
     assert "stage" in story_service.PRESENTER_DIRECTION
-
 
 
 # ---------------------------------------------------------------------------
@@ -1457,7 +1397,7 @@ def test_spoken_line_is_voiced_after_its_clip_with_its_delivery(local_store):
     backend = Backend()
     story_service.set_backend(backend)
     try:
-        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus")
+        s = _spoken_story(local_store, second_on=True, speaker_tts_voice="Orus", same_voice=True)
         job = _run(story_jobs.start_video(s.id, OWNER))
         assert job.status == "done", [(t.label, t.error) for t in job.tasks]
         clip0 = order.index(("clip", 0))

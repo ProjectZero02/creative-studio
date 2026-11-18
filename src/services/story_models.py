@@ -39,8 +39,8 @@ STEPS: list[tuple[str, str, str]] = [
     ("create", "Create", "edit_note"),
     ("scenario", "Scenario", "description"),
     ("storyboard", "Storyboard", "view_carousel"),
-    ("editor", "Editor", "tune"),
-    ("video", "Video", "movie"),
+    ("editor", "Scenes", "tune"),
+    ("video", "Edit", "movie"),
 ]
 STEP_IDS = [s[0] for s in STEPS]
 
@@ -208,6 +208,11 @@ class Scene:
     # Clip whose last frame the second-language clip started from (the
     # previous scene's clip in that film), like continues_from.
     clip_alt_from: str = ""
+    # Continuous take: this clip was made by extending the previous scene's
+    # clip (Veo video extension), so it is the same shot and voice. Its first
+    # `clip_in` seconds repeat the previous clip and are cut by the timeline.
+    extends_from: str = ""
+    clip_in: float = 0.0
 
     def alt_clip_key(self) -> str:
         """What a second-language clip must match to still be current."""
@@ -256,10 +261,21 @@ class Story:
     # the same way in every spoken clip so it stays consistent.
     speech_mode: str = "auto"
     speaker_voice: str = ""
-    # Veo picks a new voice for every clip. With same_voice, spoken lines
-    # are voiced by one fixed TTS voice instead, timed to when the person
-    # on screen talks; the second language is dubbed over the same clips.
-    same_voice: bool = True
+    # Veo picks the voice of every clip. With same_voice, spoken lines are
+    # voiced by one fixed TTS voice instead (lips will not match exactly);
+    # the second language is dubbed over the same clips. Off by default:
+    # Veo's own speech has exact lip sync and a natural pace.
+    same_voice: bool = False
+    # Back-to-back spoken scenes extend the previous clip (Veo extension),
+    # so the person, shot and voice carry on. Those clips render in order.
+    continuous_takes: bool = True
+    # One Veo seed for every clip of the film (0: pick one on first render).
+    seed: int = 0
+    # Music made for the film (kept for the editor and re-exports).
+    music_uri: str = ""
+    # The editable film (services/story_timeline.py), written by the render
+    # and changed in the Edit step.
+    timeline_json: str = ""
     # Language spoken in the clips when it differs from `language` (set on
     # the dubbed second-language copy, whose clips speak the original).
     clip_language: str = ""
@@ -300,9 +316,21 @@ class Story:
         self.final_uri = ""
         self.final_alt_uri = ""
 
+    def continues_take(self, index: int) -> bool:
+        """Scene `index` should extend the previous clip (a continuous take):
+        both scenes are spoken on camera and continuous takes are on."""
+        if index <= 0 or index >= len(self.scenes):
+            return False
+        prev, sc = self.scenes[index - 1], self.scenes[index]
+        return (
+            self.continuous_takes
+            and bool(prev.spoken and prev.narration.strip())
+            and bool(sc.spoken and sc.narration.strip())
+        )
+
     def media_uris(self) -> list[str]:
         """Every stored media URI this story points at (empty ones skipped)."""
-        uris = [self.reference_uri, self.final_uri, self.final_alt_uri]
+        uris = [self.reference_uri, self.final_uri, self.final_alt_uri, self.music_uri]
         for sc in self.scenes:
             uris += [sc.frame_uri, sc.clip_uri]
         return [u for u in uris if u]
@@ -668,10 +696,18 @@ def frame_prompt(story: Story, scene: Scene, has_reference: bool) -> str:
     )
 
 
-def clip_prompt(story: Story, scene: Scene) -> str:
+def clip_prompt(story: Story, scene: Scene, continuing: bool = False) -> str:
+    """Veo prompt for a scene. ``continuing``: the clip extends the previous
+    one (a continuous take), so it carries on the same shot and voice."""
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cam = CAMERA_PRESETS.get(scene.camera, CAMERA_PRESETS["static"])["prompt"]
     base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
+    if continuing:
+        base = (
+            "Continue this exact shot without a cut: the same person, outfit, "
+            "place, lighting and camera, and the same voice, pace and room "
+            f"sound as before. {base}"
+        )
     if not (scene.spoken and scene.narration.strip()):
         return base
     voice = story.speaker_voice or "a voice that matches their age and gender"
@@ -858,7 +894,7 @@ def build_stitch_plan(
     durs = [
         float(clip_durations[k])
         if clip_durations and k < len(clip_durations)
-        else float(s.duration)
+        else float(s.duration) + float(s.clip_in or 0)
         for k, (_, s) in enumerate(usable)
     ]
     xf = max(0.0, min(float(crossfade), min(durs) / 3.0)) if len(usable) > 1 else 0.0
@@ -874,15 +910,27 @@ def build_stitch_plan(
             and d > head
             and is_seamless_join(prev, s)
         )
+        # An extended clip starts with a copy of the clip it continued:
+        # always skip those seconds.
+        base = float(s.clip_in or 0) if 0 < float(s.clip_in or 0) < d - 0.5 else 0.0
+        extended = (
+            base > 0
+            and prev is not None
+            and prev_i == i - 1
+            and s.extends_from == prev.clip_uri
+        )
         if k == 0:
-            start, fade, trim = 0.0, 0.0, 0.0
-        elif cut:
+            start, fade, trim = 0.0, 0.0, base
+        elif extended:
+            # Continuous take: a straight cut into the clip's new seconds.
+            start, fade, trim = t, 0.0, base
+        elif cut and not base:
             start, fade, trim = t, 0.0, head
         elif s.spoken or prev.spoken:
             # A crossfade would overlap speech with the next shot: cut instead.
-            start, fade, trim = t, 0.0, 0.0
+            start, fade, trim = t, 0.0, base
         else:
-            start, fade, trim = t - xf, xf, 0.0
+            start, fade, trim = t - xf, xf, base
         segments.append(
             Segment(
                 index=i,

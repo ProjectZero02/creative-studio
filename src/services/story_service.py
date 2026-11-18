@@ -154,12 +154,29 @@ class StoryBackend(Protocol):
     ) -> tuple[str, str]: ...
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
-    ) -> str: ...
+    ) -> tuple[str, dict]: ...
+    def extend_clip(
+        self, story: Story, index: int, prev_clip_uri: str
+    ) -> tuple[str, float]: ...
+    def render_timeline(self, story: Story, timeline: dict) -> str: ...
+    def save_audio_upload(self, data: bytes, mime_type: str) -> str: ...
     def save_to_library(self, story: Story, final_uri: str, owner: str) -> str: ...
     def save_upload(self, data: bytes, mime_type: str) -> str: ...
 
 
 _UPLOAD_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+_AUDIO_EXT = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/aac": "aac",
+    "audio/ogg": "ogg",
+}
+AUDIO_MIME_TYPES = sorted(_AUDIO_EXT)
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +202,10 @@ def read_last_frame_png(video_path: str, out_path: str) -> str:
 
 
 # Dubbing a spoken clip with the fixed voice: find when the person speaks in
-# Veo's audio, then fit the voice line to that span without changing pitch.
-DUB_MIN_TEMPO = 0.9
+# Veo's audio, then play the line from there at ONE steady speed (pitch
+# kept). The speed change stays within ±8 %, where nobody hears it; the old
+# word-by-word warping (0.6x to 1.8x) made voices lurch fast and slow.
+DUB_MIN_TEMPO = 0.92
 # Acting direction for lines said on camera (not a narration).
 PRESENTER_DIRECTION = (
     "Deliver this live on a big conference stage, speaking into a handheld "
@@ -194,7 +213,7 @@ PRESENTER_DIRECTION = (
     "pace with small pauses and a smile in the voice. A real keynote speaker, "
     "not a narrator reading a script."
 )
-DUB_MAX_TEMPO = 1.35
+DUB_MAX_TEMPO = 1.08
 
 
 def _ffmpeg() -> str:
@@ -331,22 +350,6 @@ def _norm_word(word: str) -> str:
     return re.sub(r"[^\w]", "", word.lower())
 
 
-def match_words(voice: list[Word], clip: list[Word]) -> list[tuple[float, float, float, float]]:
-    """(voice_start, voice_end, clip_start, clip_end) for words said in both,
-    in order (difflib matching, so a misheard word is just skipped)."""
-    import difflib
-
-    a = [_norm_word(w) for w, _, _ in voice]
-    b = [_norm_word(w) for w, _, _ in clip]
-    pairs = []
-    for blk in difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks():
-        for k in range(blk.size):
-            v, c = voice[blk.a + k], clip[blk.b + k]
-            if a[blk.a + k]:
-                pairs.append((v[1], v[2], c[1], c[2]))
-    return pairs
-
-
 def pause_marked(text: str, clip_words: list[Word]) -> str:
     """The line with a comma or "..." wherever the person in the clip pauses
     between two words, so the voice breathes where their lips stop."""
@@ -403,86 +406,6 @@ def delivery_prompt(line: str) -> str:
     )
 
 
-WARP_MIN_TEMPO = 0.6
-WARP_MAX_TEMPO = 1.8
-
-
-def warp_points(
-    pairs: list[tuple[float, float, float, float]], voice_seconds: float
-) -> list[tuple[float, float]]:
-    """Monotonic (voice time, clip time) anchors from matched words, with the
-    voice's lead-in and tail kept at their own length."""
-    points: list[tuple[float, float]] = []
-    for vs, ve, cs, ce in pairs:
-        for p in ((vs, cs), (ve, ce)):
-            if not points or (p[0] > points[-1][0] + 1e-3 and p[1] > points[-1][1] + 1e-3):
-                points.append(p)
-    if not points:
-        return []
-    v0, c0 = points[0]
-    head = (0.0, max(0.0, c0 - v0))
-    if v0 > 1e-3 and head[1] < c0:
-        points.insert(0, head)
-    v1, c1 = points[-1]
-    if voice_seconds > v1 + 1e-3:
-        points.append((voice_seconds, c1 + (voice_seconds - v1)))
-    return points
-
-
-def _atempo_chain(tempo: float) -> str:
-    """ffmpeg atempo filters for any tempo (each stage must stay in 0.5..2)."""
-    stages = []
-    while tempo > 2.0:
-        stages.append(2.0)
-        tempo /= 2.0
-    while tempo < 0.5:
-        stages.append(0.5)
-        tempo /= 0.5
-    stages.append(tempo)
-    return ",".join(f"atempo={t:.4f}" for t in stages)
-
-
-def warp_voice(
-    voice_path: str, points: list[tuple[float, float]], out_path: str, rate: int = 24000
-) -> str:
-    """Re-time the voice piece by piece so each anchor lands at its clip time.
-
-    The output's time 0 is the clip's time 0. Each piece is sped up or slowed
-    down (pitch kept) within WARP_MIN_TEMPO..WARP_MAX_TEMPO.
-    """
-    import subprocess
-
-    src = read_mono(voice_path, rate)
-    out = np.zeros(int((points[-1][1] + 0.5) * rate), dtype=np.float32)
-    fade = int(0.005 * rate)
-    with tempfile.TemporaryDirectory() as tmp:
-        for k, ((va, ca), (vb, cb)) in enumerate(zip(points, points[1:])):
-            piece = src[int(va * rate) : int(vb * rate)]
-            target = int((cb - ca) * rate)
-            if len(piece) < 2 or target < 2:
-                continue
-            tempo = min(WARP_MAX_TEMPO, max(WARP_MIN_TEMPO, len(piece) / target))
-            if abs(tempo - 1.0) > 0.02:
-                p_in, p_out = os.path.join(tmp, f"{k}.wav"), os.path.join(tmp, f"{k}o.wav")
-                _write_wav(p_in, piece, rate)
-                subprocess.run(
-                    [_ffmpeg(), "-v", "error", "-y", "-i", p_in, "-filter:a",
-                     _atempo_chain(tempo), p_out],
-                    check=True,
-                    capture_output=True,
-                )
-                piece = read_mono(p_out, rate)
-            piece = piece[:target].copy()
-            if len(piece) > 2 * fade:
-                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
-                piece[:fade] *= ramp
-                piece[-fade:] *= ramp[::-1]
-            at = int(ca * rate)
-            end = min(len(out), at + len(piece))
-            out[at:end] += piece[: end - at]
-    return _write_wav(out_path, out, rate)
-
-
 def stage_voice(voice_path: str, out_path: str) -> str:
     """Make a dry studio voice sound like a live mic: rumble cut, less
     low-mid "box", a little presence and gentle compression (ffmpeg filters).
@@ -536,30 +459,6 @@ def room_tone(samples: np.ndarray, rate: int, seconds: float, ratio: float = 0.0
     return np.tile(bed, reps)[:want].astype(np.float32)
 
 
-def _sync_words(
-    voice_path: str,
-    clip_path: str,
-    out_path: str,
-    word_timer,
-    voice_language: str,
-    clip_language: str,
-) -> str:
-    """Word-level re-timing of the voice to the clip's speech, or "" when it
-    cannot be done (no timer, other language, too few matching words)."""
-    if word_timer is None or not voice_language or voice_language != clip_language:
-        return ""
-    voice_words = word_timer(voice_path, voice_language)
-    clip_words = word_timer(clip_path, clip_language)
-    pairs = match_words(voice_words, clip_words)
-    if len(pairs) < 2 or len(pairs) < 0.5 * max(1, len(voice_words)):
-        return ""
-    voice_seconds = len(read_mono(voice_path, 16000)) / 16000
-    points = warp_points(pairs, voice_seconds)
-    if len(points) < 2:
-        return ""
-    return warp_voice(voice_path, points, out_path)
-
-
 def stitch_local(
     clip_paths: list[str],
     plan: StitchPlan,
@@ -567,11 +466,11 @@ def stitch_local(
     music_path: str = "",
     voice_paths: list[str] | None = None,
     fps: int = 24,
-    word_timer=None,
-    voice_language: str = "",
-    clip_language: str = "",
 ) -> str:
-    """Render the film: clips overlapped with crossfades, music bed, voiceover.
+    """Legacy MoviePy renderer (kept for old callers; films now render
+    through :func:`make_film` and the timeline).
+
+    Render the film: clips overlapped with crossfades, music bed, voiceover.
 
     ``clip_paths`` and ``voice_paths`` follow ``plan.segments`` order. Clip
     audio is dropped except for spoken segments, whose clip carries the
@@ -643,19 +542,8 @@ def stitch_local(
                     room = AudioFileClip(bed_path)
                     opened.append(room)
                     tracks.append(room.with_start(seg.start))
-                warped = _sync_words(
-                    vpath, clip_paths[k], f"{out_path}.sync{k}.wav",
-                    word_timer, voice_language, clip_language,
-                )
-                if warped:
-                    staged = stage_voice(warped, f"{out_path}.stage{k}.wav")
-                    voice = AudioFileClip(staged)
-                    opened.append(voice)
-                    head = min(seg.trim_head, voice.duration)
-                    voice = voice.subclipped(head, min(voice.duration, head + seg.duration))
-                    tracks.append(voice.with_start(seg.start))
-                    continue
-                # Fit the fixed voice to when the person speaks in the clip.
+                # Start the fixed voice when the person starts speaking, at
+                # one steady speed (no word-by-word warping).
                 span = speech_span(clip_audio)
                 if span:
                     begin = max(span[0] - seg.trim_head, 0.0)
@@ -711,6 +599,99 @@ def _write_wav(path: str, samples: np.ndarray, rate: int = 24000) -> str:
         w.setframerate(rate)
         w.writeframes(pcm.tobytes())
     return path
+
+
+def video_size(path: str) -> tuple[int, int] | None:
+    """(width, height) of a video file, or None."""
+    import subprocess
+
+    err = subprocess.run(
+        [_ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True, check=False
+    ).stderr
+    m = re.search(r"Stream #.*Video:.*?(\d{2,5})x(\d{2,5})", err)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def make_film(
+    story: Story,
+    plan: StitchPlan,
+    music_uri: str,
+    voice_uris: list[str],
+    fetch,
+    out_path: str,
+) -> dict:
+    """Lay the made media out as an editable timeline and render it.
+
+    ``fetch(uri, local_path)`` copies a stored file to disk. Spoken clips keep
+    their own sound, levelled to the same loudness. A dubbed line starts when
+    the person starts talking, at one steady speed. The user's text overlays
+    and music level from the story's previous timeline are kept.
+    Returns the timeline (JSON-safe dict).
+    """
+    import shutil
+
+    from services import story_timeline as tl_mod
+
+    if not plan.segments:
+        raise GenerationError("Nothing to stitch: some scenes have no clip.")
+    with tempfile.TemporaryDirectory() as tmp:
+        cache: dict[str, str] = {}
+
+        def local(uri: str) -> str:
+            if uri not in cache:
+                ext = os.path.splitext(uri.split("?")[0])[1][:6] or ".bin"
+                path = os.path.join(tmp, f"m{len(cache)}{ext}")
+                fetch(uri, path)
+                cache[uri] = path
+            return cache[uri]
+
+        clip_lengths: dict[int, float] = {}
+        gains: dict[int, float] = {}
+        dub_starts: dict[int, float] = {}
+        dub_tempos: dict[int, float] = {}
+        voice_lengths: dict[int, float] = {}
+        voices = {
+            seg.index: v for seg, v in zip(plan.segments, voice_uris or []) if v
+        }
+        size = None
+        for seg in plan.segments:
+            path = local(seg.clip_uri)
+            length, _ = tl_mod.probe(path)
+            clip_lengths[seg.index] = length or (seg.trim_head + seg.duration)
+            size = size or video_size(path)
+            if seg.spoken and not seg.dub:
+                gains[seg.index] = tl_mod.gain_to(tl_mod.measure_lufs(path))
+            vuri = voices.get(seg.index)
+            if vuri:
+                voice_lengths[seg.index] = tl_mod.probe(local(vuri))[0]
+            if seg.dub and vuri:
+                span = speech_span(read_mono(path))
+                if span:
+                    dub_starts[seg.index] = span[0]
+                    dub_tempos[seg.index] = dub_tempo(
+                        voice_lengths[seg.index], span[1] - span[0]
+                    )
+        width, height = size or frame_size(story.aspect_ratio, 1280)
+        music_len = tl_mod.probe(local(music_uri))[0] if music_uri else 0.0
+        timeline = tl_mod.build_timeline(
+            story,
+            plan,
+            width=width,
+            height=height,
+            clip_lengths=clip_lengths,
+            voice_uris=voices,
+            voice_lengths=voice_lengths,
+            dub_starts=dub_starts,
+            dub_tempos=dub_tempos,
+            clip_gains=gains,
+            music_uri=music_uri,
+            music_length=music_len,
+        )
+        timeline = tl_mod.keep_edits(timeline, story.timeline_json)
+        tl_mod.render_timeline(
+            timeline, lambda uri, dest: shutil.copyfile(local(uri), dest), out_path
+        )
+    return timeline
 
 
 # ---------------------------------------------------------------------------
@@ -1048,18 +1029,50 @@ class MockStoryBackend:
     # -- stitch --
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
-    ) -> str:
-        clip_paths = [local_path(s.clip_uri) for s in plan.segments]
+    ) -> tuple[str, dict]:
+        import shutil
+
         uri, path = self._new_uri(story, "film")
-        stitch_local(
-            clip_paths,
+        timeline = make_film(
+            story,
             plan,
+            music_uri,
+            voice_uris,
+            lambda u, dest: shutil.copyfile(local_path(u), dest),
             path + ".mp4",
-            music_path=local_path(music_uri) if music_uri else "",
-            voice_paths=[local_path(v) if v else "" for v in voice_uris],
-            fps=12,
+        )
+        return uri + ".mp4", timeline
+
+    def extend_clip(
+        self, story: Story, index: int, prev_clip_uri: str
+    ) -> tuple[str, float]:
+        """Demo stand-in for Veo extension: a new clip from the previous
+        clip's last frame (the clip holds only the new seconds)."""
+        start = self.last_frame(story, prev_clip_uri, index)
+        return self.generate_clip(story, index, start), 0.0
+
+    def render_timeline(self, story: Story, timeline: dict) -> str:
+        import shutil
+
+        from services.story_timeline import render_timeline
+
+        self._sleep(0.5, 1.0)
+        uri, path = self._new_uri(story, "film")
+        render_timeline(
+            timeline, lambda u, dest: shutil.copyfile(local_path(u), dest), path + ".mp4"
         )
         return uri + ".mp4"
+
+    def save_audio_upload(self, data: bytes, mime_type: str) -> str:
+        ext = _AUDIO_EXT.get(mime_type)
+        if not ext:
+            raise GenerationError("Use an MP3, WAV, M4A or OGG audio file.")
+        rel = f"uploads/music_{uuid.uuid4().hex[:10]}.{ext}"
+        path = local_path(LOCAL_SCHEME + rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return LOCAL_SCHEME + rel
 
     def save_to_library(self, story: Story, final_uri: str, owner: str) -> str:
         self._sleep(0.3, 0.6)
@@ -1080,6 +1093,14 @@ class MockStoryBackend:
 # ---------------------------------------------------------------------------
 # Vertex AI backend (real mode)
 # ---------------------------------------------------------------------------
+
+
+def _gcs_fetch(uri: str, path: str) -> None:
+    """Copy a gs:// object to a local file."""
+    from common.storage import download_from_gcs
+
+    with open(path, "wb") as f:
+        f.write(download_from_gcs(uri))
 
 
 class VertexStoryBackend:
@@ -1164,6 +1185,8 @@ class VertexStoryBackend:
                 generate_audio=spoken,
                 model_version_id=self.cfg.STORY_VEO_MODEL_VERSION,
                 person_generation="Allow (Adults only)",
+                # One seed for the whole film steadies the look and voice.
+                seed=story.seed or None,
                 reference_image_gcs=start_frame_uri or None,
                 reference_image_mime_type="image/png" if start_frame_uri else None,
             )
@@ -1282,40 +1305,83 @@ class VertexStoryBackend:
 
     def stitch(
         self, story: Story, plan: StitchPlan, music_uri: str, voice_uris: list[str]
-    ) -> str:
-        from common.storage import download_from_gcs, store_to_gcs
-
+    ) -> tuple[str, dict]:
         with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "film.mp4")
+            timeline = make_film(story, plan, music_uri, voice_uris, _gcs_fetch, out)
+            return self._store_film(story, out), timeline
 
-            def fetch(uri: str, name: str) -> str:
-                if not uri:
-                    return ""
-                path = os.path.join(tmp, name)
-                with open(path, "wb") as f:
-                    f.write(download_from_gcs(uri))
-                return path
+    def _store_film(self, story: Story, path: str) -> str:
+        from common.storage import store_to_gcs
 
-            clips = [
-                fetch(s.clip_uri, f"clip{k}.mp4") for k, s in enumerate(plan.segments)
-            ]
-            music = fetch(music_uri, "music.wav")
-            voices = [fetch(v, f"voice{k}.wav") for k, v in enumerate(voice_uris)]
-            out = stitch_local(
-                clips,
-                plan,
-                os.path.join(tmp, "film.mp4"),
-                music,
-                voices,
-                word_timer=transcribe_words,
-                voice_language=LANGUAGES.get(story.language, "en-US"),
-                clip_language=LANGUAGES.get(
-                    story.clip_language or story.language, "en-US"
-                ),
-            )
-            with open(out, "rb") as f:
-                data = f.read()
+        with open(path, "rb") as f:
+            data = f.read()
         return store_to_gcs(
             self._folder(story), f"film_{uuid.uuid4().hex[:8]}.mp4", "video/mp4", data
+        )
+
+    def render_timeline(self, story: Story, timeline: dict) -> str:
+        from services.story_timeline import render_timeline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "film.mp4")
+            render_timeline(timeline, _gcs_fetch, out)
+            return self._store_film(story, out)
+
+    def extend_clip(
+        self, story: Story, index: int, prev_clip_uri: str
+    ) -> tuple[str, float]:
+        """Continue the previous clip with Veo video extension (same shot,
+        person and voice). Returns (clip, seconds of it that belong to the
+        previous clip): Veo may return the whole joined video or only the
+        new seconds, so both lengths are measured."""
+        from config.veo_models import get_veo_model_config
+        from models.requests import VideoGenerationRequest
+        from models.veo import generate_video
+        from services.story_timeline import probe
+
+        scene = story.scenes[index]
+        model = get_veo_model_config(self.cfg.STORY_VEO_MODEL_VERSION)
+        seconds = (
+            (model.supported_extension_durations or [7])[0] if model else 7
+        )
+        uris, _ = generate_video(
+            VideoGenerationRequest(
+                prompt=clip_prompt(story, scene, continuing=True),
+                duration_seconds=seconds,
+                video_count=1,
+                aspect_ratio=story.aspect_ratio,
+                resolution=apply_caps(story.scene_count, scene.duration).resolution,
+                enhance_prompt=False,
+                generate_audio=True,
+                model_version_id=self.cfg.STORY_VEO_MODEL_VERSION,
+                person_generation="Allow (Adults only)",
+                seed=story.seed or None,
+                video_input_gcs=prev_clip_uri,
+                video_input_mime_type="video/mp4",
+            )
+        )
+        if not uris:
+            raise GenerationError("Veo returned no video for this scene.")
+        with tempfile.TemporaryDirectory() as tmp:
+            prev_path, new_path = os.path.join(tmp, "a.mp4"), os.path.join(tmp, "b.mp4")
+            _gcs_fetch(prev_clip_uri, prev_path)
+            _gcs_fetch(uris[0], new_path)
+            prev_len, new_len = probe(prev_path)[0], probe(new_path)[0]
+        joined = new_len > prev_len + 1.0
+        return uris[0], round(prev_len, 3) if joined else 0.0
+
+    def save_audio_upload(self, data: bytes, mime_type: str) -> str:
+        from common.storage import store_to_gcs
+
+        ext = _AUDIO_EXT.get(mime_type)
+        if not ext:
+            raise GenerationError("Use an MP3, WAV, M4A or OGG audio file.")
+        return store_to_gcs(
+            "story_studio/uploads",
+            f"music_{uuid.uuid4().hex[:10]}.{ext}",
+            mime_type,
+            data,
         )
 
     def save_to_library(self, story: Story, final_uri: str, owner: str) -> str:

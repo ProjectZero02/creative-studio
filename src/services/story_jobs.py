@@ -26,6 +26,8 @@ instance that runs the job.
 
 from __future__ import annotations
 
+import json
+import random
 import threading
 import time
 import uuid
@@ -523,21 +525,47 @@ def start_video(story_id: str, owner: str) -> Job:
         raise StoryAccessError("Story not found.")
     if not story.scenes or not all(s.frame_uri for s in story.scenes):
         raise GenerationError("Every scene needs a storyboard frame first.")
+
+    def prepare(s: Story) -> None:
+        # One seed for every clip of the film.
+        if not s.seed:
+            s.seed = random.randint(1, 2**31 - 1)
+        # A continuous take made from an older clip of the scene before it
+        # no longer matches: render it again.
+        for i, sc in enumerate(s.scenes):
+            prev = s.scenes[i - 1] if i else None
+            if sc.clip_uri and sc.extends_from and (
+                prev is None or sc.extends_from != prev.clip_uri or not s.continues_take(i)
+            ):
+                sc.clip_uri, sc.extends_from, sc.clip_in = "", "", 0.0
+
+    story = mutate_story(story_id, owner, prepare)
     job = _new_job(owner, story_id, "video")
     n = len(story.scenes)
+    takes = {i for i in range(n) if story.continues_take(i)}
     clip_tasks: dict[int, Task] = {}
     bridge_tasks: dict[int, Task] = {}
     for i, sc in enumerate(story.scenes):
         if sc.clip_uri:
             continue
-        if story.continuity and i > 0:
+        if story.continuity and i > 0 and i not in takes:
             bridge_tasks[i] = _add_task(
                 job, f"Scene {i + 1} · last frame of scene {i}", "bridge", i
             )
-        what = "video clip with speech (Veo)" if _is_spoken(sc) else "video clip (Veo)"
+        what = (
+            f"continuous take from scene {i} (Veo extension)"
+            if i in takes
+            else "video clip with speech (Veo)"
+            if _is_spoken(sc)
+            else "video clip (Veo)"
+        )
         clip_tasks[i] = _add_task(job, f"Scene {i + 1} · {what}", "clip", i)
+    sequential = story.continuity or bool(takes & set(clip_tasks))
+    # Music is kept between renders until its prompt changes.
     music_task = (
-        _add_task(job, "Music · Lyria score", "music") if story.music_on else None
+        _add_task(job, "Music · Lyria score", "music")
+        if story.music_on and not story.music_uri
+        else None
     )
     voice_tasks = {
         i: _add_task(job, f"Scene {i + 1} · {_voice_label(story, sc)}", "voice", i)
@@ -614,6 +642,29 @@ def start_video(story_id: str, owner: str) -> Job:
                     if sc.id == scene_id:
                         sc.clip_uri = uri
                         sc.continues_from = from_clip
+                        sc.extends_from, sc.clip_in = "", 0.0
+
+            mutate_story(story_id, owner, apply)
+            return uri
+
+        def extend(i: int, prev_clip: str) -> str:
+            """Continuous take: extend the previous clip with Veo. Falls back
+            to a normal clip if the extension fails."""
+            current = get_store().get(story_id, owner)
+            if current is None:
+                raise StoryAccessError("Story not found.")
+            try:
+                uri, clip_in = backend.extend_clip(current, i, prev_clip)
+            except Exception:
+                logger.exception("Veo extension failed; making a normal clip")
+                return animate(i, current.scenes[i].frame_uri)
+            scene_id = current.scenes[i].id
+
+            def apply(s: Story) -> None:
+                for sc in s.scenes:
+                    if sc.id == scene_id:
+                        sc.clip_uri, sc.continues_from = uri, ""
+                        sc.extends_from, sc.clip_in = prev_clip, clip_in
 
             mutate_story(story_id, owner, apply)
             return uri
@@ -625,6 +676,12 @@ def start_video(story_id: str, owner: str) -> Job:
                 sc = current.scenes[i]
                 if i not in clip_tasks:
                     prev_clip = sc.clip_uri
+                    continue
+                if i in takes and prev_clip:
+                    ok = _run_task(
+                        clip_tasks[i], lambda i=i, c=prev_clip: extend(i, c)
+                    )
+                    prev_clip = clip_tasks[i].result_uri if ok else ""
                     continue
                 start, from_clip = sc.frame_uri, ""
                 if i in bridge_tasks:
@@ -713,7 +770,7 @@ def start_video(story_id: str, owner: str) -> Job:
                     futures.append(
                         pool.submit(_run_task, t, lambda i=i: voice_alt(i))
                     )
-            if story.continuity:
+            if sequential:
                 clips_continuity()
             else:
                 futures.extend(clips_parallel(pool))
@@ -729,6 +786,9 @@ def start_video(story_id: str, owner: str) -> Job:
                     f.result()
         if music_task and music_task.status == DONE:
             music_uri = music_task.result_uri
+            mutate_story(story_id, owner, lambda s: setattr(s, "music_uri", music_uri))
+        elif story.music_on and story.music_uri:
+            music_uri = story.music_uri
 
         def animate_alt(i: int) -> str:
             current = get_store().get(story_id, owner)
@@ -792,9 +852,15 @@ def start_video(story_id: str, owner: str) -> Job:
             dub=final.same_voice,
         )
         voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
-        if not _run_task(
-            stitch_task, lambda: backend.stitch(final, plan, music_uri, voices)
-        ):
+        made: dict = {}
+
+        def stitch() -> str:
+            film_uri, made["timeline"] = _film_and_timeline(
+                backend.stitch(final, plan, music_uri, voices)
+            )
+            return film_uri
+
+        if not _run_task(stitch_task, stitch):
             for t in later[1:]:
                 if t:
                     t.status = SKIPPED
@@ -804,6 +870,8 @@ def start_video(story_id: str, owner: str) -> Job:
         def apply(s: Story) -> None:
             s.final_uri = film
             s.step = "video"
+            if made.get("timeline"):
+                s.timeline_json = json.dumps(made["timeline"])
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(final, film, owner))
@@ -836,7 +904,11 @@ def start_video(story_id: str, owner: str) -> Job:
         alt_voices = [alt_voice_uris.get(seg.index, "") for seg in alt_plan.segments]
         if not _run_task(
             alt_stitch_task,
-            lambda: backend.stitch(second, alt_plan, music_uri, alt_voices),
+            lambda: _film_and_timeline(
+                backend.stitch(
+                    replace(second, timeline_json=""), alt_plan, music_uri, alt_voices
+                )
+            )[0],
         ):
             alt_library_task.status = SKIPPED
             return
@@ -852,6 +924,105 @@ def start_video(story_id: str, owner: str) -> Job:
         )
 
     return _spawn(job, work)
+
+
+def _film_and_timeline(result) -> tuple[str, dict | None]:
+    """A backend stitch returns (film, timeline); older ones just the film."""
+    if isinstance(result, tuple):
+        return result[0], result[1]
+    return result, None
+
+
+def save_timeline(story_id: str, owner: str, timeline) -> Story:
+    """Store the editor's timeline (validated) on the story."""
+    from services.story_timeline import normalize
+
+    clean = normalize(timeline)
+
+    def apply(s: Story) -> None:
+        s.timeline_json = json.dumps(clean)
+
+    return mutate_story(story_id, owner, apply)
+
+
+def start_export(story_id: str, owner: str) -> Job:
+    """Render the edited timeline to a new film and add it to the library."""
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    if not story.timeline_json:
+        raise GenerationError("Render the film once before editing it.")
+    job = _new_job(owner, story_id, "export")
+    render_task = _add_task(job, "Exporting your edit · video, sound and titles", "stitch")
+    library_task = _add_task(job, "Saving to your library", "library")
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+        from services.story_timeline import normalize
+
+        timeline = normalize(story.timeline_json)
+        if not _run_task(render_task, lambda: backend.render_timeline(story, timeline)):
+            library_task.status = SKIPPED
+            return
+        film = render_task.result_uri
+
+        def apply(s: Story) -> None:
+            s.final_uri = film
+
+        mutate_story(story_id, owner, apply)
+        _run_task(library_task, lambda: backend.save_to_library(story, film, owner))
+
+    return _spawn(job, work)
+
+
+def start_music(story_id: str, owner: str) -> Job:
+    """Make the film's music with Lyria and put it on the timeline."""
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    job = _new_job(owner, story_id, "music")
+    task = _add_task(job, "Music · Lyria score", "music")
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+        prompt = story.music_prompt or default_music_prompt(story)
+        seconds = float(sum(s.duration for s in story.scenes)) or 30.0
+
+        def make() -> str:
+            uri = backend.generate_music(story, prompt, seconds)
+            set_music(story_id, owner, uri)
+            return uri
+
+        _run_task(task, make)
+
+    return _spawn(job, work)
+
+
+def set_music(story_id: str, owner: str, uri: str) -> Story:
+    """Use `uri` as the film's music: one clip across the whole timeline."""
+    from services.story_timeline import duration, new_clip_id, normalize, track
+
+    def apply(s: Story) -> None:
+        s.music_uri = uri
+        s.music_on = True
+        if not s.timeline_json:
+            return
+        tl = normalize(s.timeline_json)
+        old = track(tl, "music")["clips"]
+        total = duration(tl)
+        track(tl, "music")["clips"] = [
+            {
+                "id": new_clip_id(),
+                "src": uri,
+                "start": 0.0,
+                "in": 0.0,
+                "out": total,
+                "gain": old[0]["gain"] if old else 0.8,
+            }
+        ]
+        s.timeline_json = json.dumps(normalize(tl))
+
+    return mutate_story(story_id, owner, apply)
 
 
 def retry(job_id: str, owner: str) -> Job | None:
@@ -870,6 +1041,10 @@ def retry(job_id: str, owner: str) -> Job | None:
     if job.kind == "storyboard":
         failed = [t.scene_index for t in job.tasks if t.status == FAILED]
         return start_storyboard(job.story_id, owner, failed or None)
+    if job.kind == "export":
+        return start_export(job.story_id, owner)
+    if job.kind == "music":
+        return start_music(job.story_id, owner)
     return start_video(job.story_id, owner)
 
 
