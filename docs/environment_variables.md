@@ -134,13 +134,15 @@ Specific configuration for the Interior Design workflow.
 | **`INTERIOR_DESIGN_IMAGE_MODEL`** | `gemini-nano-banana-2.1` | The specific Gemini image model used for floor plan to 3D and styled images. |
 | **`INTERIOR_DESIGN_VIDEO_DURATION`** | `6` | The duration in seconds for each generated video segment. |
 
-## 🎬 Story Studio Sets
+## 🎬 Story Studio
 Sets hold a story's characters (with their voices), locations, props and style, and can be reused across stories. The other `STORY_*` settings are listed in `src/config/default.py`.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | **`STORY_SETS_COLLECTION_NAME`** | `story_sets` | Firestore collection for saved sets. Each set is owner-only; the list query filters on `owner` alone and sorts in the app, so no composite index is needed. |
 | **`STORY_MAX_CLIP_REFERENCES`** | `6` | Most reference images sent with one clip when a story uses a set (storyboard frame, cast faces and fronts, location plate, props). The video model's own `max_reference_images` also caps it, so the lower of the two wins. When over the cap, props are dropped first, then extra character views. |
+| **`STORY_MAX_SCENE_SECONDS`** | `30` | Longest scene. Up to the video model's single-clip limit (15 s for Gemini Omni 1.2 Flash) a scene is one clip; a longer scene is that clip plus extension turns in the same Omni thread (3 to 10 s each), joined into one clip. Omni extends up to 30 s in all. |
+| **`STORY_LIVE_SETTINGS_MODEL`** | `gemini-3.5-flash-lite` | Small Gemini model that reads the film settings (length, scenes, aspect ratio, language, style, who speaks) out of the idea each time typing pauses on the Create step, after a free rules pass. Empty turns the live model off (the rules pass still runs). |
 
 ## 🎵 Lyria (Music Generation)
 Configuration for the Lyria music generation model.
