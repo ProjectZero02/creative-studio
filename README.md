@@ -162,7 +162,7 @@ Add `--dry-run` to see every command first, or `--region` to pick another region
 ## Architecture
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Google Sans, Roboto, Arial", "fontSize": "15px", "primaryColor": "#E8F0FE", "primaryBorderColor": "#4285F4", "primaryTextColor": "#202124", "lineColor": "#5F6368", "clusterBkg": "#F8F9FA", "clusterBorder": "#DADCE0"}}}%%
+%%{init: {"theme": "base", "flowchart": {"wrappingWidth": 460}, "themeVariables": {"fontFamily": "Google Sans, Roboto, Arial", "fontSize": "15px", "primaryColor": "#E8F0FE", "primaryBorderColor": "#4285F4", "primaryTextColor": "#202124", "lineColor": "#5F6368", "clusterBkg": "#F8F9FA", "clusterBorder": "#DADCE0"}}}%%
 flowchart TB
   user(["Presenter or team · browser and mic"]) -- "HTTPS and WebSocket" --> iap["Identity-Aware Proxy (optional)"]
   iap --> run
