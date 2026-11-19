@@ -30,7 +30,7 @@ import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+e
 
 const DEFAULT_STRINGS = {
   talk: 'Talk to the studio',
-  hint: 'Ask for images and videos by voice. Jobs run side by side.',
+  hint: 'Ask for images, videos, music, voice or stories by voice. Jobs run side by side.',
   connecting: 'Connecting…',
   listening: 'Listening',
   speaking: 'Speaking',
@@ -46,6 +46,16 @@ const DEFAULT_STRINGS = {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const isAudioJob = (job) =>
+  String(job.mime_type || '').startsWith('audio/') ||
+  job.kind === 'music' ||
+  job.kind === 'voice';
+const isVideoJob = (job) =>
+  String(job.mime_type || '').startsWith('video/') || job.kind === 'video';
+const ICON_AUDIO =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>';
+const ICON_STORY =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4h-4z"/></svg>';
 
 function b64FromInt16(int16) {
   const bytes = new Uint8Array(int16.buffer);
@@ -115,15 +125,17 @@ const STYLE = `
   overflow-y: auto; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; border-radius: 18px; padding: 10px; }
 .gml-tray h2 { margin: 2px 4px 2px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
   color: var(--sys-on-surface-variant, #44474e); }
-.gml-job { display: flex; gap: 10px; align-items: center; padding: 6px; border-radius: 12px; cursor: pointer;
+.gml-job { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 6px; border-radius: 12px; cursor: pointer;
   background: var(--sys-surface-container-lowest, #fff); border: 1px solid var(--sys-outline-variant, #dfe1e6);
   text-align: left; width: 100%; color: inherit; font: inherit; animation: gml-in .35s ease-out; }
+.gml-job audio { width: 100%; height: 32px; display: block; }
 .gml-job:hover { border-color: var(--sys-primary, #1a5fd8); }
 .gml-job.flash { box-shadow: 0 0 0 3px rgba(26,95,216,.35); }
 @keyframes gml-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 .gml-thumb { width: 52px; height: 52px; border-radius: 9px; flex: none; overflow: hidden; display: grid; place-items: center;
   background: var(--sys-surface-container-high, #e6e8ec); }
 .gml-thumb img, .gml-thumb video { width: 100%; height: 100%; object-fit: cover; }
+.gml-thumb svg { width: 24px; height: 24px; fill: var(--sys-primary, #1a5fd8); }
 .gml-spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(26,95,216,.2);
   border-top-color: var(--sys-primary, #1a5fd8); animation: gml-rot .9s linear infinite; }
 @keyframes gml-rot { to { transform: rotate(360deg); } }
@@ -138,6 +150,7 @@ const STYLE = `
 @keyframes gml-pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
 .gml-viewer img, .gml-viewer video { width: 100%; max-height: 62vh; object-fit: contain; border-radius: 12px; display: block;
   background: var(--sys-surface-container-high, #e6e8ec); }
+.gml-viewer audio { width: 100%; display: block; margin: 12px 0 4px; }
 .gml-vhead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .gml-vhead b { flex: 1; text-transform: capitalize; font-size: 15px; }
 .gml-vprompt { margin: 10px 2px 2px; font-size: 13px; color: var(--sys-on-surface-variant, #44474e); }
@@ -316,11 +329,19 @@ class GmLive {
       card.addEventListener('click', () => this.openViewer(this.jobs.get(job.id)));
       this.tray.insertBefore(card, this.trayTitle.nextSibling);
     }
-    const thumb = job.status === 'done'
-      ? (job.kind === 'video'
-        ? `<video src="${job.display_url}" muted playsinline preload="metadata"></video>`
-        : `<img src="${job.display_url}" alt="">`)
-      : (job.status === 'failed' ? '!' : '<i class="gml-spin"></i>');
+    let thumb = '<i class="gml-spin"></i>';
+    if (job.status === 'failed') {
+      thumb = '!';
+    } else if (job.status === 'done') {
+      if (isAudioJob(job)) thumb = ICON_AUDIO;
+      else if (isVideoJob(job) && job.display_url) {
+        thumb = `<video src="${job.display_url}" muted playsinline preload="metadata"></video>`;
+      } else if (job.display_url) {
+        thumb = `<img src="${job.display_url}" alt="">`;
+      } else {
+        thumb = ICON_STORY;
+      }
+    }
     const label = job.is_edit ? `edit of ${job.source_job}` : job.prompt;
     const status = job.status === 'failed' ? (job.error || 'failed') : job.status;
     card.innerHTML = `<span class="gml-thumb">${thumb}</span><span class="gml-meta"><b></b><span></span><em></em></span>`;
@@ -329,6 +350,13 @@ class GmLive {
     const em = card.querySelector('em');
     em.textContent = status;
     em.classList.toggle('failed', job.status === 'failed');
+    if (job.status === 'done' && isAudioJob(job) && job.display_url) {
+      const audio = this._el('audio', '', card);
+      audio.src = job.display_url;
+      audio.controls = true;
+      audio.preload = 'metadata';
+      audio.addEventListener('click', (e) => e.stopPropagation());
+    }
     card.setAttribute('aria-label', `${job.handle}: ${status}`);
     if (known && known.status !== job.status && job.status === 'done') {
       card.classList.add('flash');
@@ -345,7 +373,7 @@ class GmLive {
     v.innerHTML = '';
     const head = this._el('div', 'gml-vhead', v);
     this._el('b', '', head).textContent = job.handle;
-    if (job.status === 'done') {
+    if (job.status === 'done' && (job.display_url || job.gcs_uri)) {
       const dl = this._el('button', 'gml-btn gml-small primary', head);
       dl.textContent = this.strings.download;
       dl.addEventListener('click', () => this.download(job));
@@ -354,13 +382,20 @@ class GmLive {
     close.textContent = this.strings.close;
     close.addEventListener('click', () => this.closeViewer());
     if (job.status === 'done') {
-      if (job.kind === 'video') {
+      if (isAudioJob(job) && job.display_url) {
+        const audio = this._el('audio', '', v);
+        audio.src = job.display_url; audio.controls = true; audio.autoplay = true;
+      } else if (isVideoJob(job) && job.display_url) {
         const video = this._el('video', '', v);
         video.src = job.display_url; video.controls = true; video.autoplay = true; video.muted = true; video.loop = true;
         video.playsInline = true;
-      } else {
+      } else if (job.display_url) {
         const img = this._el('img', '', v);
         img.src = job.display_url; img.alt = job.prompt;
+      } else {
+        const info = this._el('div', 'gml-thumb', v);
+        info.style.cssText = 'width:100%;height:120px;border-radius:12px';
+        info.innerHTML = ICON_STORY;
       }
     } else {
       const wait = this._el('div', 'gml-thumb', v);
@@ -378,9 +413,11 @@ class GmLive {
   // ---------------------------------------------------------- screen -----
 
   async navigate(route, params) {
-    if (location.pathname === route) return true;
+    const hasParams = params && Object.keys(params).length > 0;
+    if (location.pathname === route && !hasParams) return true;
     if (!this.bridge || !this.bridge.actionEvent) {
-      location.assign(route); // fallback: full load (call reconnects)
+      const qs = hasParams ? '?' + new URLSearchParams(params).toString() : '';
+      location.assign(route + qs); // fallback: full load (call reconnects)
       return false;
     }
     this.bridge.dispatchEvent(new MesopEvent(this.bridge.actionEvent, { action: 'navigate', page: route, params: params || {} }));
@@ -453,7 +490,9 @@ class GmLive {
   }
 
   async download(job) {
-    const ext = job.kind === 'video' ? 'mp4' : (job.mime_type === 'image/svg+xml' ? 'svg' : 'png');
+    const ext = isAudioJob(job)
+      ? 'wav'
+      : (isVideoJob(job) ? 'mp4' : (job.mime_type === 'image/svg+xml' ? 'svg' : 'png'));
     const name = `genmedia-${job.handle.replace(/\s+/g, '-')}.${ext}`;
     try {
       let url = job.display_url;
@@ -484,7 +523,7 @@ class GmLive {
     const a = msg.args || {};
     let result = { ok: true };
     try {
-      if (msg.action === 'navigate') result = { ok: await this.navigate(a.page) };
+      if (msg.action === 'navigate') result = { ok: await this.navigate(a.page, a.params) };
       else if (msg.action === 'compose') { this.compose(a); return; }
       else if (msg.action === 'show_job') result = await this.showJob(a);
       else if (msg.action === 'download') {
