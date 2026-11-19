@@ -51,7 +51,7 @@ PAGES = {
     "story": "/story",
     "library": "/library_v2",
 }
-JOB_PAGE = {"image": "/nano-banana", "video": "/veo"}
+JOB_PAGE = {"image": "/nano-banana", "video": "/veo", "music": "/lyria"}
 UI_TIMEOUT_S = 10.0
 
 SYSTEM_PROMPT = """You are the voice of GenMedia Studio, a creative studio built on Google's media models. You run the app for the presenter while an audience watches the screen.
@@ -62,9 +62,9 @@ How you talk:
 - When a job finishes you get its result. Say so in a few words at the next pause, e.g. "Image 1 is ready." Do not open it unless asked or nothing else is happening on screen.
 
 How you work:
-- Use generate_image, edit_image and generate_video. They run in the background, so start several at once when asked ("while that runs, make a video...").
-- Write rich prompts for the models from what the presenter says: subject, style, lighting, camera. Keep their words and intent.
-- Jobs have short names: "image 1", "video 1". "The image" means the latest image unless the presenter says otherwise. Say which one you act on.
+- Use generate_image, edit_image, generate_video and generate_music. They run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
+- Write rich prompts for the models from what the presenter says: subject, style, lighting, camera, or genre, instruments, mood. Keep their words and intent.
+- Jobs have short names: "image 1", "video 1", "music 1". "The image" means the latest image unless the presenter says otherwise. Say which one you act on.
 - edit_image needs a finished image. If it is still rendering, say so and offer to edit it once it is ready.
 - Use show_job to bring a result on screen, open_page to move between studios, download to save a file to the presenter's computer, and end_call when they say goodbye.
 - If a job fails, say why in plain words and offer to retry.
@@ -139,6 +139,22 @@ def tool_declarations(async_tools: bool = True) -> list[types.Tool]:
                             "Optional: animate this finished image, e.g. 'image 1'.",
                         ),
                         "aspect_ratio": ("STRING", "16:9 or 9:16. Default 16:9."),
+                    },
+                    ["prompt"],
+                    job,
+                ),
+                fd(
+                    "generate_music",
+                    "Start a music track job in Music Studio (Lyria). Runs in the background.",
+                    {
+                        "prompt": (
+                            "STRING",
+                            "A detailed music prompt: genre, mood, instruments, tempo.",
+                        ),
+                        "lyrics": (
+                            "STRING",
+                            "Optional lyrics to sing; omit for instrumental music.",
+                        ),
                     },
                     ["prompt"],
                     job,
@@ -276,9 +292,15 @@ class LiveCall:
         prompt: str,
         aspect_ratio: str = "",
         source: LiveJob | None = None,
+        params: dict[str, Any] | None = None,
     ) -> Deferred:
         job = self.jobs.submit(
-            self.owner, kind, prompt, aspect_ratio=aspect_ratio, source=source
+            self.owner,
+            kind,
+            prompt,
+            aspect_ratio=aspect_ratio,
+            source=source,
+            params=params,
         )
         # Show the work: go to the studio, type the prompt, point at Generate.
         await self.ui(
@@ -320,6 +342,10 @@ class LiveCall:
             if source is None or source.status != DONE:
                 return {"error": "That image is not ready yet, so I can't animate it."}
         return await self._start("video", prompt, aspect_ratio, source)
+
+    async def _tool_generate_music(self, prompt: str, lyrics: str = "") -> Deferred:
+        params = {"lyrics": lyrics.strip()} if lyrics.strip() else None
+        return await self._start("music", prompt, params=params)
 
     async def _tool_list_jobs(self) -> dict:
         return {

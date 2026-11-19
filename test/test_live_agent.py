@@ -35,19 +35,21 @@ OWNER = "presenter@example.com"
 
 
 def instant_runners(delay: float = 0.0, fail_on: str = ""):
+    ext_map = {"video": ("mp4", "video/mp4"), "music": ("wav", "audio/wav")}
+
     def run(job):
         if delay:
             time.sleep(delay)
         if fail_on and fail_on in job.prompt:
             raise RuntimeError("boom")
-        ext = "mp4" if job.kind == "video" else "png"
+        ext, mime = ext_map.get(job.kind, ("png", "image/png"))
         return RunResult(
             gcs_uri=f"gs://bucket/{job.handle.replace(' ', '_')}.{ext}",
             display_url=f"https://example.test/{job.id}.{ext}",
-            mime_type="video/mp4" if job.kind == "video" else "image/png",
+            mime_type=mime,
         )
 
-    return {"image": run, "video": run}
+    return {"image": run, "video": run, "music": run}
 
 
 # --- job service -----------------------------------------------------------
@@ -108,7 +110,7 @@ def test_empty_prompt_and_unknown_kind_rejected():
     with pytest.raises(ValueError):
         jobs.submit(OWNER, "image", "  ")
     with pytest.raises(ValueError):
-        jobs.submit(OWNER, "music", "song")
+        jobs.submit(OWNER, "unknown", "song")
 
 
 def test_resolve_by_what_people_say():
@@ -163,13 +165,14 @@ def test_tool_declarations_mark_job_tools_non_blocking():
         "generate_image",
         "edit_image",
         "generate_video",
+        "generate_music",
         "list_jobs",
         "show_job",
         "open_page",
         "download",
         "end_call",
     }
-    for name in ("generate_image", "edit_image", "generate_video"):
+    for name in ("generate_image", "edit_image", "generate_video", "generate_music"):
         assert decls[name].behavior == types.Behavior.NON_BLOCKING
     assert decls["show_job"].behavior == types.Behavior.BLOCKING
     blocking_only = {
@@ -238,6 +241,50 @@ def test_generate_image_defers_and_drives_the_screen():
     wait_done(call)
     result = LiveCall.job_result(out.job)
     assert result["status"] == "done" and result["job"] == "image 1"
+
+
+def test_music_job_runs_in_parallel_with_image_and_resolves():
+    jobs = LiveJobs(instant_runners(delay=0.3))
+    start = time.time()
+    img = jobs.submit(OWNER, "image", "fox")
+    mus = jobs.submit(OWNER, "music", "calm piano")
+    while any(j.status != DONE for j in (img, mus)):
+        assert time.time() - start < 3
+        time.sleep(0.02)
+    assert time.time() - start < 0.55
+    assert mus.handle == "music 1"
+    assert jobs.resolve(OWNER, "music 1") is mus
+    assert jobs.resolve(OWNER, "the song") is mus
+    assert jobs.resolve(OWNER, "track") is mus
+
+
+def test_generate_music_tool_defers_and_mock_runner_returns_audio(monkeypatch):
+    from common import mock_generation
+    from services import live_jobs
+
+    call, browser = make_call()
+    out = run(
+        call.run_tool(
+            "generate_music",
+            {"prompt": "calm piano", "lyrics": "hello world"},
+        )
+    )
+    assert isinstance(out, Deferred)
+    assert out.job.handle == "music 1"
+    assert out.job.params == {"lyrics": "hello world"}
+    compose = [m for m in browser.sent if m.get("action") == "compose"][0]
+    assert compose["args"]["page"] == "/lyria"
+    assert call.screen == "/lyria"
+    wait_done(call)
+    assert LiveCall.job_result(out.job)["status"] == "done"
+
+    monkeypatch.setattr(mock_generation, "fake_wait", lambda *_a, **_kw: None)
+    monkeypatch.setenv("GENMEDIA_MOCK_GENERATION", "true")
+    monkeypatch.setenv("APP_ENV", "local")
+    assert live_jobs.default_runners()["music"] is live_jobs._mock_music
+    res = live_jobs._mock_music(out.job)
+    assert res.mime_type == "audio/wav"
+    assert res.display_url.startswith(mock_generation.MOCK_AUDIO_ROUTE)
 
 
 def test_edit_waits_for_a_finished_image():
