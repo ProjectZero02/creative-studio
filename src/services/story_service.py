@@ -56,7 +56,6 @@ from services.story_models import (
     clip_parts,
     clip_prompt,
     clip_refs,
-    end_frame,
     frame_refs,
     frame_prompt,
     scenario_prompt,
@@ -1145,15 +1144,12 @@ def clip_inputs(
     scene: Scene,
     start_frame_uri: str,
     story_set=None,
-    end_frame_uri: str = "",
 ) -> dict:
     """Omni mode and media for a scene's first clip (not a continuation).
 
     A clip always opens on the picture it is given, so the video follows the
     storyboard: image to video from the frame (the storyboard frame, or the
-    previous clip's last frame with continuity). A fresh clip that should
-    end on the next scene's frame (`end_frame_uri`, see end_frame) is made
-    with a first and a last frame instead. The storyboard frames are painted
+    previous clip's last frame with continuity). The storyboard frames are painted
     from the set's faces, places and props (and the story's character
     reference), so those stay in the picture. Only a clip with no frame at
     all is made as reference to video from the set (capped, see
@@ -1162,15 +1158,6 @@ def clip_inputs(
     """
     from models.requests import APIReferenceImage
 
-    fresh = bool(start_frame_uri) and start_frame_uri == scene.frame_uri
-    if fresh and end_frame_uri:
-        return {
-            "omni_mode": "first_last",
-            "reference_image_gcs": start_frame_uri,
-            "reference_image_mime_type": _image_mime(start_frame_uri),
-            "last_reference_image_gcs": end_frame_uri,
-            "last_reference_image_mime_type": _image_mime(end_frame_uri),
-        }
     refs = (
         clip_refs(story_set, scene, "", clip_reference_cap())
         if story_set is not None and not start_frame_uri
@@ -1328,13 +1315,12 @@ def take_frame(story: Story, index: int) -> str:
     return story.scenes[story.take_start(index)].frame_uri
 
 
-def take_turn_frames(story: Story, index: int, first: bool) -> tuple[str, str]:
-    """(start, end) storyboard frames sent with scene `index`'s turn of its
-    take. The take's first clip only opens on its frame when it was made
-    fresh from it (not from the previous clip's last frame)."""
+def take_turn_frame(story: Story, index: int, first: bool) -> str:
+    """Storyboard frame sent with scene `index`'s turn of its take, which the
+    turn opens on. The take's first clip only opens on its frame when it was
+    made fresh from it (not from the previous clip's last frame)."""
     sc = story.scenes[index]
-    start = sc.frame_uri if not (first and sc.continues_from) else ""
-    return start, end_frame(story, index) if start else ""
+    return sc.frame_uri if not (first and sc.continues_from) else ""
 
 
 def take_history(
@@ -1348,19 +1334,18 @@ def take_history(
     for j in range(start, index):
         sc = story.scenes[j]
         first = j == start
-        frame, end = take_turn_frames(story, j, first)
+        frame = take_turn_frame(story, j, first)
         text = clip_prompt(
             story,
             sc,
             continuing=not first,
             story_set=story_set,
             start_frame=bool(frame) and not first,
-            end_frame=bool(end),
         )
         history += [
             {
                 "type": "user_input",
-                "content": [{"type": "text", "text": text}, *frame_parts(frame, end)],
+                "content": [{"type": "text", "text": text}, *frame_parts(frame)],
             },
             {
                 "type": "model_output",
@@ -1577,15 +1562,13 @@ class VertexStoryBackend:
 
         scene = story.scenes[index]
         story_set = self._set(story)
-        end = end_frame(story, index) if start_frame_uri == scene.frame_uri else ""
-        extra = clip_inputs(story, scene, start_frame_uri, story_set, end)
+        extra = clip_inputs(story, scene, start_frame_uri, story_set)
         labels = extra.pop("ref_labels", None)
         prompt = clip_prompt(
             story,
             scene,
             story_set=story_set,
             ref_labels=labels,
-            end_frame=extra.get("omni_mode") == "first_last",
         )
         parts = clip_parts(scene.duration)
         try:
@@ -1862,27 +1845,21 @@ class VertexStoryBackend:
         if prev_id:
             # A chat follow-up makes the next part of the take at the scene's
             # own length (sent in response_format, like a new clip). The
-            # thread keeps the person and voice; the storyboard frames sent
-            # with the turn set the shot, so the take follows the storyboard.
-            frame, end = take_turn_frames(story, index, first=False)
+            # thread keeps the person and voice; the storyboard frame sent
+            # with the turn sets the shot, so the take follows the storyboard.
+            frame = take_turn_frame(story, index, first=False)
             prompt = clip_prompt(
                 story,
                 scene,
                 continuing=True,
                 story_set=story_set,
                 start_frame=bool(frame),
-                end_frame=bool(end),
             )
             images = {}
             if frame:
                 images.update(
                     reference_image_gcs=frame,
                     reference_image_mime_type=_image_mime(frame),
-                )
-            if end:
-                images.update(
-                    last_reference_image_gcs=end,
-                    last_reference_image_mime_type=_image_mime(end),
                 )
             request = self._omni_request(
                 story,
