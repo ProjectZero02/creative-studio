@@ -373,3 +373,42 @@ def test_question_plans_do_not_run(backend):
     s = _saved()
     with pytest.raises(ScenarioError):
         story_fix.start_fix(s.id, OWNER, FixPlan(action="none", question="Which?"))
+
+
+# ---------------------------------------------------------------------------
+# Edit step handlers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "seconds"),
+    [("12.5", 12.5), ("12 s", 12.0), ("0:12", 12.0), ("1:05.5", 65.5), ("", None),
+     ("soon", None), ("-3", None)],
+)
+def test_parse_film_time(text, seconds):
+    import pages.story_studio as page
+
+    assert page.parse_film_time(text) == seconds
+
+
+def test_plan_then_apply_from_the_edit_step(backend, monkeypatch):
+    import pages.story_studio as page
+    from state.story_state import StoryState
+
+    st = StoryState()
+    monkeypatch.setattr(page.me, "state", lambda cls: st)
+    monkeypatch.setattr(page, "_owner", lambda: OWNER)
+    s = _saved()
+    st.story_id = s.id
+    st.fix_request = "The end goes blank here"
+    st.fix_time = "11"
+    list(page.on_plan_fix(None))
+    assert not st.fix_planning and not st.error
+    plan = page._fix_plan()
+    assert plan.action == "timeline" and plan.timeline[0]["scene"] == 2
+    # Nothing changes before the user confirms.
+    assert story_store.get_store().get(s.id, OWNER).timeline_json == s.timeline_json
+    page.on_apply_fix(None)
+    assert st.fix_plan_json == "" and st.job_kind == "fix"
+    job = _run(story_jobs.get_job(st.job_id, OWNER))
+    assert job.status == "done"
