@@ -266,9 +266,46 @@ class StoryTimeline extends LitElement {
     if (this._undo.length > 50) this._undo.shift();
     this._redo = []; // a new change ends the redo chain
   }
-  _snapshot() { this._pushUndo(JSON.stringify(this._tl)); }
-  _commit() {
+  _snapshot() { const json = JSON.stringify(this._tl); this._pushUndo(json); return json; }
+  // After an edit: each scene's voice lines move with that scene's picture
+  // (or go when the scene is deleted), and music that ran to the end of the
+  // film still does. `prevJson` is the timeline before the edit.
+  _follow(prevJson) {
+    let prev;
+    try { prev = JSON.parse(prevJson); } catch (e) { return; }
+    const pv = ((prev.tracks || []).find((t) => t.kind === 'video') || { clips: [] }).clips || [];
+    const vids = this._clips('video');
+    const linked = (c) => c.scene !== undefined && c.scene !== null && +c.scene >= 0;
+    const voice = this._track('voice');
+    const keep = [];
+    for (const a of voice.clips || []) {
+      const at = +a.start || 0;
+      const inside = (c) => at >= c.start - 0.001 && at < clipEnd(c);
+      let p = linked(a) ? (pv.find((c) => c.scene === +a.scene && inside(c)) || pv.find((c) => c.scene === +a.scene)) : pv.find(inside);
+      if (!p || !linked(p)) { keep.push(a); continue; } // not tied to a scene
+      a.scene = +p.scene;
+      const src = (+p.in || 0) + (at - p.start); // where in the scene's clip the line starts
+      const now = vids.filter((c) => c.scene === a.scene);
+      if (!now.length) continue; // the scene was deleted: so is its line
+      const c = now.find((x) => src >= (+x.in || 0) - 0.001 && src < (+x.out || 0)) || now[0];
+      a.start = r3(Math.max(0, c.start + (src - (+c.in || 0))));
+      keep.push(a);
+    }
+    voice.clips = keep;
+    const oldDur = Math.max(0, ...pv.map(clipEnd));
+    const dur = this._duration();
+    for (const m of this._clips('music')) {
+      if (oldDur > 0 && Math.abs(clipEnd(m) - oldDur) < 0.05 && dur > m.start) m.out = r3((+m.in || 0) + (dur - m.start));
+    }
+  }
+  // Transitions belong to the joins, not to the clips: after re-ordering,
+  // the n-th join keeps the transition it had.
+  _keepJoins(fades) {
+    this._clips('video').forEach((c, k) => { c.fade_in = k < fades.length ? fades[k] : 0; });
+  }
+  _commit(prevJson = '') {
     this._layoutVideo();
+    if (prevJson) this._follow(prevJson);
     const json = JSON.stringify(this._tl);
     this._seen = json;
     this._tl = JSON.parse(json);
@@ -276,9 +313,9 @@ class StoryTimeline extends LitElement {
   }
   _change(fn) {
     if (this.busy || !this._tl) return;
-    this._snapshot();
+    const before = this._snapshot();
     fn();
-    this._commit();
+    this._commit(before);
   }
   _undoLast() {
     if (!this._undo.length || this.busy) return;
@@ -321,7 +358,9 @@ class StoryTimeline extends LitElement {
       const i = v.findIndex((c) => c.id === id);
       const j = i + delta;
       if (i < 0 || j < 0 || j >= v.length) return;
+      const fades = v.map((c) => +c.fade_in || 0);
       [v[i], v[j]] = [v[j], v[i]];
+      this._keepJoins(fades);
     });
   }
 
@@ -475,14 +514,16 @@ class StoryTimeline extends LitElement {
       const v = this._track('video').clips;
       const centre = d.orig.start + clipLen(d.orig) / 2 + (f.clip._dx || 0);
       delete f.clip._dx;
+      const fades = v.map((c) => +c.fade_in || 0);
       const rest = v.filter((c) => c.id !== d.id);
       let at = rest.findIndex((c) => centre < c.start + clipLen(c) / 2);
       if (at < 0) at = rest.length;
       rest.splice(at, 0, f.clip);
       this._track('video').clips = rest;
+      this._keepJoins(fades);
     }
     this._pushUndo(d.before);
-    this._commit();
+    this._commit(d.before);
     this._seek(this._t);
   }
   _rulerDown(e) {

@@ -889,6 +889,7 @@ def start_video(story_id: str, owner: str) -> Job:
 
         def apply(s: Story) -> None:
             s.final_uri = film
+            s.film_edited = False
             s.set_version = _set_version(s, owner)
             s.step = "video"
             if made.get("timeline"):
@@ -960,6 +961,8 @@ def save_timeline(story_id: str, owner: str, timeline) -> Story:
     clean = normalize(timeline)
 
     def apply(s: Story) -> None:
+        if s.final_uri and clean != normalize(s.timeline_json):
+            s.film_edited = True
         s.timeline_json = json.dumps(clean)
 
     return mutate_story(story_id, owner, apply)
@@ -989,6 +992,7 @@ def start_export(story_id: str, owner: str) -> Job:
         def apply(s: Story) -> None:
             # Same clips as the render, so set_version stays as it was.
             s.final_uri = film
+            s.film_edited = False
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(story, film, owner))

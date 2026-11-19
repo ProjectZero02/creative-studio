@@ -193,6 +193,9 @@ def _clean_clip(kind: str, c: dict) -> dict | None:
             clean["src_max"] = round(_num(c.get("src_max"), cout, cout, 36000), 3)
     if kind == "voice":
         clean["tempo"] = round(_num(c.get("tempo"), 1.0, 0.5, 2.0), 4)
+        # The scene this line belongs to: it moves with that scene's clip.
+        if c.get("scene") is not None:
+            clean["scene"] = int(_num(c.get("scene"), -1, -1, 999))
     if kind == "music" and c.get("src_max") is not None:
         clean["src_max"] = round(_num(c.get("src_max"), cout, cout, 36000), 3)
     return clean
@@ -214,18 +217,90 @@ def _layout_video(clips: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _linked(clip: dict) -> bool:
+    return int(clip.get("scene", -1)) >= 0
+
+
+def follow_scenes(prev: dict, cur: dict) -> dict:
+    """After the video track changed from `prev` to `cur`: move each voice
+    line with its scene's clip (drop it when the scene is gone), and keep
+    music that ran to the end of the film running to the new end. The same
+    rule as the editor's `_follow` (story_timeline.js). Changes `cur`."""
+    pv = track(prev, "video")["clips"]
+    vids = track(cur, "video")["clips"]
+    keep = []
+    for line in track(cur, "voice")["clips"]:
+        at = float(line["start"])
+
+        def inside(c: dict, at: float = at) -> bool:
+            return c["start"] - 0.001 <= at < clip_end(c)
+
+        if _linked(line):
+            same = [c for c in pv if c.get("scene") == line["scene"]]
+            p = next((c for c in same if inside(c)), same[0] if same else None)
+        else:
+            p = next((c for c in pv if inside(c)), None)
+        if p is None or not _linked(p):
+            keep.append(line)
+            continue
+        line["scene"] = p["scene"]
+        src = p["in"] + (at - p["start"])
+        now = [c for c in vids if c.get("scene") == line["scene"]]
+        if not now:
+            continue
+        c = next((x for x in now if x["in"] - 0.001 <= src < x["out"]), now[0])
+        line["start"] = round(max(0.0, c["start"] + (src - c["in"])), 3)
+        keep.append(line)
+    track(cur, "voice")["clips"] = keep
+    old_end, end = duration(prev), duration(cur)
+    for m in track(cur, "music")["clips"]:
+        if old_end > 0 and abs(clip_end(m) - old_end) < 0.05 and end > m["start"]:
+            m["out"] = round(m["in"] + (end - m["start"]), 3)
+    return cur
+
+
+def _keep_video_edits(new: dict, old: dict) -> None:
+    """Re-apply the editor's per-scene changes to a fresh render: the scene
+    order (when the same scenes are there), and each unchanged clip's trims,
+    level and the transitions of its join. A scene whose clip was remade
+    starts fresh."""
+    old_v, new_v = track(old, "video")["clips"], track(new, "video")["clips"]
+    if not old_v or not all(_linked(c) for c in old_v + new_v):
+        return
+    old_scenes = [c["scene"] for c in old_v]
+    if len(set(old_scenes)) != len(old_scenes):
+        return  # a split scene: too ambiguous to carry over
+    by_scene = {c["scene"]: c for c in old_v}
+    for c in new_v:
+        o = by_scene.get(c["scene"])
+        if o and o["src"] == c["src"]:
+            top = c.get("src_max", c["out"])
+            c["in"] = min(o["in"], top - 0.1)
+            c["out"] = max(c["in"] + 0.1, min(o["out"], top))
+            c["gain"] = o["gain"]
+    if sorted(old_scenes) == sorted(c["scene"] for c in new_v):
+        new_v.sort(key=lambda c: old_scenes.index(c["scene"]))
+        for k, c in enumerate(new_v):
+            c["fade_in"] = old_v[k]["fade_in"]
+
+
 def keep_edits(new: dict, old: dict | str | None) -> dict:
-    """Carry the user's own edits (text overlays, music level and ducking)
-    from the previous timeline into a freshly rendered one."""
+    """Carry the user's own edits from the previous timeline into a freshly
+    rendered one: titles, music level and ducking, and per scene its order,
+    trims, level and transitions (see _keep_video_edits). Voice lines and
+    music follow the scenes."""
     if not old:
         return new
-    old = normalize(old)
+    old, new = normalize(old), normalize(new)
     track(new, "text")["clips"] = track(old, "text")["clips"]
     old_music, new_music = track(old, "music"), track(new, "music")
     new_music["duck"] = old_music.get("duck", True)
     if old_music["clips"] and new_music["clips"]:
         new_music["clips"][0]["gain"] = old_music["clips"][0]["gain"]
-    return new
+    before = copy.deepcopy(new)
+    _keep_video_edits(new, old)
+    _layout_video(track(new, "video")["clips"])
+    return follow_scenes(before, new)
 
 
 def build_timeline(
@@ -294,6 +369,7 @@ def build_timeline(
                 "out": round(min(vlen, room), 3),
                 "gain": 1.0,
                 "tempo": 1.0,
+                "scene": seg.index,
             }
         )
     if music_uri:

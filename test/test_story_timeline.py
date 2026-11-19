@@ -305,10 +305,12 @@ def test_render_writes_timeline_then_export_uses_edits(demo):
     T.track(tl, "text")["clips"].append({"text": "My film", "start": 0, "dur": 2})
     T.track(tl, "music")["clips"][0]["gain"] = 0.2
     story_jobs.save_timeline(story.id, OWNER, json.dumps(tl))
+    assert store.get(story.id, OWNER).film_edited  # Download is the old film
     first = s.final_uri
     _wait(story_jobs.start_export(story.id, OWNER))
     s = store.get(story.id, OWNER)
     assert s.final_uri and s.final_uri != first
+    assert not s.film_edited
     assert T.probe(story_service.local_path(s.final_uri))[0] > 6
 
     # Rendering the scenes again keeps the user's title and music level.
@@ -392,3 +394,120 @@ def test_failed_extension_falls_back_to_a_normal_clip(demo):
     _wait(story_jobs.start_video(s.id, OWNER))
     s = store.get(s.id, OWNER)
     assert s.scenes[1].clip_uri.endswith("clip1.mp4") and not s.scenes[1].extends_from
+
+
+# -- voice lines and music follow the scenes -----------------------------------
+
+
+def _scenes_tl():
+    """Three 6 s scenes, a line in each (0.5 s in), music over the film."""
+    tl = T.empty_timeline()
+    T.track(tl, "video")["clips"] = [
+        {
+            "id": f"v{i}",
+            "src": f"c{i}",
+            "in": 0,
+            "out": 6,
+            "src_max": 6,
+            "scene": i,
+            "label": f"Scene {i + 1}",
+        }
+        for i in range(3)
+    ]
+    T.track(tl, "voice")["clips"] = [
+        {
+            "id": f"a{i}",
+            "src": f"n{i}",
+            "start": i * 6 + 0.5,
+            "in": 0,
+            "out": 3,
+            "scene": i,
+        }
+        for i in range(3)
+    ]
+    T.track(tl, "music")["clips"] = [
+        {"id": "m", "src": "m", "start": 0, "in": 0, "out": 18}
+    ]
+    return T.normalize(tl)
+
+
+def _starts(tl, kind):
+    return {c.get("scene", c["id"]): c["start"] for c in T.track(tl, kind)["clips"]}
+
+
+def test_lines_move_with_reordered_scenes():
+    prev = _scenes_tl()
+    cur = json.loads(json.dumps(prev))
+    v = T.track(cur, "video")["clips"]
+    v[1], v[2] = v[2], v[1]
+    T._layout_video(v)
+    T.follow_scenes(prev, cur)
+    assert _starts(cur, "voice") == {0: 0.5, 2: 6.5, 1: 12.5}
+
+
+def test_a_deleted_scene_takes_its_line_and_music_fits():
+    prev = _scenes_tl()
+    cur = json.loads(json.dumps(prev))
+    T.track(cur, "video")["clips"].pop(1)
+    T._layout_video(T.track(cur, "video")["clips"])
+    T.follow_scenes(prev, cur)
+    assert _starts(cur, "voice") == {0: 0.5, 2: 6.5}
+    music = T.track(cur, "music")["clips"][0]
+    assert T.clip_end(music) == T.duration(cur) == 12
+
+
+def test_trimming_a_scene_head_keeps_its_line_on_the_picture():
+    prev = _scenes_tl()
+    cur = json.loads(json.dumps(prev))
+    T.track(cur, "video")["clips"][1]["in"] = 2.0  # cut 2 s off scene 2's start
+    T._layout_video(T.track(cur, "video")["clips"])
+    T.follow_scenes(prev, cur)
+    # Scene 2's line started 0.5 s into its clip; that moment is now 1.5 s
+    # before the trimmed clip starts. Scene 3 moves 2 s earlier with its line.
+    assert _starts(cur, "voice") == {0: 0.5, 1: 4.5, 2: 10.5}
+
+
+def test_lines_without_a_scene_are_linked_by_where_they_sit():
+    prev = _scenes_tl()
+    for c in T.track(prev, "voice")["clips"]:
+        c.pop("scene")
+    cur = json.loads(json.dumps(prev))
+    v = T.track(cur, "video")["clips"]
+    v[0], v[2] = v[2], v[0]
+    T._layout_video(v)
+    T.follow_scenes(prev, cur)
+    assert sorted(c["scene"] for c in T.track(cur, "voice")["clips"]) == [0, 1, 2]
+    assert _starts(cur, "voice")[0] == 12.5
+
+
+def test_normalize_keeps_a_lines_scene_and_build_sets_it():
+    out = T.normalize(_scenes_tl())
+    assert [c["scene"] for c in T.track(out, "voice")["clips"]] == [0, 1, 2]
+
+
+def test_rerender_keeps_order_trims_and_transitions():
+    old = _scenes_tl()
+    v = T.track(old, "video")["clips"]
+    v[0], v[2] = v[2], v[0]  # scene 3 first
+    v[1]["out"] = 4.0  # scene 2 trimmed to 4 s
+    v[1]["fade_in"], v[2]["fade_in"] = 0.5, 0.0
+    v[1]["gain"] = 0.4
+    old = T.normalize(old)
+    new = _scenes_tl()  # a fresh render in story order, same clips
+    out = T.keep_edits(new, json.dumps(old))
+    vids = T.track(out, "video")["clips"]
+    assert [c["scene"] for c in vids] == [2, 1, 0]
+    assert vids[1]["out"] == 4.0 and vids[1]["gain"] == 0.4
+    assert [c["fade_in"] for c in vids] == [0.0, 0.5, 0.0]
+    # Each line follows its scene into the new order.
+    starts = _starts(out, "voice")
+    assert starts[2] == 0.5 and starts[0] == vids[2]["start"] + 0.5
+
+
+def test_rerender_with_a_remade_clip_starts_that_scene_fresh():
+    old = _scenes_tl()
+    T.track(old, "video")["clips"][1]["out"] = 3.0
+    new = _scenes_tl()
+    T.track(new, "video")["clips"][1]["src"] = "c1-new"
+    out = T.keep_edits(new, json.dumps(T.normalize(old)))
+    assert T.track(out, "video")["clips"][1]["out"] == 6

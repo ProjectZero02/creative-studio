@@ -319,6 +319,9 @@ class Story:
     # same moment twice). Has no effect when continuity is off.
     seamless_joins: bool = True
     final_uri: str = ""
+    # The timeline was edited after final_uri was made: Download still gives
+    # the old film until the edit is exported.
+    film_edited: bool = False
     # Second-language version: same clips and music, narration translated
     # into alt_language and voiced again. Needs the voiceover on.
     second_on: bool = False
