@@ -18,7 +18,10 @@
  * <story-timeline>: a small video editor for a Story Studio film.
  *
  * Shows a live preview (video, voice, music and titles played from their
- * own files, no render needed) and one lane per track. Clips can be moved,
+ * own files, no render needed) and one lane per track. Each clip file has its
+ * own preloaded <video>, so a cut swaps players instead of loading a file,
+ * and the playhead follows the picture (it waits while a clip buffers, so
+ * the sound never runs ahead). Clips can be moved,
  * trimmed at either edge, re-ordered (video), turned up or down, and titles
  * can be added and edited. Every finished change sends `changeEvent` with the
  * whole timeline JSON; the server validates and stores it, and "Export"
@@ -58,7 +61,6 @@ class StoryTimeline extends LitElement {
     busy: { type: Boolean },
     changeEvent: { type: String },
     _tl: { state: true },
-    _t: { state: true },
     _playing: { state: true },
     _sel: { state: true },
     _pps: { state: true },
@@ -95,6 +97,7 @@ class StoryTimeline extends LitElement {
     .stage.ar916 { aspect-ratio: 9 / 16; max-height: 64vh; width: auto; margin: 0 auto; }
     .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; border-radius: 0; }
     .stage video.hide { visibility: hidden; }
+    .vids { position: absolute; inset: 0; }
     .title { position: absolute; left: 7%; right: 7%; text-align: center; color: #fff; font-weight: 600;
              text-shadow: 0 2px 6px rgba(0,0,0,.7); pointer-events: none; line-height: 1.25; }
     .title.top { top: 8%; } .title.center { top: 50%; transform: translateY(-50%); } .title.bottom { bottom: 8%; }
@@ -200,6 +203,9 @@ class StoryTimeline extends LitElement {
     this._undo = [];
     this._redo = [];
     this._audio = new Map();
+    this._vids = new Map();
+    this._waiting = false;
+    this._titleKey = '';
     this._raf = 0;
     this._onMove = (e) => this._dragMove(e);
     this._onUp = (e) => this._dragEnd(e);
@@ -213,6 +219,8 @@ class StoryTimeline extends LitElement {
     this._pause();
     for (const a of this._audio.values()) { a.pause(); a.src = ''; }
     this._audio.clear();
+    for (const v of this._vids.values()) { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); }
+    this._vids.clear();
   }
 
   willUpdate(changed) {
@@ -373,25 +381,80 @@ class StoryTimeline extends LitElement {
     this._clock = { wall: performance.now(), t: this._t };
     const tick = () => {
       if (!this._playing) return;
-      this._t = this._clock.t + (performance.now() - this._clock.wall) / 1000;
-      if (this._t >= this._duration()) { this._t = this._duration(); this._pause(); return; }
+      const now = performance.now();
+      this._t = this._next(now);
+      this._clock = { wall: now, t: this._t };
+      if (this._t >= this._duration()) { this._t = this._duration(); this._pause(); this.requestUpdate(); return; }
       this._sync(true);
+      this._paint();
       this._raf = requestAnimationFrame(tick);
     };
     this._sync(true, true);
     this._raf = requestAnimationFrame(tick);
   }
+  /** The playhead at wall time `now`: it follows the clip on screen, and
+   * holds while that clip is still loading or seeking. */
+  _next(now) {
+    const t = this._clock.t + (now - this._clock.wall) / 1000;
+    const clip = this._activeVideo(this._t);
+    const v = clip && this._vid(clip);
+    this._waiting = false;
+    if (!v || v.ended) return t;
+    const atEnd = v.duration && v.currentTime >= v.duration - 0.1;
+    if ((v.seeking || v.readyState < 3) && !atEnd) {
+      this._waiting = true;
+      return this._t;
+    }
+    const vt = clip.start + v.currentTime - (+clip.in || 0);
+    if (!v.paused && Math.abs(vt - t) < 0.5) return Math.max(this._t, vt);
+    return t;
+  }
   _pause() {
     this._playing = false;
+    this._waiting = false;
     cancelAnimationFrame(this._raf);
-    const v = this.renderRoot && this.renderRoot.querySelector('video');
-    if (v) v.pause();
+    for (const v of this._vids.values()) v.pause();
     for (const a of this._audio.values()) a.pause();
   }
   _seek(t) {
     this._t = clamp(t, 0, this._duration());
     if (this._playing) this._clock = { wall: performance.now(), t: this._t };
     this._sync(this._playing, true);
+    this.requestUpdate();
+  }
+  /** Moves the playhead and time readout without a full re-render. */
+  _paint() {
+    const r = this.renderRoot;
+    if (!r) return;
+    const head = r.querySelector('.head');
+    if (head) head.style.left = `${this._t * this._pps}px`;
+    const time = r.querySelector('.time');
+    if (time) time.textContent = `${fmt(this._t)} / ${fmt(this._duration())}`;
+    const key = this._clips('text').filter((c) => this._t >= c.start && this._t < clipEnd(c)).map((c) => c.id).join();
+    if (key !== this._titleKey) { this._titleKey = key; this.requestUpdate(); }
+  }
+  /** The preloaded player for a clip's file (one per file, kept hidden
+   * until its clip is on screen). */
+  _vid(clip) {
+    const url = clip && this._url(clip.src);
+    const box = this.renderRoot && this.renderRoot.querySelector('.vids');
+    if (!url || !box) return null;
+    let v = this._vids.get(url);
+    if (!v) {
+      v = document.createElement('video');
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.muted = true;
+      v.className = 'hide';
+      v.src = url;
+      v.addEventListener('loadedmetadata', () => {
+        const on = this._activeVideo(this._t);
+        if (on && this._url(on.src) === url) this._sync(this._playing, true);
+      });
+      this._vids.set(url, v);
+    }
+    if (v.parentNode !== box) box.appendChild(v);
+    return v;
   }
   _activeVideo(t) {
     let found = null;
@@ -400,32 +463,45 @@ class StoryTimeline extends LitElement {
   }
   _speaking(t) {
     const v = this._activeVideo(t);
-    if (v && (+v.gain || 0) > 0) return true;
+    if (v && (+v.gain || 0) > 0 && !v.ambient) return true;
     return this._clips('voice').some((c) => t >= c.start && t < clipEnd(c));
   }
   _sync(playing, force = false) {
     const t = this._t;
-    const v = this.renderRoot && this.renderRoot.querySelector('video');
     const clip = this._activeVideo(t);
-    if (v) {
-      if (!clip) { v.pause(); v.classList.add('hide'); }
-      else {
-        v.classList.remove('hide');
-        const url = this._url(clip.src);
-        const want = (+clip.in || 0) + (t - clip.start);
-        if (v.dataset.src !== url) {
-          v.dataset.src = url;
-          v.src = url;
-          v.addEventListener('loadedmetadata', () => { v.currentTime = want; if (this._playing) v.play().catch(() => {}); }, { once: true });
-        } else if (force || Math.abs(v.currentTime - want) > 0.3) {
-          try { v.currentTime = want; } catch (e) { /* not loaded yet */ }
-        }
-        v.volume = clamp(+clip.gain || 0, 0, 1);
-        v.muted = !(+clip.gain > 0);
-        if (playing && v.paused && v.readyState >= 2) v.play().catch(() => {});
-        if (!playing && !v.paused) v.pause();
+    for (const c of this._clips('video')) this._vid(c); // preload every clip
+    const cur = clip ? this._vid(clip) : null;
+    for (const v of this._vids.values()) {
+      if (v === cur) continue;
+      v.classList.add('hide');
+      if (!v.paused) v.pause();
+    }
+    if (cur) {
+      cur.classList.remove('hide');
+      const want = (+clip.in || 0) + (t - clip.start);
+      const off = Math.abs(cur.currentTime - want);
+      // While playing the playhead follows this player, so only a real jump
+      // (a cut into a clip, a seek) moves it; paused, show the exact frame.
+      if (cur.readyState >= 1 && !cur.seeking && off > (playing && !force ? 0.5 : 0.04)) {
+        try { cur.currentTime = want; } catch (e) { /* not loaded yet */ }
+      }
+      cur.volume = clamp(+clip.gain || 0, 0, 1);
+      cur.muted = !(+clip.gain > 0);
+      const past = cur.duration && want >= cur.duration - 0.05;
+      if (playing && cur.paused && !past) cur.play().catch(() => {});
+      if (!playing && !cur.paused) cur.pause();
+    }
+    if (playing) {
+      // Park the next clip on its first frame so the cut is instant.
+      const next = this._clips('video').find((c) => c !== clip && c.start > t && c.start - t < 2);
+      const nv = next && this._vid(next);
+      const nin = next ? +next.in || 0 : 0;
+      if (nv && nv !== cur && nv.paused && nv.readyState >= 1 && !nv.seeking && Math.abs(nv.currentTime - nin) > 0.05) {
+        try { nv.currentTime = nin; } catch (e) { /* loading */ }
       }
     }
+    // Sound waits with the picture while a clip buffers.
+    const run = playing && !this._waiting;
     const ducking = (this._track('music').duck !== false) && this._speaking(t);
     const live = new Set();
     for (const kind of ['voice', 'music']) {
@@ -449,8 +525,8 @@ class StoryTimeline extends LitElement {
         if (a.loop && a.duration && isFinite(a.duration)) want %= a.duration;
         if (force || Math.abs(a.currentTime - want) > 0.35) { try { a.currentTime = want; } catch (e) { /* loading */ } }
         a.volume = clamp((+c.gain || 0) * (kind === 'music' && ducking ? 0.35 : 1), 0, 1);
-        if (playing && a.paused) a.play().catch(() => {});
-        if (!playing && !a.paused) a.pause();
+        if (run && a.paused) a.play().catch(() => {});
+        if (!run && !a.paused) a.pause();
       }
     }
     for (const [id, a] of this._audio) if (!live.has(id) && !a.paused) a.pause();
@@ -674,11 +750,11 @@ class StoryTimeline extends LitElement {
       <div class="top">
         <div class="viewer">
           <div class="stage ${this.aspect === '9:16' ? 'ar916' : 'ar169'}">
-            <video playsinline preload="auto" aria-label="Preview"></video>
+            <div class="vids" role="img" aria-label="Preview"></div>
             ${titles.map((c) => html`<div class="title ${c.pos}" style="font-size:${Math.max(10, (+c.size || 48) * h / 720)}px">${c.text}</div>`)}
           </div>
           <div class="transport">
-            <span class="time">${fmt(t)} / ${fmt(total)}</span>
+            <span class="time" .textContent=${`${fmt(t)} / ${fmt(total)}`}></span>
             <div class="mid">
               <button class="icon ghost" aria-label="Back to start" @click=${() => this._seek(0)}>${ICON.start}</button>
               <button class="icon primary" aria-label=${this._playing ? 'Pause' : 'Play'} @click=${this._togglePlay}>${this._playing ? ICON.pause : ICON.play}</button>
@@ -723,6 +799,7 @@ class StoryTimeline extends LitElement {
   }
 
   updated() {
+    this._paint();
     if (!this._playing) this._sync(false);
   }
 }
