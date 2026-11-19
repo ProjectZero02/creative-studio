@@ -1109,6 +1109,18 @@ def _gcs_fetch(uri: str, path: str) -> None:
         f.write(download_from_gcs(uri))
 
 
+def _media_mime(uri: str) -> str:
+    """MIME type of a story asset from its extension (images, films, audio)."""
+    ext = uri.rsplit(".", 1)[-1].lower() if "." in uri else ""
+    return {
+        "mp4": "video/mp4",
+        "mov": "video/quicktime",
+        "webm": "video/webm",
+        "wav": "audio/wav",
+        "mp3": "audio/mpeg",
+    }.get(ext) or _image_mime(uri)
+
+
 def _image_mime(uri: str) -> str:
     return "image/jpeg" if uri.lower().split("?")[0].endswith((".jpg", ".jpeg")) else "image/png"
 
@@ -1412,17 +1424,25 @@ class VertexStoryBackend:
         temperature: float = 0.8,
         task: str = "story_scenario",
         model: str = "",
+        media: list[str] | None = None,
     ) -> str:
+        """One JSON Gemini call. `media`: GCS URIs (images, films) sent
+        before the prompt so the model can look at them."""
         from google.genai import types
 
         from common.analytics import track_model_call
         from models.gemini import client
 
         model = model or self.cfg.STORY_SCENARIO_MODEL_ID
+        parts = [
+            types.Part.from_uri(file_uri=u, mime_type=_media_mime(u))
+            for u in (media or [])
+            if u
+        ]
         with track_model_call(model_name=model, task=task):
             response = client.models.generate_content(
                 model=model,
-                contents=[prompt],
+                contents=[*parts, prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=temperature,
@@ -1506,13 +1526,15 @@ class VertexStoryBackend:
     def plan_fix(
         self, story: Story, request: str, scene: int, seconds: float | None
     ) -> str:
-        """One short Gemini JSON call: the smallest fix for the request."""
-        from services.story_fix import fix_prompt
+        """One Gemini JSON call that watches the film (and looks at the
+        storyboard frames) before picking the smallest fix."""
+        from services.story_fix import fix_media, fix_prompt
 
         return self._json_text(
             fix_prompt(story, request, scene, seconds),
             temperature=0.2,
             task="story_fix",
+            media=fix_media(story),
         )
 
     def translate(self, story: Story) -> str:

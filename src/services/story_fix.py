@@ -180,6 +180,32 @@ def _timeline_text(timeline: dict) -> str:
     return "\n".join(rows)
 
 
+def fix_media(story: Story) -> list[str]:
+    """What the fix planner looks at, in the order the prompt names them:
+    the rendered film (when there is one), then each scene's storyboard
+    frame."""
+    film = [story.final_uri] if story.final_uri else []
+    return film + [sc.frame_uri for sc in story.scenes if sc.frame_uri]
+
+
+def _media_text(story: Story) -> str:
+    frames = [i + 1 for i, sc in enumerate(story.scenes) if sc.frame_uri]
+    lines = []
+    if story.final_uri:
+        lines.append(
+            "The rendered film is attached first. Watch it: judge what is really "
+            "on screen and in the sound (people, screens, cuts, speech), not only "
+            "the text below."
+        )
+    if frames:
+        lines.append(
+            "Then the storyboard frames of scenes "
+            + ", ".join(str(n) for n in frames)
+            + ", in that order."
+        )
+    return "\n".join(lines) or "No film or frames are attached yet."
+
+
 def fix_prompt(
     story: Story, request: str, scene: int = -1, seconds: float | None = None
 ) -> str:
@@ -197,6 +223,8 @@ Scenes:
 
 Timeline (the edited film):
 {_timeline_text(timeline)}
+
+{_media_text(story)}
 
 {_focus_text(story, timeline, scene, seconds)}
 

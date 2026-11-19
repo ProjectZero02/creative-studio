@@ -412,3 +412,25 @@ def test_plan_then_apply_from_the_edit_step(backend, monkeypatch):
     assert st.fix_plan_json == "" and st.job_kind == "fix"
     job = _run(story_jobs.get_job(st.job_id, OWNER))
     assert job.status == "done"
+
+
+def test_the_planner_watches_the_film_and_the_frames(monkeypatch):
+    story = _story(final_uri="gs://b/film.mp4")
+    assert story_fix.fix_media(story) == [
+        "gs://b/film.mp4",
+        "local://f0.png",
+        "local://f1.png",
+        "local://f2.png",
+    ]
+    assert "rendered film is attached first" in story_fix.fix_prompt(story, "too dark")
+    seen = {}
+
+    def fake(self, prompt, temperature=0.8, task="", model="", media=None):
+        seen.update(task=task, media=media)
+        return "{}"
+
+    monkeypatch.setattr(story_service.VertexStoryBackend, "_json_text", fake)
+    story_service.VertexStoryBackend().plan_fix(story, "too dark", -1, None)
+    assert seen == {"task": "story_fix", "media": story_fix.fix_media(story)}
+    assert story_service._media_mime("gs://b/film.mp4") == "video/mp4"
+    assert story_service._media_mime("gs://b/f.png") == "image/png"
