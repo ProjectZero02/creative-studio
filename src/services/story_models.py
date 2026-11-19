@@ -197,6 +197,24 @@ def clip_parts(seconds: int, single_max: int | None = None) -> list[int]:
     return [first] + [base + (1 if i < extra else 0) for i in range(turns)]
 
 
+def end_frame(story: Story, index: int) -> str:
+    """Storyboard frame scene `index`'s clip should end on: the next scene's
+    frame, when that scene carries on this take (so the two clips meet on the
+    same picture and the next one starts where this one stops), the video
+    model can take a first and a last frame, and the scene fits in one clip.
+    Otherwise empty: the clip ends wherever the model takes it."""
+    model = get_omni_model_config(Default().STORY_VIDEO_MODEL)
+    if not model or "first_last" not in model.supported_modes:
+        return ""
+    if not 0 <= index < len(story.scenes) - 1:
+        return ""
+    if int(story.scenes[index].duration) > single_clip_max():
+        return ""
+    if not story.continues_take(index + 1):
+        return ""
+    return story.scenes[index + 1].frame_uri
+
+
 # ---------------------------------------------------------------------------
 # Records
 # ---------------------------------------------------------------------------
@@ -1236,9 +1254,13 @@ def clip_prompt(
     continuing: bool = False,
     story_set=None,
     ref_labels: list[str] | None = None,
+    start_frame: bool = False,
+    end_frame: bool = False,
 ) -> str:
     """Video prompt for a scene. ``continuing``: the clip continues the
-    previous one (a continuous take), so it carries on the same shot and voice.
+    previous one (a continuous take), so it carries on the same person and
+    voice. ``start_frame`` / ``end_frame``: the scene's storyboard frame and
+    the next scene's frame are attached, so the clip starts and ends on them.
 
     Every clip has its own sound. Narrated scenes ask for natural ambient
     sound only, because the narrator's voiceover and the music go on top.
@@ -1255,11 +1277,29 @@ def clip_prompt(
     if continuing:
         # Name the character again: each turn of the thread is its own prompt.
         who = f" ({cast_text})" if cast_text else ""
-        base = (
-            f"Continue this exact shot without a cut: the same person{who}, "
-            "outfit, place, lighting and camera, and the same voice, pace and "
-            f"room sound as before. {base}"
+        if start_frame:
+            # The storyboard frame sets the shot; the thread keeps the voice.
+            base = (
+                f"Carry on the same take: the same person{who}, outfit and "
+                "place, and the same voice, pace and room sound as before. "
+                f"{base}"
+            )
+        else:
+            base = (
+                f"Continue this exact shot without a cut: the same person{who}, "
+                "outfit, place, lighting and camera, and the same voice, pace "
+                f"and room sound as before. {base}"
+            )
+    if continuing and start_frame and end_frame:
+        base += (
+            " Start exactly on the first attached image (this scene's "
+            "storyboard frame) and end exactly on the second (the next "
+            "scene's frame)."
         )
+    elif continuing and start_frame:
+        base += " Start exactly on the attached image (this scene's storyboard frame)."
+    elif end_frame:
+        base += " End exactly on the last frame image (the next scene's frame)."
     if not (scene.spoken and scene.narration.strip()):
         return (
             f"{base} Sound: natural ambient sound and sound effects of the "
