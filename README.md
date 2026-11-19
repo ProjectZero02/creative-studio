@@ -33,6 +33,19 @@ Google's media models are best understood by watching them work together. GenMed
 - **Real workflows, not just prompts.** Story Studio chains five models into a finished film; the industry demos show retail, real estate and brand use cases end to end.
 - **Yours in your own project.** One script deploys it to Cloud Run in your Google Cloud project. It uses Google Cloud credentials (no API keys), keeps every file in your own bucket, and costs nothing while idle.
 
+### What this adds to Google's Creative Studio
+
+GenMedia Studio builds on Google's open-source [GenMedia Creative Studio](https://github.com/GoogleCloudPlatform/genmedia-creative-studio) and keeps its features, so upstream fixes still merge in. On top of it:
+
+| Added here | What it means for a demo |
+|---|---|
+| **One prompt for everything** | The home page routes one idea to the right studio, already filled in. |
+| **Story Studio, idea to film** | Script, set, storyboard, scenes with on-camera speech, narration, music, a timeline editor and an Arabic version. |
+| **Talk to the studio** | A Gemini Live agent drives the app by voice and runs several jobs at once. |
+| **English and Arabic** | Every screen, right to left, in light and dark. |
+| **A redesigned interface** | One look across every studio, fewer clicks, works on a phone. |
+| **One-command deploy and demo mode** | Live in your own project in minutes, or rehearse with no cloud account at all. |
+
 ## The studios
 
 <table>
