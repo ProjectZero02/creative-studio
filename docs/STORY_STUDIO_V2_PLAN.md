@@ -45,3 +45,8 @@ Date: 2026-11-18. Scope: `src/services/story_*`, `src/pages/story_studio.py`, `s
 - Rendering sends the set as references: the storyboard frame, then the cast faces and fronts, the location plate and props, capped at the lower of the model's limit and `STORY_MAX_CLIP_REFERENCES` (6). Props are dropped first, then extra views. Prompts describe the cast and use the speaker's voice description word for word.
 - Each change bumps the set's version; a film made with an older version shows "Set changed since this film was made" on the Edit step.
 - Voice limits: the narrator's Gemini TTS preset is consistent. The on-camera voice is best effort (a fixed description plus the Omni thread per take), so sets fix the look but cannot promise an identical on-camera voice across takes.
+
+## Auto settings and longer scenes
+- **Settings from the idea.** On the Create step, each typing pause (700 ms) reads the idea: a free rules pass at once ("one minute" becomes 6 scenes of 10 s, plus vertical, language, style, who speaks, camera), then `STORY_LIVE_SETTINGS_MODEL` (Gemini Flash-Lite) refines it. A setting picked by hand is pinned and kept; the scene count or length is planned around it. "Use auto" unpins everything.
+- **Brief.** The scenario call also returns a fuller brief of the idea, shown and editable on the Scenario step; Rewrite all scenes works from it. No extra model call.
+- **Scenes up to 30 s.** Omni makes up to 15 s per request; a longer scene is continued in the same Omni thread (3 to 10 s per turn) and joined into one clip (`STORY_MAX_SCENE_SECONDS`).

@@ -44,6 +44,7 @@ from services.story_models import (
     alt_story,
     build_stitch_plan,
     default_music_prompt,
+    parse_brief,
     parse_scenario,
     parse_scene_links,
     parse_set_build,
@@ -341,6 +342,7 @@ def start_scenario(story_id: str, owner: str) -> Job:
                         story.speech_mode,
                     )
                     voice = parse_voice(text) if any(sc.spoken for sc in scenes) else ""
+                    brief = parse_brief(text)
                     if story_set is not None:
                         parse_scene_links(text, story_set, scenes)
                     break
@@ -353,6 +355,8 @@ def start_scenario(story_id: str, owner: str) -> Job:
                 s.title = title
                 s.title_alt = ""
                 s.speaker_voice = voice
+                if brief:
+                    s.brief = brief
                 s.scenes = scenes
                 s.approved = False
                 s.clear_films()

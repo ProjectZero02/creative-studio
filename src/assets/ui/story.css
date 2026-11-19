@@ -268,12 +268,22 @@ html body .gm-segmented.ss-audio-type { justify-content: flex-start; margin: 6px
 .ss-strip-running .ss-media-overlay { background: rgba(0, 0, 0, 0.45); color: #fff; }
 .ss-strip-label { display: flex; justify-content: space-between; gap: 6px; color: var(--sys-on-surface-variant); }
 
-/* ---------- Sticky action bar ---------- */
+/* ---------- Sticky action bar ----------
+   Only the buttons float (each on its own raised surface); the bar itself is
+   transparent and lets clicks through, so it never paints a band across the
+   cards (a flat background strip showed as a dark bar on the gradient page). */
 .ss-actions {
-  position: sticky; bottom: 0; z-index: 2;
+  position: sticky; bottom: 16px; z-index: 2;
   display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 14px 0 10px;
-  background: linear-gradient(to bottom, transparent, var(--sys-background) 35%);
+  padding: 0; margin-top: 4px;
+  pointer-events: none;
+}
+.ss-actions > * { pointer-events: auto; }
+.ss-actions .mat-mdc-button-base {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+.ss-actions .mat-mdc-outlined-button, .ss-actions .mat-mdc-button:not(.mat-mdc-unelevated-button) {
+  background: var(--sys-surface-container-high);
 }
 
 /* ---------- Responsive ---------- */
@@ -288,7 +298,8 @@ html body .gm-segmented.ss-audio-type { justify-content: flex-start; margin: 6px
   .ss-row-media { max-width: 100%; }
   .ss-new { min-height: 220px; }
   .ss-stories { grid-template-columns: minmax(0, 1fr); }
-  .ss-actions { position: static; background: none; }
+  .ss-actions { position: static; pointer-events: auto; }
+  .ss-actions .mat-mdc-button-base { box-shadow: none; }
   .ss-actions > * { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -386,3 +397,16 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
   .ss-set-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ss-set-section-head .mat-mdc-button-base { width: 128px; }
 }
+
+/* ---------- Auto settings note (Create) and brief (Scenario) ---------- */
+.ss-auto-note {
+  display: flex; align-items: center; gap: 8px; min-height: 40px;
+  padding: 0 4px 0 12px; border-radius: 12px; font-size: 13px;
+  background: color-mix(in srgb, var(--sys-primary) 10%, transparent);
+  color: var(--sys-on-surface);
+}
+.ss-auto-note .mat-icon { color: var(--sys-primary); flex: none; }
+.ss-auto-text { flex: 1 1 auto; min-width: 0; }
+.ss-auto-note .mat-mdc-button-base { height: 32px; flex: none; margin-left: auto; }
+.ss-brief { display: flex; flex-direction: column; gap: 4px; }
+.ss-brief .mat-mdc-form-field-subscript-wrapper { display: none; }

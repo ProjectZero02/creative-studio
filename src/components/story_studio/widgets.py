@@ -53,6 +53,24 @@ def story_style_picker(
     )
 
 
+@me.web_component(path="./story_idea_watch.js")
+def story_idea_watch(
+    *,
+    on_idea: typing.Callable[[me.WebEvent], None],
+    selector: str = ".ss-idea-field",
+    delay_ms: int = 700,
+    key: str | None = None,
+):
+    """Invisible: fires `on_idea` ({value}) when typing pauses in the field
+    inside `selector`."""
+    return me.insert_web_component(
+        key=key,
+        name="story-idea-watch",
+        properties={"selector": selector, "delay": delay_ms},
+        events={"ideaEvent": on_idea},
+    )
+
+
 @me.web_component(path="./story_ticker.js")
 def story_ticker(
     *,
