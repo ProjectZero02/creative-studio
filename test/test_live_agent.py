@@ -35,7 +35,11 @@ OWNER = "presenter@example.com"
 
 
 def instant_runners(delay: float = 0.0, fail_on: str = ""):
-    ext_map = {"video": ("mp4", "video/mp4"), "music": ("wav", "audio/wav")}
+    ext_map = {
+        "video": ("mp4", "video/mp4"),
+        "music": ("wav", "audio/wav"),
+        "voice": ("wav", "audio/wav"),
+    }
 
     def run(job):
         if delay:
@@ -49,7 +53,7 @@ def instant_runners(delay: float = 0.0, fail_on: str = ""):
             mime_type=mime,
         )
 
-    return {"image": run, "video": run, "music": run}
+    return {"image": run, "video": run, "music": run, "voice": run}
 
 
 # --- job service -----------------------------------------------------------
@@ -166,14 +170,22 @@ def test_tool_declarations_mark_job_tools_non_blocking():
         "edit_image",
         "generate_video",
         "generate_music",
+        "generate_voice",
         "list_jobs",
         "show_job",
         "open_page",
         "download",
         "end_call",
     }
-    for name in ("generate_image", "edit_image", "generate_video", "generate_music"):
+    for name in (
+        "generate_image",
+        "edit_image",
+        "generate_video",
+        "generate_music",
+        "generate_voice",
+    ):
         assert decls[name].behavior == types.Behavior.NON_BLOCKING
+    assert "Kore" in decls["generate_voice"].parameters.properties["voice"].description
     assert decls["show_job"].behavior == types.Behavior.BLOCKING
     blocking_only = {
         d.name: d for d in tool_declarations(False)[0].function_declarations
@@ -283,6 +295,46 @@ def test_generate_music_tool_defers_and_mock_runner_returns_audio(monkeypatch):
     monkeypatch.setenv("APP_ENV", "local")
     assert live_jobs.default_runners()["music"] is live_jobs._mock_music
     res = live_jobs._mock_music(out.job)
+    assert res.mime_type == "audio/wav"
+    assert res.display_url.startswith(mock_generation.MOCK_AUDIO_ROUTE)
+
+
+def test_generate_voice_tool_defaults_unknown_voice_and_mock_runner(monkeypatch):
+    from common import mock_generation
+    from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE
+    from services import live_jobs
+
+    call, browser = make_call()
+    out1 = run(
+        call.run_tool(
+            "generate_voice",
+            {"script": "Welcome to the demo", "voice": "puck", "language": "en-GB"},
+        )
+    )
+    assert isinstance(out1, Deferred)
+    assert out1.job.handle == "voice 1"
+    assert out1.job.params == {"voice": "Puck", "language": "en-GB"}
+    compose = [m for m in browser.sent if m.get("action") == "compose"][0]
+    assert compose["args"]["page"] == "/voice"
+    assert call.screen == "/voice"
+
+    out2 = run(
+        call.run_tool(
+            "generate_voice",
+            {"script": "Fallback check", "voice": "nonexistent-voice"},
+        )
+    )
+    assert isinstance(out2, Deferred)
+    assert out2.job.params == {"voice": DEFAULT_VOICE, "language": DEFAULT_LANGUAGE}
+    wait_done(call)
+    assert call.jobs.resolve(OWNER, "voice 1") is out1.job
+    assert call.jobs.resolve(OWNER, "the speech") is out2.job
+
+    monkeypatch.setattr(mock_generation, "fake_wait", lambda *_a, **_kw: None)
+    monkeypatch.setenv("GENMEDIA_MOCK_GENERATION", "true")
+    monkeypatch.setenv("APP_ENV", "local")
+    assert live_jobs.default_runners()["voice"] is live_jobs._mock_voice
+    res = live_jobs._mock_voice(out1.job)
     assert res.mime_type == "audio/wav"
     assert res.display_url.startswith(mock_generation.MOCK_AUDIO_ROUTE)
 

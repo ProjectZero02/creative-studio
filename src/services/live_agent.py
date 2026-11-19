@@ -38,6 +38,7 @@ from typing import Any
 
 from google.genai import types
 
+from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE, VOICES as VOICE_NAMES
 from services.live_jobs import DONE, FAILED, JobLimitError, LiveJob, LiveJobs
 
 Send = Callable[[dict], Awaitable[None]]
@@ -51,7 +52,12 @@ PAGES = {
     "story": "/story",
     "library": "/library_v2",
 }
-JOB_PAGE = {"image": "/nano-banana", "video": "/veo", "music": "/lyria"}
+JOB_PAGE = {
+    "image": "/nano-banana",
+    "video": "/veo",
+    "music": "/lyria",
+    "voice": "/voice",
+}
 UI_TIMEOUT_S = 10.0
 
 SYSTEM_PROMPT = """You are the voice of GenMedia Studio, a creative studio built on Google's media models. You run the app for the presenter while an audience watches the screen.
@@ -62,13 +68,22 @@ How you talk:
 - When a job finishes you get its result. Say so in a few words at the next pause, e.g. "Image 1 is ready." Do not open it unless asked or nothing else is happening on screen.
 
 How you work:
-- Use generate_image, edit_image, generate_video and generate_music. They run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
+- Use generate_image, edit_image, generate_video, generate_music and generate_voice. They run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
 - Write rich prompts for the models from what the presenter says: subject, style, lighting, camera, or genre, instruments, mood. Keep their words and intent.
-- Jobs have short names: "image 1", "video 1", "music 1". "The image" means the latest image unless the presenter says otherwise. Say which one you act on.
+- Jobs have short names: "image 1", "video 1", "music 1", "voice 1". "The image" means the latest image unless the presenter says otherwise. Say which one you act on.
 - edit_image needs a finished image. If it is still rendering, say so and offer to edit it once it is ready.
 - Use show_job to bring a result on screen, open_page to move between studios, download to save a file to the presenter's computer, and end_call when they say goodbye.
 - If a job fails, say why in plain words and offer to retry.
 - Only do media tasks in this app. Politely decline anything else."""
+
+
+def _resolve_voice(voice: str) -> str:
+    """Match a requested voice name case-insensitively, or fall back to default."""
+    target = (voice or "").strip().lower()
+    for name in VOICE_NAMES:
+        if name.lower() == target:
+            return name
+    return DEFAULT_VOICE
 
 
 def _schema(props: dict[str, tuple[str, str]], required: list[str]) -> types.Schema:
@@ -157,6 +172,25 @@ def tool_declarations(async_tools: bool = True) -> list[types.Tool]:
                         ),
                     },
                     ["prompt"],
+                    job,
+                ),
+                fd(
+                    "generate_voice",
+                    "Generate spoken audio (TTS) in Voice Studio. Runs in the background.",
+                    {
+                        "script": ("STRING", "The exact text to be spoken aloud."),
+                        "voice": (
+                            "STRING",
+                            f"Optional voice name (default {DEFAULT_VOICE}). Allowed: "
+                            + ", ".join(VOICE_NAMES)
+                            + ".",
+                        ),
+                        "language": (
+                            "STRING",
+                            f"Optional BCP-47 language code, e.g. 'en-US', 'ar-EG'. Default {DEFAULT_LANGUAGE}.",
+                        ),
+                    },
+                    ["script"],
                     job,
                 ),
                 fd(
@@ -346,6 +380,15 @@ class LiveCall:
     async def _tool_generate_music(self, prompt: str, lyrics: str = "") -> Deferred:
         params = {"lyrics": lyrics.strip()} if lyrics.strip() else None
         return await self._start("music", prompt, params=params)
+
+    async def _tool_generate_voice(
+        self, script: str, voice: str = "", language: str = ""
+    ) -> Deferred:
+        params = {
+            "voice": _resolve_voice(voice),
+            "language": (language or "").strip() or DEFAULT_LANGUAGE,
+        }
+        return await self._start("voice", script, params=params)
 
     async def _tool_list_jobs(self) -> dict:
         return {
