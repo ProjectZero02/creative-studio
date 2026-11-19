@@ -2760,6 +2760,11 @@ def edit_view(story: Story) -> None:
                         "Set changed since this film was made",
                         style=me.Style(font_size=13, color=me.theme_var("error")),
                     )
+                if story.film_edited and story.final_uri and not exporting:
+                    me.text(
+                        "Edited since the last export. Export to update the download.",
+                        style=me.Style(font_size=13, color=me.theme_var("primary")),
+                    )
             with me.box(classes="ss-edit-tools"):
                 me.button(
                     "Scenes",
