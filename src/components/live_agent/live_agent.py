@@ -31,6 +31,7 @@ import typing
 import mesop as me
 
 from common.i18n import t
+from config.default import Default
 from services import page_forms
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,16 @@ def _strings() -> dict:
             "Fill only: the agent fills the page and you press Generate. "
             "Do it for me: it also runs the jobs.",
         ),
+        "avatar": t("live.avatar", "Avatar"),
+        "avatarHint": t(
+            "live.avatar_hint",
+            "Show a talking presenter instead of voice only. Uses much more of the Live quota.",
+        ),
+        "avatarNoSupport": t(
+            "live.avatar_no_support", "This browser cannot play the avatar, so the call is voice only."
+        ),
+        # Empty when the server has no avatar: the switch is then hidden.
+        "avatarName": Default.LIVE_AVATAR,
     }
 
 
