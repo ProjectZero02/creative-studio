@@ -371,6 +371,15 @@ class Default:
         "STORY_VIDEO_MODEL", os.environ.get("OMNI_MODEL_ID", "gemini-omni-1.2-flash")
     )
     STORY_TAKE_MAX_SECONDS: int = int(os.environ.get("STORY_TAKE_MAX_SECONDS", 30))
+    # Longest scene. Past the video model's single-clip limit (15 s for Omni
+    # 1.2 Flash) a scene is one clip plus extensions in the same Omni thread
+    # (3 to 10 s each); Omni extends up to 30 s in all.
+    STORY_MAX_SCENE_SECONDS: int = int(os.environ.get("STORY_MAX_SCENE_SECONDS", 30))
+    # Small model that reads the film settings out of the idea while the user
+    # types (after the free rules pass). Empty turns the live model off.
+    STORY_LIVE_SETTINGS_MODEL: str = os.environ.get(
+        "STORY_LIVE_SETTINGS_MODEL", "gemini-3.5-flash-lite"
+    )
     STORY_SCENARIO_MODEL_ID: str = os.environ.get(
         "STORY_SCENARIO_MODEL_ID", os.environ.get("MODEL_ID", "gemini-3.5-flash")
     )

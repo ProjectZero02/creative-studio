@@ -44,12 +44,17 @@ class StoryState:
     camera: str = "auto"
     reference_uri: str = ""
     prompt_prefill_seen: str = ""  # last ?prompt= applied on load
+    # Auto settings read from the idea while typing (services/story_autoset).
+    auto_json: str = ""  # what was found, for the note under the idea
+    pinned_json: str = "[]"  # form fields the user set by hand (kept as is)
 
     # Background job being watched.
     job_id: str = ""
     job_json: str = ""
     job_running: bool = False
     job_tasks_done: int = 0
+    job_kind: str = ""  # kind of the watched job, kept if its snapshot goes missing
+    job_misses: int = 0  # ticks in a row that could not find the job
 
     error: str = ""
     notice: str = ""
