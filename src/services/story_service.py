@@ -1154,6 +1154,31 @@ def join_plan(lengths: list[float]) -> list[int]:
     return keep
 
 
+# Waits between tries of a call that failed with a passing service error
+# (500, 502, 503, timeouts). A third failure is reported to the user.
+TRANSIENT_RETRY_WAITS = (3.0, 8.0)
+
+
+def _retry_transient(fn, what: str):
+    """Run ``fn``, retrying passing service errors (see classify_error)."""
+    from common.error_handling import classify_error
+
+    for wait in (*TRANSIENT_RETRY_WAITS, None):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            retryable = (
+                classify_error(exc).get("retryable") or "timed out" in str(exc).lower()
+            )
+            if wait is None or not retryable:
+                raise
+            logger.warning(
+                "Story Studio: %s failed (%s), retrying in %.0f s.", what, exc, wait
+            )
+            time.sleep(wait)
+    return None
+
+
 def concat_args(
     paths: list[str], has_audio: list[bool], lengths: list[float], out: str
 ) -> list[str]:
@@ -1625,13 +1650,31 @@ class VertexStoryBackend:
 
     def generate_music(self, story: Story, prompt: str, seconds: float) -> str:
         from models.lyria import generate_music_with_lyria
+        from services.story_models import MUSIC_FALLBACK_PROMPTS, music_declined
 
-        uris, _, _ = generate_music_with_lyria(
-            prompt, model_name=self.cfg.LYRIA_MODEL_VERSION
-        )
-        if not uris:
-            raise GenerationError("Lyria returned no music.")
-        return uris[0]
+        # A blocked prompt (often a title that sounds like an existing song)
+        # falls back to plainer prompts, so the film still gets music.
+        declined: Exception | None = None
+        for attempt in (prompt, *MUSIC_FALLBACK_PROMPTS):
+            try:
+                uris, _, _ = generate_music_with_lyria(
+                    attempt, model_name=self.cfg.LYRIA_MODEL_VERSION
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not music_declined(exc):
+                    raise
+                logger.warning(
+                    "Story Studio: Lyria declined a music prompt, trying a plainer one."
+                )
+                declined = exc
+                continue
+            if uris:
+                return uris[0]
+        if declined is not None:
+            raise GenerationError(
+                "Lyria declined the music prompt. Edit the music prompt and retry."
+            ) from declined
+        raise GenerationError("Lyria returned no music.")
 
     def generate_voiceover(
         self, story: Story, index: int, text: str, voice=None
@@ -1645,12 +1688,15 @@ class VertexStoryBackend:
             story_set = self._set(story)
             narrator = story_set.narrator() if story_set else None
             voice = narrator.voice if narrator else None
-        audio = synthesize_speech(
-            text=text,
-            prompt=_tts_style(voice),
-            model_name=self.cfg.STORY_TTS_MODEL,
-            voice_name=voice.tts_voice if voice else story.voice_name,
-            language_code=LANGUAGES.get(story.language, "en-US"),
+        audio = _retry_transient(
+            lambda: synthesize_speech(
+                text=text,
+                prompt=_tts_style(voice),
+                model_name=self.cfg.STORY_TTS_MODEL,
+                voice_name=voice.tts_voice if voice else story.voice_name,
+                language_code=LANGUAGES.get(story.language, "en-US"),
+            ),
+            "voiceover",
         )
         if not audio:
             raise GenerationError("Text-to-speech returned no audio.")

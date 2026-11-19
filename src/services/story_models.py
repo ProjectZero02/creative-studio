@@ -1376,6 +1376,23 @@ def default_music_prompt(story: Story) -> str:
     )
 
 
+# Plainer music prompts for when Lyria blocks the first one (its recitation
+# check refuses prompts that sound like an existing piece, often because of a
+# title). No title or story words, so they are very unlikely to be blocked.
+MUSIC_FALLBACK_PROMPTS = (
+    "Gentle cinematic instrumental underscore, soft piano and warm strings, "
+    "slowly building, hopeful, no vocals.",
+    "Calm ambient instrumental background music, warm synth pads, no vocals.",
+)
+
+
+def music_declined(exc: Exception) -> bool:
+    """True when Lyria refused the prompt (recitation or safety block), as
+    opposed to a service error."""
+    text = str(exc).lower()
+    return any(k in text for k in ("recitation", "blocked", "safety", "declined"))
+
+
 def other_language(language: str) -> str:
     """The second language offered for a story: English for Arabic, else Arabic."""
     return "English" if language == "Arabic" else "Arabic"
