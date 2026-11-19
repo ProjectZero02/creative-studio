@@ -717,6 +717,29 @@ class LiveCall:
         result = await self.ui("download", {"job": found.public()})
         return {"downloaded": found.handle, **result}
 
+    def screen_changed(self, path: str, fields=None) -> str:
+        """The browser reports the page on screen. Returns a note for the
+        model when the presenter moved by themselves (the agent's own moves
+        already set `screen`), else ""."""
+        if path == self.screen:
+            return ""
+        self.screen = path
+        note = f"[Screen] The presenter opened {path}."
+        rows = fields if isinstance(fields, list) else []
+        shown = []
+        for f in rows[:12]:
+            if not isinstance(f, dict) or not f.get("name"):
+                continue
+            value = f.get("value")
+            if isinstance(value, str) and len(value) > 60:
+                value = value[:60] + "..."
+            shown.append(f"{f['name']}={value!r}")
+        if shown:
+            note += " Its fields: " + ", ".join(shown) + "."
+        elif self.mode == FILL:
+            note += " It has no fields to fill."
+        return note + " Do not reply to this note."
+
     async def _tool_read_page(self) -> dict:
         result = await self.ui("read_page", {})
         if not result.get("ok", True):

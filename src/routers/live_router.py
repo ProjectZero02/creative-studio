@@ -166,7 +166,10 @@ class _Bridge:
                         str(message.get("id")), message.get("result") or {}
                     )
                 elif kind == "screen":
-                    self.call.screen = str(message.get("path") or "/home")[:200]
+                    path = str(message.get("path") or "/home")[:200]
+                    note = self.call.screen_changed(path, message.get("fields"))
+                    if note:
+                        await self.inbox.put({"type": "context", "text": note})
                 elif kind == "hangup":
                     break
                 else:
@@ -306,6 +309,14 @@ class _Bridge:
                     )
             elif kind == "audio_end":
                 await session.send_realtime_input(audio_stream_end=True)
+            elif kind == "context":
+                # What the presenter now sees. No reply: the turn stays open.
+                await session.send_client_content(
+                    turns=types.Content(
+                        role="user", parts=[types.Part(text=message["text"])]
+                    ),
+                    turn_complete=False,
+                )
             elif kind == "text":
                 text = str(message.get("text") or "")[:2000]
                 await self.send(

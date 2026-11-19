@@ -703,7 +703,10 @@ class GmLive {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
   }
 
-  _sendScreen() { this._send({ type: 'screen', path: location.pathname }); }
+  _sendScreen() {
+    const fields = this.readPage().fields.map((f) => ({ name: f.name, value: f.value }));
+    this._send({ type: 'screen', path: location.pathname, fields });
+  }
 
   sendText(text) { this._send({ type: 'text', text }); }
 
