@@ -53,6 +53,15 @@ const DEFAULT_STRINGS = {
   modeHint: 'Fill only: the agent fills the page and you press Generate. Do it for me: it also runs the jobs.',
 };
 const MODE_KEY = 'gm-live-mode';
+// What the dock says while the agent runs a tool (instead of "Listening").
+const TOOL_ACTIVITY = {
+  read_page: 'Reading the page',
+  fill_fields: 'Filling the page',
+  open_page: 'Opening the page',
+  plan_film_fix: 'Watching the film',
+  run_film_fix: 'Starting the fix',
+};
+const CAPTION_FADE_MS = 8000;
 function savedMode() {
   try { return localStorage.getItem(MODE_KEY) === 'act' ? 'act' : 'fill'; } catch (e) { return 'fill'; }
 }
@@ -117,6 +126,8 @@ const STYLE = `
 .gml-dot[data-s="live"] { background: #1e8e3e; box-shadow: 0 0 0 0 rgba(30,142,62,.5); animation: gml-pulse 1.6s infinite; }
 .gml-dot[data-s="speaking"] { background: var(--sys-primary, #1a5fd8); }
 .gml-dot[data-s="offline"] { background: #f29900; }
+.gml-dot[data-s="working"] { background: var(--sys-primary, #1a5fd8); animation: gml-pulse 1s infinite; }
+.gml-cap.faded { opacity: 0; }
 @keyframes gml-pulse { 0% { box-shadow: 0 0 0 0 rgba(30,142,62,.45); } 70% { box-shadow: 0 0 0 8px rgba(30,142,62,0); } 100% { box-shadow: 0 0 0 0 rgba(30,142,62,0); } }
 .gml-level { width: 46px; height: 6px; border-radius: 3px; background: var(--sys-surface-container-high, #e6e8ec); overflow: hidden; flex: none; }
 .gml-level i { display: block; height: 100%; width: 0; background: #1e8e3e; transition: width .08s; }
@@ -315,6 +326,7 @@ class GmLive {
     else if (this.state === 'live') {
       label = speaking ? s.speaking : s.listening;
       if (speaking) key = 'speaking';
+      else if (this.activity) { label = `${this.activity}…`; key = 'working'; }
     }
     this.dot.dataset.s = key;
     this.stateText.textContent = label;
@@ -328,12 +340,24 @@ class GmLive {
 
   refreshLauncher() { this._renderState(); }
 
+  /** Show what the agent is doing in the dock; clears itself. */
+  _setActivity(label) {
+    this.activity = label;
+    clearTimeout(this._activityTimer);
+    if (label) this._activityTimer = setTimeout(() => this._setActivity(''), 20000);
+    this._renderState(false);
+  }
+
   _caption(who, text, final) {
     const el = who === 'user' ? this.capUser : this.capAgent;
     const key = who === 'user' ? 'userLine' : 'agentLine';
     if (final) this[key] = text;
     else this[key] = (this[key] + text).slice(-280);
     el.textContent = this[key];
+    // Captions fade after a quiet spell so they do not sit over the page.
+    el.classList.remove('faded');
+    clearTimeout(el._fade);
+    el._fade = setTimeout(() => el.classList.add('faded'), CAPTION_FADE_MS);
   }
 
   // ------------------------------------------------------------ jobs -----
@@ -777,7 +801,8 @@ class GmLive {
         this._lastWho = m.who;
         this._caption(m.who, m.text, !!m.final);
         break;
-      case 'turn_complete': this._lastWho = 'turn'; break;
+      case 'turn_complete': this._lastWho = 'turn'; this._setActivity(''); break;
+      case 'tool': this._setActivity(TOOL_ACTIVITY[m.name] || ''); break;
       case 'job': this._job(m.job); break;
       case 'ui': this._ui(m); break;
       case 'error': this._caption('agent', m.message, true); break;
