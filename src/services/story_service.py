@@ -47,6 +47,7 @@ from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
     LANGUAGES,
+    SAME_TAKE_REF,
     STYLE_BY_ID,
     Scene,
     StitchPlan,
@@ -1154,6 +1155,31 @@ def join_plan(lengths: list[float]) -> list[int]:
     return keep
 
 
+# Waits between tries of a call that failed with a passing service error
+# (500, 502, 503, timeouts). A third failure is reported to the user.
+TRANSIENT_RETRY_WAITS = (3.0, 8.0)
+
+
+def _retry_transient(fn, what: str):
+    """Run ``fn``, retrying passing service errors (see classify_error)."""
+    from common.error_handling import classify_error
+
+    for wait in (*TRANSIENT_RETRY_WAITS, None):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            retryable = (
+                classify_error(exc).get("retryable") or "timed out" in str(exc).lower()
+            )
+            if wait is None or not retryable:
+                raise
+            logger.warning(
+                "Story Studio: %s failed (%s), retrying in %.0f s.", what, exc, wait
+            )
+            time.sleep(wait)
+    return None
+
+
 def concat_args(
     paths: list[str], has_audio: list[bool], lengths: list[float], out: str
 ) -> list[str]:
@@ -1215,6 +1241,14 @@ def is_lookalike_refusal(exc: Exception) -> bool:
 def frame_parts(*uris: str) -> list[dict]:
     """Image parts of an Omni thread turn, in order (empty URIs skipped)."""
     return [{"type": "image", "uri": u, "mime_type": _image_mime(u)} for u in uris if u]
+
+
+def take_frame(story: Story, index: int) -> str:
+    """The storyboard frame that opens the continuous take scene `index`
+    continues ("" when the scene starts its own shot)."""
+    if not story.continues_take(index):
+        return ""
+    return story.scenes[story.take_start(index)].frame_uri
 
 
 def take_turn_frames(story: Story, index: int, first: bool) -> tuple[str, str]:
@@ -1420,13 +1454,23 @@ class VertexStoryBackend:
         set_refs = frame_refs(story_set, scene)
         refs = [r.uri for r in set_refs]
         labels = [r.label for r in set_refs]
+        same_take = bool(reference_uri) and reference_uri == take_frame(story, index)
         if reference_uri and reference_uri not in refs:
             refs.append(reference_uri)
             if labels:
-                labels.append("the look, palette and art style of the film")
+                labels.append(
+                    SAME_TAKE_REF
+                    if same_take
+                    else "the look, palette and art style of the film"
+                )
         uris, _, _, _, _ = generate_image_from_prompt_and_images(
             prompt=frame_prompt(
-                story, scene, bool(reference_uri), story_set, labels or None
+                story,
+                scene,
+                bool(reference_uri),
+                story_set,
+                labels or None,
+                same_take=same_take,
             ),
             images=refs,
             aspect_ratio=story.aspect_ratio,
@@ -1625,13 +1669,31 @@ class VertexStoryBackend:
 
     def generate_music(self, story: Story, prompt: str, seconds: float) -> str:
         from models.lyria import generate_music_with_lyria
+        from services.story_models import MUSIC_FALLBACK_PROMPTS, music_declined
 
-        uris, _, _ = generate_music_with_lyria(
-            prompt, model_name=self.cfg.LYRIA_MODEL_VERSION
-        )
-        if not uris:
-            raise GenerationError("Lyria returned no music.")
-        return uris[0]
+        # A blocked prompt (often a title that sounds like an existing song)
+        # falls back to plainer prompts, so the film still gets music.
+        declined: Exception | None = None
+        for attempt in (prompt, *MUSIC_FALLBACK_PROMPTS):
+            try:
+                uris, _, _ = generate_music_with_lyria(
+                    attempt, model_name=self.cfg.LYRIA_MODEL_VERSION
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not music_declined(exc):
+                    raise
+                logger.warning(
+                    "Story Studio: Lyria declined a music prompt, trying a plainer one."
+                )
+                declined = exc
+                continue
+            if uris:
+                return uris[0]
+        if declined is not None:
+            raise GenerationError(
+                "Lyria declined the music prompt. Edit the music prompt and retry."
+            ) from declined
+        raise GenerationError("Lyria returned no music.")
 
     def generate_voiceover(
         self, story: Story, index: int, text: str, voice=None
@@ -1645,12 +1707,15 @@ class VertexStoryBackend:
             story_set = self._set(story)
             narrator = story_set.narrator() if story_set else None
             voice = narrator.voice if narrator else None
-        audio = synthesize_speech(
-            text=text,
-            prompt=_tts_style(voice),
-            model_name=self.cfg.STORY_TTS_MODEL,
-            voice_name=voice.tts_voice if voice else story.voice_name,
-            language_code=LANGUAGES.get(story.language, "en-US"),
+        audio = _retry_transient(
+            lambda: synthesize_speech(
+                text=text,
+                prompt=_tts_style(voice),
+                model_name=self.cfg.STORY_TTS_MODEL,
+                voice_name=voice.tts_voice if voice else story.voice_name,
+                language_code=LANGUAGES.get(story.language, "en-US"),
+            ),
+            "voiceover",
         )
         if not audio:
             raise GenerationError("Text-to-speech returned no audio.")
@@ -1697,7 +1762,7 @@ class VertexStoryBackend:
         previous clip. Returns (clip, seconds of it that repeat the previous
         clip), measured, since the model may return the joined video."""
         from models.omni import generate_omni_video
-        from services.story_timeline import probe
+        from services.story_timeline import clip_edges, probe
 
         scene = story.scenes[index]
         story_set = self._set(story)
@@ -1761,7 +1826,10 @@ class VertexStoryBackend:
             prev_path, new_path = os.path.join(tmp, "a.mp4"), os.path.join(tmp, "b.mp4")
             _gcs_fetch(prev_clip_uri, prev_path)
             _gcs_fetch(uri, new_path)
-            prev_len, new_len = probe(prev_path)[0], probe(new_path)[0]
+            # The picture's own lengths: the file runs a little longer with
+            # its sound, which put every later cut between two frames.
+            prev_len = clip_edges(prev_path)[0] or probe(prev_path)[0]
+            new_len = clip_edges(new_path)[0] or probe(new_path)[0]
         joined = new_len > prev_len + 1.0
         return uri, round(prev_len, 3) if joined else 0.0
 

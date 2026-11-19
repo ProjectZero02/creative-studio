@@ -144,6 +144,10 @@ def _synthesize_cloud_tts(
     return response.audio_content
 
 
+# Most a single speech call may take (ms).
+TTS_TIMEOUT_MS = 90_000
+
+
 def _synthesize_generate_content(
     text: str,
     prompt: str,
@@ -193,6 +197,9 @@ def _synthesize_generate_content(
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=speech_config,
+            # A stuck call fails after this instead of hanging for minutes
+            # (seen: 4 min then 503), so callers can retry.
+            http_options=types.HttpOptions(timeout=TTS_TIMEOUT_MS),
         ),
     )
     for candidate in response.candidates or []:

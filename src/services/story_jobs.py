@@ -467,9 +467,24 @@ def start_storyboard(
             and 0 not in targets
         ):
             reference = story.scenes[0].frame_uri
-        with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+        # A scene later in a continuous take is painted from the frame that
+        # opens its take, after it, so the set stays the same through the take.
+        later = [i for i in rest if story.continues_take(i)]
+
+        def take_reference(i: int) -> str:
+            current = get_store().get(story_id, owner) or story
+            return current.scenes[current.take_start(i)].frame_uri or reference
+
+        workers = max(1, cfg.STORY_MAX_PARALLEL)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             for i in rest:
-                pool.submit(_run_task, tasks[i], lambda i=i: paint(i, reference))
+                if i not in later:
+                    pool.submit(_run_task, tasks[i], lambda i=i: paint(i, reference))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for i in later:
+                pool.submit(
+                    _run_task, tasks[i], lambda i=i: paint(i, take_reference(i))
+                )
 
     return _spawn(job, work)
 

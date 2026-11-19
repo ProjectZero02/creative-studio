@@ -1536,3 +1536,26 @@ def test_continuation_without_a_frame_keeps_the_shot(omni_calls, monkeypatch):
     (req,) = omni_calls
     assert "Continue this exact shot" in req.prompt
     assert not req.reference_image_gcs
+
+
+def test_later_frames_of_a_continuous_take_are_painted_from_its_first(
+    fast_backend, local_store
+):
+    def line(text):
+        return Scene(visual="v", narration=text, spoken=True, duration=4)
+
+    s = local_store.save(
+        Story(
+            scenes=[Scene(visual="v0", duration=4), line("a"), line("b")],
+            approved=True,
+            continuous_takes=True,
+        ),
+        OWNER,
+    )
+    assert s.continues_take(2) and not s.continues_take(1)
+    job = _run(story_jobs.start_storyboard(s.id, OWNER))
+    assert job.status == "done"
+    # Scene 2 opens a new take (from scene 1's look); scene 3 continues it,
+    # so it is painted from scene 2's frame and keeps that set.
+    assert fast_backend.refs[1] == f"local://{s.id}/frame0.png"
+    assert fast_backend.refs[2] == f"local://{s.id}/frame1.png"

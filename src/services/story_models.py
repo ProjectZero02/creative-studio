@@ -1232,16 +1232,23 @@ def _cast_text(story: Story, scene: Scene, story_set) -> str:
     return story.character
 
 
+# How frame_prompt names the take's first frame among the reference images.
+SAME_TAKE_REF = "the earlier frame of this take"
+
+
 def frame_prompt(
     story: Story,
     scene: Scene,
     has_reference: bool,
     story_set=None,
     ref_labels: list[str] | None = None,
+    same_take: bool = False,
 ) -> str:
     """Image prompt for a storyboard frame. With a set, the scene's cast,
     place and props are described and each reference image is named
-    (`ref_labels`, in image order)."""
+    (`ref_labels`, in image order). ``same_take``: the reference is the
+    first frame of the continuous take this scene belongs to, so the room
+    must stay as it is there."""
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     keep = (
         " Keep the same main character, wardrobe, palette and art style as the "
@@ -1249,6 +1256,16 @@ def frame_prompt(
         if has_reference and not ref_labels
         else ""
     )
+    if has_reference and same_take:
+        # One continuous take is filmed in one place without a cut, so the
+        # set cannot change between its frames (seen: a slide went blank and
+        # an audience appeared, and the take followed the frames).
+        keep += (
+            f" This frame is later in the same continuous shot as {SAME_TAKE_REF}: "
+            "keep the same room, set and props, exactly what is shown on any "
+            "screen or board, and the same people in the same places. Only "
+            "the camera framing and the action change, as described."
+        )
     cast = scene_cast(story_set, scene)
     who = _cast_text(story, scene, story_set)
     character = f" {'On screen' if cast else 'Main character'}: {who}." if who else ""
@@ -1374,6 +1391,23 @@ def default_music_prompt(story: Story) -> str:
         f"Cinematic instrumental score for a short {style['label'].lower()} film: "
         f"{story.title or story.idea[:80]}. Warm, building, no vocals."
     )
+
+
+# Plainer music prompts for when Lyria blocks the first one (its recitation
+# check refuses prompts that sound like an existing piece, often because of a
+# title). No title or story words, so they are very unlikely to be blocked.
+MUSIC_FALLBACK_PROMPTS = (
+    "Gentle cinematic instrumental underscore, soft piano and warm strings, "
+    "slowly building, hopeful, no vocals.",
+    "Calm ambient instrumental background music, warm synth pads, no vocals.",
+)
+
+
+def music_declined(exc: Exception) -> bool:
+    """True when Lyria refused the prompt (recitation or safety block), as
+    opposed to a service error."""
+    text = str(exc).lower()
+    return any(k in text for k in ("recitation", "blocked", "safety", "declined"))
 
 
 def other_language(language: str) -> str:
