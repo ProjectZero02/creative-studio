@@ -410,3 +410,27 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
 .ss-auto-note .mat-mdc-button-base { height: 32px; flex: none; margin-left: auto; }
 .ss-brief { display: flex; flex-direction: column; gap: 4px; }
 .ss-brief .mat-mdc-form-field-subscript-wrapper { display: none; }
+
+/* Edit step: Fix with AI (request, scene and time, then Gemini's plan). */
+.ss-fix { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.ss-fix-head { display: flex; flex-direction: row; gap: 10px; align-items: flex-start; }
+.ss-fix .mat-mdc-form-field-subscript-wrapper { display: none; }
+.ss-fix-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ss-fix-scene { flex: 0 0 180px; }
+.ss-fix-time { flex: 0 0 200px; }
+.ss-fix-go { margin-left: auto; }
+.ss-fix-row .mat-mdc-button-base { height: 44px; border-radius: var(--gm-radius-md, 12px); }
+.ss-fix-plan { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--gm-radius-md, 12px); background: var(--mat-sys-surface-container, rgba(127, 127, 127, 0.08)); }
+.ss-fix-ask, .ss-fix-step { display: flex; flex-direction: row; gap: 8px; align-items: center; }
+.ss-fix-change { display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; font-size: 13px; }
+.ss-fix-old { text-decoration: line-through; opacity: 0.7; }
+.ss-fix-new { font-weight: 500; }
+.ss-fix-steps { display: flex; flex-direction: column; gap: 4px; }
+.ss-fix-actions { display: flex; flex-direction: row; gap: 8px; justify-content: flex-end; }
+@media (max-width: 640px) {
+  .ss-fix { padding: 12px; }
+  .ss-fix-scene, .ss-fix-time { flex: 1 1 140px; }
+  .ss-fix-go { flex: 1 1 100%; }
+  .ss-fix-row .mat-mdc-button-base { width: 100%; }
+  .ss-fix-change { grid-template-columns: 1fr; }
+}
