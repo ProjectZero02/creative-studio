@@ -494,6 +494,34 @@ def test_scripted_agent_runs_the_demo():
     assert call.ended is True
 
 
+def test_scripted_agent_music_voice_and_help():
+    call, _ = make_call()
+    lines = []
+
+    async def say(text):
+        lines.append(text)
+
+    agent = ScriptedAgent(call, say)
+
+    async def go():
+        await agent.handle("music of calm rain on piano")
+        await agent.handle("say welcome to the demo")
+        await asyncio.sleep(0.1)
+        await agent.handle("show music 1")
+        await agent.handle("download voice 1")
+        await agent.handle("gibberish command")
+
+    run(go())
+    handles = [j.handle for j in call.jobs.list(OWNER)]
+    assert handles == ["music 1", "voice 1"]
+    assert call.jobs.resolve(OWNER, "music 1").prompt == "calm rain on piano"
+    assert call.jobs.resolve(OWNER, "voice 1").prompt == "welcome to the demo"
+    assert "Starting the music: music 1." in lines
+    assert "Starting the voice: voice 1." in lines
+    assert any("Downloading voice 1" in line for line in lines)
+    assert "music of" in lines[-1] and "make a story" in lines[-1]
+
+
 # --- WebSocket route (offline agent, no model) ------------------------------
 
 

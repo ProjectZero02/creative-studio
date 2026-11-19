@@ -702,6 +702,60 @@ class ScriptedAgent:
         elif "download" in low:
             out = await self.call.run_tool("download", {"job": _ref(low)})
             await self.say(out.get("error") or f"Downloading {out['downloaded']}.")
+        elif "story status" in low:
+            out = await self.call.run_tool("story_status", {})
+            if "error" in out:
+                await self.say(out["error"])
+            else:
+                film = (
+                    "film ready"
+                    if out.get("has_film")
+                    else f"next: {out['next_action']}"
+                )
+                await self.say(f"{out['title']} is at {out['step']} ({film}).")
+        elif any(p in low for p in ("render the film", "render film")):
+            out = await self.call.run_tool("render_film", {})
+            await self._started(out, "Rendering the film")
+        elif any(
+            p in low for p in ("next step", "continue story", "continue the story")
+        ):
+            out = await self.call.run_tool("continue_story", {})
+            if isinstance(out, Deferred):
+                await self.say(f"Continuing the story: {out.job.handle}.")
+            else:
+                await self.say(out.get("error") or out.get("note") or "Done.")
+        elif re.search(r"\bstory\s+(about|of)\b", low) or low.startswith(
+            ("make a story", "create a story", "start a story")
+        ):
+            idea = (
+                re.sub(
+                    r"^.*?\bstory\s*(about|of)?\s*",
+                    "",
+                    said,
+                    flags=re.I,
+                ).strip()
+                or said
+            )
+            out = await self.call.run_tool("create_story", {"idea": idea})
+            await self._started(out, "Starting the story")
+        elif low.startswith("say "):
+            script = said[4:].strip()
+            out = await self.call.run_tool("generate_voice", {"script": script})
+            await self._started(out, "Starting the voice")
+        elif any(w in low for w in ("music", "song", "track")) and not low.startswith(
+            ("show", "go back", "open")
+        ):
+            prompt = (
+                re.sub(
+                    r"^(make|generate|create|play)?\s*(some|a)?\s*(music|song|track)\s*(of|about)?\s*",
+                    "",
+                    said,
+                    flags=re.I,
+                ).strip()
+                or said
+            )
+            out = await self.call.run_tool("generate_music", {"prompt": prompt})
+            await self._started(out, "Starting the music")
         elif low.startswith(("edit", "make it", "change")):
             instruction = re.sub(
                 r"^(edit( it| the image)?( to| so)?|make it|change it to)\s*",
@@ -730,9 +784,13 @@ class ScriptedAgent:
             out = await self.call.run_tool("show_job", {"job": _ref(low)})
             await self.say(out.get("error") or f"Here's {out['job']}.")
         elif low.startswith("open"):
-            page = next((p for p in PAGES if p in low), "home")
-            await self.call.run_tool("open_page", {"page": page})
-            await self.say(f"Opening {page}.")
+            if "story" in low and self.call.latest_story_id:
+                out = await self.call.run_tool("open_story", {})
+                await self.say(out.get("error") or f"Opening {out['title']}.")
+            else:
+                page = next((p for p in PAGES if p in low), "home")
+                await self.call.run_tool("open_page", {"page": page})
+                await self.say(f"Opening {page}.")
         elif "status" in low or "jobs" in low:
             out = await self.call.run_tool("list_jobs", {})
             parts = [f"{j['job']} is {j['status']}" for j in out["jobs"]] or [
@@ -741,7 +799,9 @@ class ScriptedAgent:
             await self.say(", ".join(parts) + ".")
         else:
             await self.say(
-                "Offline mode understands: image of…, video of…, edit…, show image 1, download, open video."
+                "Offline mode understands: image of…, video of…, music of…, say …, "
+                "make a story about …, next step, render the film, story status, "
+                "edit…, show image 1, download, open video."
             )
 
     async def _started(self, out: dict | Deferred, verb: str) -> None:
@@ -758,11 +818,17 @@ class ScriptedAgent:
 
 
 def _ref(text: str) -> str:
-    match = re.search(r"(image|video)\s*(\d+)", text)
+    match = re.search(r"(image|video|music|voice|story)\s*(\d+)", text)
     if match:
         return f"{match.group(1)} {match.group(2)}"
     if "video" in text:
         return "video"
+    if any(w in text for w in ("music", "song", "track")):
+        return "music"
+    if any(w in text for w in ("voice", "speech")):
+        return "voice"
+    if "story" in text:
+        return "story"
     if any(w in text for w in ("image", "picture", "edit")):
         return "image"
     return ""

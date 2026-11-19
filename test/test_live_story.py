@@ -211,3 +211,34 @@ def test_story_tools_report_plain_errors_when_no_story(story_env):
     for tool in ("continue_story", "render_film", "story_status", "open_story"):
         out = asyncio.run(call.run_tool(tool, {}))
         assert "no story" in out["error"].lower()
+
+
+def test_scripted_agent_drives_story_offline(story_env):
+    from services.live_agent import ScriptedAgent
+
+    call, _ = _make_call()
+    lines = []
+
+    async def say(text):
+        lines.append(text)
+
+    agent = ScriptedAgent(call, say)
+    asyncio.run(agent.handle("make a story about a tiny lighthouse on Mars"))
+    _wait_done(call)
+    asyncio.run(agent.handle("story status"))
+    assert any("approve" in line for line in lines)
+
+    asyncio.run(agent.handle("next step"))  # approve
+    assert any("approved" in line.lower() for line in lines)
+
+    asyncio.run(agent.handle("render the film"))  # too early
+    assert any("storyboard frame" in line.lower() for line in lines)
+
+    asyncio.run(agent.handle("next step"))  # build set
+    _wait_done(call)
+    asyncio.run(agent.handle("next step"))  # paint storyboard
+    _wait_done(call)
+    asyncio.run(agent.handle("render the film"))  # render film
+    _wait_done(call)
+    asyncio.run(agent.handle("story status"))
+    assert any("film ready" in line for line in lines)
