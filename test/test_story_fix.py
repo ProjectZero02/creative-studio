@@ -1,0 +1,375 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Story Studio AI fix: Gemini's plan JSON -> checked plan -> existing jobs."""
+
+import json
+
+import pytest
+
+from services import story_fix, story_jobs, story_service, story_store
+from services import story_timeline as tlm
+from services.story_fix import FixPlan, apply_timeline_ops, parse_fix_plan, plan_steps
+from services.story_models import ScenarioError, Scene, Story
+
+OWNER = "alice@example.com"
+
+
+def _timeline(lengths=(4.0, 4.0, 4.0)) -> dict:
+    tl = tlm.empty_timeline()
+    video = tlm.track(tl, "video")["clips"]
+    for i, n in enumerate(lengths):
+        video.append(
+            {"id": f"c{i}", "src": f"local://clip{i}.mp4", "in": 0, "out": n, "scene": i}
+        )
+    tlm.track(tl, "voice")["clips"].append(
+        {"id": "v2", "src": "local://v2.wav", "start": 8.5, "in": 0, "out": 2, "scene": 2}
+    )
+    total = sum(lengths)
+    tlm.track(tl, "music")["clips"].append(
+        {"id": "m", "src": "local://m.wav", "start": 0, "in": 0, "out": total}
+    )
+    return tlm.normalize(tl)
+
+
+def _story(**kw) -> Story:
+    scenes = [
+        Scene(
+            narration=f"Line {i}.",
+            visual=f"Visual {i}",
+            camera="static",
+            duration=4,
+            frame_uri=f"local://f{i}.png",
+            clip_uri=f"local://clip{i}.mp4",
+        )
+        for i in range(3)
+    ]
+    base = dict(
+        title="Fox",
+        approved=True,
+        scenes=scenes,
+        final_uri="local://film.mp4",
+        timeline_json=json.dumps(_timeline()),
+    )
+    base.update(kw)
+    return Story(**base)
+
+
+# ---------------------------------------------------------------------------
+# Parsing Gemini's JSON
+# ---------------------------------------------------------------------------
+
+
+def test_parse_timeline_trim_maps_scene_numbers_and_clamps():
+    plan = parse_fix_plan(
+        "```json\n"
+        + json.dumps(
+            {
+                "action": "timeline",
+                "summary": "Cut the blank end of scene 3.",
+                "timeline": [
+                    {"op": "trim", "scene": 3, "cut_start": -2, "cut_end": 99},
+                    {"op": "trim", "scene": 9, "cut_end": 1},  # no scene 9
+                    {"op": "explode", "scene": 1},
+                ],
+            }
+        )
+        + "\n```",
+        _story(),
+    )
+    assert plan.action == "timeline"
+    assert plan.timeline == [
+        {"op": "trim", "scene": 2, "cut_start": 0.0, "cut_end": story_fix.TRIM_MAX_CUT}
+    ]
+
+
+def test_parse_rewrite_keeps_only_changed_fields():
+    story = _story()
+    plan = parse_fix_plan(
+        json.dumps(
+            {
+                "action": "rewrite_scene",
+                "scene": 2,
+                "narration": "A new line.",
+                "visual": "Visual 1",  # unchanged
+                "camera": "dolly in",
+            }
+        ),
+        story,
+    )
+    assert plan.scene == 1
+    assert plan.narration == "A new line."
+    assert plan.visual is None
+    assert plan.camera == "dolly_in"
+
+
+def test_parse_empty_or_unknown_plans_become_questions():
+    story = _story()
+    for raw in (
+        {"action": "rewrite_scene", "scene": 2},  # nothing to change
+        {"action": "repaint_frame"},  # no scene
+        {"action": "timeline", "timeline": []},
+        {"action": "music"},
+        {"action": "launch_rocket"},
+        {"action": "none", "question": "Which scene?"},
+    ):
+        plan = parse_fix_plan(json.dumps(raw), story)
+        assert plan.action == "none" and plan.question, raw
+        assert plan_steps(story, plan) == []
+
+
+def test_parse_timeline_without_a_rendered_film_asks():
+    plan = parse_fix_plan(
+        json.dumps({"action": "timeline", "timeline": [{"op": "remove", "scene": 1}]}),
+        _story(timeline_json=""),
+    )
+    assert plan.action == "none" and "Render" in plan.question
+
+
+def test_parse_rejects_bad_json():
+    with pytest.raises(ScenarioError):
+        parse_fix_plan("not json", _story())
+
+
+# ---------------------------------------------------------------------------
+# Preview: what runs and what costs money
+# ---------------------------------------------------------------------------
+
+
+def test_timeline_plan_is_free():
+    story = _story()
+    plan = FixPlan(
+        action="timeline",
+        timeline=[{"op": "trim", "scene": 2, "cut_start": 0, "cut_end": 1.0}],
+    )
+    steps = plan_steps(story, plan)
+    assert "Trim scene 3: 1 s off the end" in steps[0].label
+    assert not story_fix.costs_money(story, plan)
+
+
+def test_narrated_line_change_keeps_the_clip():
+    story = _story(voice_on=True)
+    plan = FixPlan(action="rewrite_scene", scene=1, narration="New words.")
+    labels = [s.label for s in plan_steps(story, plan)]
+    assert not any("video clip" in label for label in labels)
+    assert any("voiceover" in label for label in labels)
+    assert story_fix.costs_money(story, plan)
+
+
+def test_repaint_includes_the_rest_of_a_continuous_take():
+    story = _story()
+    for sc in story.scenes:
+        sc.spoken = True
+    assert story.continues_take(1) and story.continues_take(2)
+    plan = FixPlan(action="repaint_frame", scene=0, visual="Brighter room.")
+    assert story_fix.repaint_indices(story, plan) == [0, 1, 2]
+    labels = [s.label for s in plan_steps(story, plan)]
+    assert any("frame of scenes 1, 2, 3" in label for label in labels)
+    assert any("clip of scenes 1, 2, 3" in label for label in labels)
+
+
+# ---------------------------------------------------------------------------
+# Timeline ops (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_trim_end_moves_nothing_before_and_keeps_a_minimum():
+    tl = apply_timeline_ops(
+        _timeline(), [{"op": "trim", "scene": 2, "cut_start": 0, "cut_end": 1.5}]
+    )
+    video = tlm.track(tl, "video")["clips"]
+    assert video[2]["out"] == 2.5
+    assert tlm.duration(tl) == pytest.approx(10.5)
+    # Full-length music follows the new end.
+    assert tlm.clip_end(tlm.track(tl, "music")["clips"][0]) == pytest.approx(10.5)
+    tl = apply_timeline_ops(
+        _timeline(), [{"op": "trim", "scene": 0, "cut_start": 10, "cut_end": 0}]
+    )
+    first = tlm.track(tl, "video")["clips"][0]
+    assert first["out"] - first["in"] == pytest.approx(story_fix.TRIM_MIN_KEEP)
+
+
+def test_remove_and_move_scenes_carry_voice_lines():
+    tl = apply_timeline_ops(_timeline(), [{"op": "remove", "scene": 1}])
+    assert [c["scene"] for c in tlm.track(tl, "video")["clips"]] == [0, 2]
+    # Scene 3's line moved 4 s earlier with its clip.
+    assert tlm.track(tl, "voice")["clips"][0]["start"] == pytest.approx(4.5)
+
+    tl = apply_timeline_ops(_timeline(), [{"op": "move", "scene": 2, "to": 0}])
+    assert [c["scene"] for c in tlm.track(tl, "video")["clips"]] == [2, 0, 1]
+    assert tlm.track(tl, "voice")["clips"][0]["start"] == pytest.approx(0.5)
+
+
+def test_remove_last_scene_is_refused():
+    one = _timeline((4.0,))
+    with pytest.raises(ValueError):
+        apply_timeline_ops(one, [{"op": "remove", "scene": 0}])
+
+
+def test_scene_at_maps_film_time_to_scene():
+    tl = _timeline()
+    assert story_fix.scene_at(tl, 0.0) == 0
+    assert story_fix.scene_at(tl, 9.0) == 2
+    assert story_fix.scene_at(tl, 99.0) == 2
+
+
+def test_prompt_names_the_pointed_time_and_scene():
+    story = _story()
+    text = story_fix.fix_prompt(story, "the slide goes blank", -1, 11.5)
+    assert "11.5 s of the film, which is in scene 3" in text
+    assert "0.5 s before it ends" in text
+    assert "Visual 2" in text and "Line 2." in text
+    assert "the slide goes blank" in text
+
+
+# ---------------------------------------------------------------------------
+# Running with the mock backend
+# ---------------------------------------------------------------------------
+
+
+class _FastMock(story_service.MockStoryBackend):
+    def __init__(self):
+        super().__init__(speed=0)
+        self.frames, self.clips, self.renders, self.music = [], [], [], []
+
+    def generate_frame(self, story, index, reference_uri):
+        self.frames.append(index)
+        return f"local://{story.id}/frame{index}-{len(self.frames)}.png"
+
+    def generate_clip(self, story, index, start_frame_uri):
+        self.clips.append(index)
+        return f"local://{story.id}/clip{index}-{len(self.clips)}.mp4"
+
+    def last_frame(self, story, clip_uri, index):
+        return f"local://{story.id}/last{index}.png"
+
+    def generate_music(self, story, prompt, seconds):
+        self.music.append(prompt)
+        return "local://m2.wav"
+
+    def generate_voiceover(self, story, index, text, style="narrator"):
+        return f"local://v{index}.wav"
+
+    def stitch(self, story, plan, music_uri, voice_uris):
+        return "local://film2.mp4", _timeline()
+
+    def render_timeline(self, story, timeline):
+        self.renders.append(timeline)
+        return "local://export.mp4"
+
+    def save_to_library(self, story, final_uri, owner):
+        return ""
+
+
+@pytest.fixture
+def backend(tmp_path):
+    story_store.set_store(story_store.LocalStoryStore(str(tmp_path / "s.json")))
+    b = _FastMock()
+    story_service.set_backend(b)
+    yield b
+    story_service.set_backend(None)
+    story_store.set_store(None)
+
+
+def _saved(**kw) -> Story:
+    return story_store.get_store().save(_story(**kw), OWNER)
+
+
+def _run(job):
+    done = story_jobs.wait(job.id, OWNER, timeout=20)
+    assert done is not None and done.status != "running"
+    return done
+
+
+def test_mock_planner_end_of_scene_is_a_free_trim(backend):
+    s = _saved()
+    plan = story_fix.plan_fix(
+        s.id, OWNER, "I don't like the end of scene 3, the slide goes blank"
+    )
+    assert plan.action == "timeline"
+    assert plan.timeline == [{"op": "trim", "scene": 2, "cut_start": 0.0, "cut_end": 1.0}]
+    job = _run(story_fix.start_fix(s.id, OWNER, plan))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    assert backend.clips == [] and backend.frames == []  # nothing paid
+    after = story_store.get_store().get(s.id, OWNER)
+    assert tlm.duration(tlm.normalize(after.timeline_json)) == pytest.approx(11.0)
+    assert after.final_uri == "local://export.mp4" and not after.film_edited
+
+
+def test_mock_planner_uses_the_pointed_time(backend):
+    s = _saved()
+    plan = story_fix.plan_fix(s.id, OWNER, "it goes black here", seconds=5.0)
+    assert plan.timeline[0]["scene"] == 1
+
+
+def test_repaint_fix_paints_then_renders_only_that_scene(backend):
+    s = _saved()
+    plan = FixPlan(action="repaint_frame", scene=1, visual="Visual 1, at dusk.")
+    job = _run(story_fix.start_fix(s.id, OWNER, plan))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    assert backend.frames == [1]
+    assert backend.clips == [1]
+    kinds = [t.kind for t in job.tasks]
+    assert kinds[0] == "fix" and "frame" in kinds and "clip" in kinds and "stitch" in kinds
+    after = story_store.get_store().get(s.id, OWNER)
+    assert after.scenes[1].visual == "Visual 1, at dusk."
+    assert after.final_uri == "local://film2.mp4"
+
+
+def test_rewrite_fix_re_renders_the_clip_without_a_new_frame(backend):
+    s = _saved()
+    plan = FixPlan(action="rewrite_scene", scene=2, camera="orbit")
+    job = _run(story_fix.start_fix(s.id, OWNER, plan))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    assert backend.frames == [] and backend.clips == [2]
+    assert story_store.get_store().get(s.id, OWNER).scenes[2].camera == "orbit"
+
+
+def test_music_fix_makes_music_and_exports(backend):
+    s = _saved()
+    plan = FixPlan(action="music", music_prompt="Quiet piano.")
+    job = _run(story_fix.start_fix(s.id, OWNER, plan))
+    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    assert backend.music == ["Quiet piano."]
+    after = story_store.get_store().get(s.id, OWNER)
+    assert after.music_uri == "local://m2.wav"
+    music = tlm.track(tlm.normalize(after.timeline_json), "music")["clips"]
+    assert music[0]["src"] == "local://m2.wav"
+    assert len(backend.renders) == 1
+
+
+def test_a_failed_step_fails_the_fix_and_retry_resumes(backend):
+    s = _saved()
+    calls = {"n": 0}
+    real = backend.generate_frame
+
+    def flaky(story, index, ref):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return real(story, index, ref)
+
+    backend.generate_frame = flaky
+    plan = FixPlan(action="repaint_frame", scene=0, visual="New look.")
+    job = _run(story_fix.start_fix(s.id, OWNER, plan))
+    assert job.status == "failed"
+    assert backend.clips == []  # the render never started
+    again = _run(story_jobs.retry(job.id, OWNER))
+    assert again.status == "done", [(t.label, t.error) for t in again.tasks]
+    assert backend.clips == [0]
+
+
+def test_question_plans_do_not_run(backend):
+    s = _saved()
+    with pytest.raises(ScenarioError):
+        story_fix.start_fix(s.id, OWNER, FixPlan(action="none", question="Which?"))
