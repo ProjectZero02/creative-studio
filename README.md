@@ -11,7 +11,7 @@ using Google's newest generative models on **Vertex AI**, deployed to **Cloud Ru
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
 [![Vertex AI](https://img.shields.io/badge/models-Vertex_AI-4285F4.svg?logo=googlecloud&logoColor=white)](#the-google-models-inside)
 [![Cloud Run](https://img.shields.io/badge/runs_on-Cloud_Run-4285F4.svg?logo=googlecloud&logoColor=white)](deploy/quickstart/README.md)
-[![English and Arabic](https://img.shields.io/badge/languages-English_·_العربية-34A853.svg)](#built-for-real-demos)
+[![English and Arabic](https://img.shields.io/badge/languages-English_and_Arabic-34A853.svg)](#built-for-real-demos)
 
 [Studios](#the-studios) · [Models](#the-google-models-inside) · [Try it free](#try-it-in-two-minutes) · [Deploy](#deploy-to-your-google-cloud-project) · [Architecture](#architecture) · [Demo script](#a-five-minute-demo)
 
@@ -162,24 +162,25 @@ Add `--dry-run` to see every command first, or `--region` to pick another region
 ## Architecture
 
 ```mermaid
-flowchart LR
-  user([Presenter or team<br>browser, mic]) -->|HTTPS + WebSocket| iap[Identity-Aware Proxy<br>optional]
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Google Sans, Roboto, Arial", "fontSize": "15px", "primaryColor": "#E8F0FE", "primaryBorderColor": "#4285F4", "primaryTextColor": "#202124", "lineColor": "#5F6368", "clusterBkg": "#F8F9FA", "clusterBorder": "#DADCE0"}}}%%
+flowchart TB
+  user(["Presenter or team · browser and mic"]) -- "HTTPS and WebSocket" --> iap["Identity-Aware Proxy (optional)"]
   iap --> run
 
-  subgraph gcp [Your Google Cloud project]
-    run[Cloud Run<br>GenMedia Studio<br>Mesop UI on FastAPI]
-    vertex[Vertex AI<br>Gemini · Nano Banana · Gemini Omni · Veo<br>Gemini TTS · Chirp 3 HD · Lyria · Gemini Live]
-    gcs[(Cloud Storage<br>images, video, audio)]
-    fs[(Firestore<br>library, users, stories, sets)]
-    sm[Secret Manager]
-    build[Cloud Build +<br>Artifact Registry]
+  subgraph gcp ["Your Google Cloud project"]
+    direction TB
+    run["<b>Cloud Run</b><br>GenMedia Studio · Mesop UI on FastAPI"]
+    run -- "service account, no API keys" --> vertex["<b>Vertex AI</b><br>Gemini 3.8 Flash · Nano Banana 2.1 · Gemini Omni · Veo 3.1<br>Gemini TTS · Chirp 3 HD · Lyria 3 · Gemini Live"]
+    run --> gcs[("<b>Cloud Storage</b><br>images, video, audio")]
+    run --> fs[("<b>Firestore</b><br>library, users, stories, sets")]
+    run --> sm["<b>Secret Manager</b>"]
+    build["<b>Cloud Build</b> and <b>Artifact Registry</b>"] -. "container image" .-> run
   end
 
-  run -->|service account, no API keys| vertex
-  run --> gcs
-  run --> fs
-  run --> sm
-  build -.->|container image| run
+  classDef ai fill:#E6F4EA,stroke:#34A853,color:#202124
+  classDef data fill:#FEF7E0,stroke:#FBBC04,color:#202124
+  class vertex ai
+  class gcs,fs data
 ```
 
 - **One Cloud Run service** serves the UI and API, with session affinity for the Gemini Live WebSocket. It scales to zero when nobody is using it.
