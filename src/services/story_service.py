@@ -1191,6 +1191,19 @@ def concat_args(
     ]
 
 
+LOOKALIKE_MESSAGE = (
+    "Gemini Omni turned this scene down because the person in its storyboard "
+    "frame looks like a real public figure. Regenerate this scene's frame (or "
+    "the character's face in the set), then retry."
+)
+
+
+def is_lookalike_refusal(exc: Exception) -> bool:
+    """Omni refused the input because a face looks like a well-known person
+    ("This input contains certain prominent individuals ...")."""
+    return "prominent individual" in str(exc).lower()
+
+
 def frame_parts(*uris: str) -> list[dict]:
     """Image parts of an Omni thread turn, in order (empty URIs skipped)."""
     return [{"type": "image", "uri": u, "mime_type": _image_mime(u)} for u in uris if u]
@@ -1434,9 +1447,18 @@ class VertexStoryBackend:
             end_frame=extra.get("omni_mode") == "first_last",
         )
         parts = clip_parts(scene.duration)
-        uri, interaction_id = generate_omni_video(
-            self._omni_request(story, index, prompt, duration_seconds=parts[0], **extra)
-        )
+        try:
+            uri, interaction_id = generate_omni_video(
+                self._omni_request(
+                    story, index, prompt, duration_seconds=parts[0], **extra
+                )
+            )
+        except GenerationError as exc:
+            if not is_lookalike_refusal(exc):
+                raise
+            uri, interaction_id, prompt = self._clip_from_set(
+                story, index, story_set, parts[0], tried_refs=not start_frame_uri
+            )
         if not uri:
             raise GenerationError("Gemini Omni returned no video for this scene.")
         if len(parts) > 1:
@@ -1445,6 +1467,55 @@ class VertexStoryBackend:
             )
         self._interactions[uri] = interaction_id
         return uri
+
+    def _clip_from_set(
+        self,
+        story: Story,
+        index: int,
+        story_set,
+        seconds: int,
+        tried_refs: bool,
+    ) -> tuple[str, str, str]:
+        """Second try after Omni refused a clip's frame as a lookalike of a
+        well-known person: the same scene from the set's own face, body,
+        place and prop images instead of the frame. Raises the plain
+        LOOKALIKE_MESSAGE when there is nothing else to try or it is refused
+        again. Returns (clip, interaction ID, prompt)."""
+        from models.omni import generate_omni_video
+        from models.requests import APIReferenceImage
+
+        scene = story.scenes[index]
+        refs = (
+            clip_refs(story_set, scene, "", clip_reference_cap())
+            if story_set is not None and not tried_refs
+            else []
+        )
+        if not refs:
+            raise GenerationError(LOOKALIKE_MESSAGE)
+        logger.info(
+            "Omni refused scene %s as a lookalike; retrying from the set", index + 1
+        )
+        labels = [r.label for r in refs]
+        prompt = clip_prompt(story, scene, story_set=story_set, ref_labels=labels)
+        try:
+            uri, interaction_id = generate_omni_video(
+                self._omni_request(
+                    story,
+                    index,
+                    prompt,
+                    duration_seconds=seconds,
+                    omni_mode="ref2v",
+                    r2v_references=[
+                        APIReferenceImage(gcs_uri=r.uri, mime_type=_image_mime(r.uri))
+                        for r in refs
+                    ],
+                )
+            )
+        except GenerationError as exc:
+            if is_lookalike_refusal(exc):
+                raise GenerationError(LOOKALIKE_MESSAGE) from exc
+            raise
+        return uri, interaction_id, prompt
 
     def _lengthen(
         self,

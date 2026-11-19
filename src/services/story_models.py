@@ -892,6 +892,24 @@ def parse_set_build(text: str, story: Story):
 # ---------------------------------------------------------------------------
 
 
+# Where an on-camera speaker looks. "Facing the camera" put the camera in
+# front of a stage speaker and the audience behind them.
+SPEAKER_FACING = (
+    "they face the people they are talking to. With an audience in the scene, "
+    "the camera is among the audience (heads in the foreground, or a side "
+    "angle) and the speaker faces the crowd, never with their back to it; "
+    "they look into the lens only when they talk straight to the viewer with "
+    "nobody else there"
+)
+
+# Generated faces that drift towards a famous face are refused by the video
+# model ("prominent individuals"), so people are invented as ordinary ones.
+NOT_FAMOUS = (
+    "an ordinary, non-famous person who does not resemble any celebrity, "
+    "actor or public figure"
+)
+
+
 def _speech_rules(story: Story) -> str:
     voice = (
         '- "voice": one short English description of the on-screen speaker\'s '
@@ -916,7 +934,7 @@ def _speech_rules(story: Story) -> str:
         return (
             '- Every line is said on camera by the person on screen: "spoken" is '
             'true for every scene and "narration" is the exact words they say. '
-            "Each visual shows that person facing the camera and speaking.\n"
+            f"Each visual shows that person speaking: {SPEAKER_FACING}.\n"
             + voice
             + "\n"
             + takes
@@ -925,7 +943,8 @@ def _speech_rules(story: Story) -> str:
         "- Decide for each scene who speaks. If the idea features a person "
         "talking (a presenter, a speech, an interview, a conversation, a vlog), "
         'set "spoken" to true and write "narration" as the exact words that '
-        "person says on camera, with the visual showing them speaking. Prefer "
+        "person says on camera, with the visual showing them speaking "
+        f"({SPEAKER_FACING}). Prefer "
         "on-camera speech whenever a speaking person is the point of the film. "
         'Otherwise set "spoken" to false and write a narrator voiceover line.\n'
         + voice
@@ -986,7 +1005,9 @@ Rules:
 {_speech_rules(story)}
 - Visual: a detailed, self-contained description of what the camera sees
   (subject, action, setting, lighting). Keep the main character's look
-  identical in every scene and describe it each time. Write visuals in English.
+  identical in every scene and describe it each time. Every person is
+  {NOT_FAMOUS}: give them one or two distinctive details (for example
+  greying temples, freckles, glasses, a small scar). Write visuals in English.
 - {cam_rule}
 - Build a clear beginning, middle and end.{_set_cast_rules(story_set)}
 - "brief": first, rewrite the idea as a clear, vivid film brief in English
@@ -1023,7 +1044,10 @@ Scenes:
 Rules:
 - Characters: the people (or creatures) who appear on screen, at most
   {SET_MAX_CHARACTERS}. "description": age, build, face, skin, hair; fixed
-  wording, no actions. "outfit": what they wear in every scene.
+  wording, no actions. "outfit": what they wear in every scene. Each person
+  is {NOT_FAMOUS}: avoid stock "handsome leading man" or "model" wording and
+  give one or two distinctive details (greying temples, freckles, glasses,
+  a crooked nose, a small scar).
 - Each character's "voice": "tts_voice" is one of {voices} and matches
   their gender; "style" is a short delivery note (e.g. "warm, unhurried");
   "description" is one fixed English line that starts with gender, then age,
@@ -1071,7 +1095,7 @@ def _scene_speech_rule(story: Story, current: Scene) -> str:
     if story.speech_mode == "on_camera" or current.spoken:
         return (
             '"spoken" is true: "narration" is the exact words the person on '
-            "screen says to camera, and the visual shows them speaking."
+            f"screen says, and the visual shows them speaking: {SPEAKER_FACING}."
         )
     return (
         '"spoken" is true if the person on screen should say the line on '
@@ -1231,10 +1255,20 @@ def frame_prompt(
         else None
     )
     place = f" Place: {loc.look()}." if loc else ""
+    people = ""
+    if who:
+        people = f" Every person is {NOT_FAMOUS}."
+        if any("face" in label for label in ref_labels or []):
+            people += " Keep each face exactly as in its face image."
+    facing = (
+        f" The speaker: {SPEAKER_FACING}."
+        if scene.spoken and scene.narration.strip()
+        else ""
+    )
     return (
-        f"{scene.visual}{character}{place} Style: {style['prompt']}. "
+        f"{scene.visual}{character}{place}{facing} Style: {style['prompt']}. "
         f"Aspect ratio {story.aspect_ratio}, one single frame, no text, no captions."
-        f"{keep}{refs_sentence(ref_labels or [])}"
+        f"{people}{keep}{refs_sentence(ref_labels or [])}"
     )
 
 
@@ -1320,7 +1354,9 @@ def clip_prompt(
         else ""
     )
     return (
-        f"{base} The person on screen{who} looks at the camera and says in "
+        f"{base} The person on screen{who} speaks to whoever they are "
+        "addressing (the audience in the scene; the camera only when nobody "
+        "else is there) and says in "
         f'{story.language}: "{scene.narration.strip()}" '
         f"They speak in {voice}, the same voice in every scene. They are the only "
         "voice: no narrator, no other speakers, no voice-over. Clear, natural, "
