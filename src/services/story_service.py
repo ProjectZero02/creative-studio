@@ -371,6 +371,7 @@ def make_film(
             return cache[uri]
 
         clip_lengths: dict[int, float] = {}
+        stills: dict[int, tuple[float, float]] = {}
         gains: dict[int, float] = {}
         voice_lengths: dict[int, float] = {}
         voices = {
@@ -379,8 +380,14 @@ def make_film(
         size = None
         for seg in plan.segments:
             path = local(seg.clip_uri)
-            length, _ = tl_mod.probe(path)
-            clip_lengths[seg.index] = length or (seg.trim_head + seg.duration)
+            length, has_sound = tl_mod.probe(path)
+            # The picture's own length (the file can run longer with its
+            # sound) and any frozen frames at either end.
+            picture, head, tail = tl_mod.clip_edges(path, seg.spoken and has_sound)
+            clip_lengths[seg.index] = (
+                picture or length or (seg.trim_head + seg.duration)
+            )
+            stills[seg.index] = (head, tail)
             size = size or video_size(path)
             # Every clip keeps its own sound: speech levelled for dialogue,
             # a narrated clip's ambience kept low under the narrator.
@@ -399,6 +406,7 @@ def make_film(
             voice_uris=voices,
             voice_lengths=voice_lengths,
             clip_gains=gains,
+            clip_stills=stills,
             music_uri=music_uri,
             music_length=music_len,
         )
