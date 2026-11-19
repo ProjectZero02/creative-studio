@@ -1133,7 +1133,7 @@ def test_first_clip_is_image_to_video_from_its_frame(omni_calls):
     from config.default import Default
 
     backend = story_service.VertexStoryBackend()
-    story = _omni_story()
+    story = _omni_story(continuous_takes=False)
     uri = backend.generate_clip(story, 0, "gs://b/f0.png")
     (req,) = omni_calls
     assert req.omni_mode == "i2v" and req.reference_image_gcs == "gs://b/f0.png"
@@ -1144,15 +1144,46 @@ def test_first_clip_is_image_to_video_from_its_frame(omni_calls):
     assert backend.interaction_of(uri) == "int-1"
 
 
-def test_character_reference_goes_with_a_fresh_clip(omni_calls):
+def test_take_clip_starts_on_its_frame_and_ends_on_the_next(omni_calls):
     backend = story_service.VertexStoryBackend()
-    story = _omni_story(reference_uri="gs://b/face.jpg")
+    story = _omni_story()  # three spoken scenes: one continuous take
     backend.generate_clip(story, 0, "gs://b/f0.png")
+    req = omni_calls[-1]
+    assert req.omni_mode == "first_last"
+    assert (req.reference_image_gcs, req.last_reference_image_gcs) == (
+        "gs://b/f0.png",
+        "gs://b/f1.png",
+    )
+    assert "End exactly on the last frame image" in req.prompt
+    # The last scene has nothing after it: it only opens on its frame.
+    backend.generate_clip(story, 2, "gs://b/f2.png")
+    assert omni_calls[-1].omni_mode == "i2v"
+
+
+def test_end_frame_only_inside_a_take():
+    story = _omni_story(durations=[8, 8, 8])
+    assert story_models.end_frame(story, 0) == "gs://b/f1.png"
+    assert story_models.end_frame(story, 2) == ""  # last scene
+    story.scenes[1].spoken = False  # narrated: the take is cut before it
+    assert story_models.end_frame(story, 0) == ""
+    long = _omni_story(durations=[20, 8])  # longer than one clip
+    assert story_models.end_frame(long, 0) == ""
+    off = _omni_story(continuous_takes=False)
+    assert story_models.end_frame(off, 0) == ""
+
+
+def test_frames_win_over_references(omni_calls):
+    backend = story_service.VertexStoryBackend()
+    story = _omni_story(reference_uri="gs://b/face.jpg", continuous_takes=False)
+    backend.generate_clip(story, 0, "gs://b/f0.png")
+    req = omni_calls[-1]
+    assert req.omni_mode == "i2v" and req.reference_image_gcs == "gs://b/f0.png"
+    # Only a clip with no frame at all falls back to the character reference.
+    backend.generate_clip(story, 1, "")
     req = omni_calls[-1]
     assert req.omni_mode == "ref2v"
     assert [(r.gcs_uri, r.mime_type) for r in req.r2v_references] == [
-        ("gs://b/f0.png", "image/png"),
-        ("gs://b/face.jpg", "image/jpeg"),
+        ("gs://b/face.jpg", "image/jpeg")
     ]
     # A clip that must start on the previous clip's last frame stays i2v.
     backend.generate_clip(story, 1, "gs://b/last-of-clip0.png")
@@ -1177,11 +1208,24 @@ def test_continuation_carries_the_thread_and_its_history(omni_calls, monkeypatch
     (req,) = omni_calls
     assert req.previous_interaction_id == "int-b"
     assert req.omni_mode == "t2v" and req.duration_seconds == 8
-    assert "Continue this exact shot" in req.prompt and "Maya" in req.prompt
+    assert "Carry on the same take" in req.prompt and "Maya" in req.prompt
+    # The thread keeps the voice; the scene's storyboard frame sets the shot.
+    assert req.reference_image_gcs == "gs://b/f2.png"
+    assert not req.last_reference_image_gcs  # last scene
     history = json.loads(req.chat_history_json)
     assert [h["type"] for h in history] == ["user_input", "model_output"] * 2
-    assert history[0]["content"][0]["text"] == story_models.clip_prompt(story, story.scenes[0])
-    assert "Continue this exact shot" in history[2]["content"][0]["text"]
+    assert history[0]["content"][0]["text"] == story_models.clip_prompt(
+        story, story.scenes[0], end_frame=True
+    )
+    assert [p["uri"] for p in history[0]["content"][1:]] == [
+        "gs://b/f0.png",
+        "gs://b/f1.png",
+    ]
+    assert "Carry on the same take" in history[2]["content"][0]["text"]
+    assert [p["uri"] for p in history[2]["content"][1:]] == [
+        "gs://b/f1.png",
+        "gs://b/f2.png",
+    ]
     assert [h["content"][0]["gcs_uri"] for h in history[1::2]] == [
         "gs://b/c0.mp4",
         "gs://b/c1.mp4",
@@ -1453,3 +1497,42 @@ def test_make_film_keeps_omni_sound_under_the_voiceover(tmp_path):
     assert not spoken.get("ambient")
     # Same tone in both clips: the ambient bed at -30 LUFS is 10 dB under dialogue at -20.
     assert narrated["gain"] / spoken["gain"] == pytest.approx(10 ** (-10 / 20), rel=0.05)
+
+
+def test_follow_up_turn_carries_its_frames():
+    from models.omni import _build_input_parts
+    from models.requests import OmniVideoGenerationRequest
+
+    req = OmniVideoGenerationRequest(
+        prompt="next",
+        duration_seconds=8,
+        aspect_ratio="16:9",
+        resolution="720p",
+        omni_mode="t2v",
+        model_version_id="gemini-omni-1.2-flash",
+        previous_interaction_id="int-a",
+        chat_history_json="[]",
+        reference_image_gcs="gs://b/f1.png",
+        reference_image_mime_type="image/png",
+        last_reference_image_gcs="gs://b/f2.jpg",
+        last_reference_image_mime_type="image/jpeg",
+    )
+    (turn,) = _build_input_parts(req)
+    assert turn["type"] == "user_input"
+    assert turn["content"] == [
+        {"type": "text", "text": "next"},
+        {"type": "image", "mime_type": "image/png", "uri": "gs://b/f1.png"},
+        {"type": "image", "mime_type": "image/jpeg", "uri": "gs://b/f2.jpg"},
+    ]
+
+
+def test_continuation_without_a_frame_keeps_the_shot(omni_calls, monkeypatch):
+    _probe_lengths(monkeypatch, [8.0, 8.0])
+    backend = story_service.VertexStoryBackend()
+    story = _omni_story(durations=[8, 8])
+    story.scenes[1].frame_uri = ""
+    story.scenes[0].clip_uri, story.scenes[0].interaction_id = "gs://b/c0.mp4", "int-a"
+    backend.extend_clip(story, 1, "gs://b/c0.mp4")
+    (req,) = omni_calls
+    assert "Continue this exact shot" in req.prompt
+    assert not req.reference_image_gcs

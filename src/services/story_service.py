@@ -55,6 +55,7 @@ from services.story_models import (
     clip_parts,
     clip_prompt,
     clip_refs,
+    end_frame,
     frame_refs,
     frame_prompt,
     scenario_prompt,
@@ -960,9 +961,11 @@ class MockStoryBackend:
     def extend_clip(
         self, story: Story, index: int, prev_clip_uri: str
     ) -> tuple[str, float]:
-        """Demo stand-in for an Omni continuation: a new clip from the previous
-        clip's last frame (the clip holds only the new seconds)."""
-        start = self.last_frame(story, prev_clip_uri, index)
+        """Demo stand-in for an Omni continuation: a new clip from the scene's
+        storyboard frame (or the previous clip's last frame without one)."""
+        start = story.scenes[index].frame_uri or self.last_frame(
+            story, prev_clip_uri, index
+        )
         return self.generate_clip(story, index, start), 0.0
 
     def interaction_of(self, clip_uri: str) -> str:
@@ -1052,26 +1055,39 @@ def clip_reference_cap() -> int:
 
 
 def clip_inputs(
-    story: Story, scene: Scene, start_frame_uri: str, story_set=None
+    story: Story,
+    scene: Scene,
+    start_frame_uri: str,
+    story_set=None,
+    end_frame_uri: str = "",
 ) -> dict:
     """Omni mode and media for a scene's first clip (not a continuation).
 
-    A clip that starts from the previous clip's last frame (continuity) must
-    begin on that frame: image to video. A clip that starts fresh from its
-    storyboard frame (or a new take after the take cap) is made as reference
-    to video: the frame first, then, with a set, the scene's cast faces and
-    fronts, the location plate and props (capped, see clip_reference_cap),
-    so every clip is anchored to the same images. Without a set, the story's
-    character reference is used. Otherwise image to video from the frame.
-    `ref_labels` names each reference for the prompt (pop it before
-    building the request).
+    A clip always opens on the picture it is given, so the video follows the
+    storyboard: image to video from the frame (the storyboard frame, or the
+    previous clip's last frame with continuity). A fresh clip that should
+    end on the next scene's frame (`end_frame_uri`, see end_frame) is made
+    with a first and a last frame instead. The storyboard frames are painted
+    from the set's faces, places and props (and the story's character
+    reference), so those stay in the picture. Only a clip with no frame at
+    all is made as reference to video from the set (capped, see
+    clip_reference_cap) or the character reference. `ref_labels` names each
+    reference for the prompt (pop it before building the request).
     """
     from models.requests import APIReferenceImage
 
     fresh = bool(start_frame_uri) and start_frame_uri == scene.frame_uri
+    if fresh and end_frame_uri:
+        return {
+            "omni_mode": "first_last",
+            "reference_image_gcs": start_frame_uri,
+            "reference_image_mime_type": _image_mime(start_frame_uri),
+            "last_reference_image_gcs": end_frame_uri,
+            "last_reference_image_mime_type": _image_mime(end_frame_uri),
+        }
     refs = (
-        clip_refs(story_set, scene, start_frame_uri, clip_reference_cap())
-        if story_set is not None and (fresh or not start_frame_uri)
+        clip_refs(story_set, scene, "", clip_reference_cap())
+        if story_set is not None and not start_frame_uri
         else []
     )
     if any(r.group != "frame" for r in refs):
@@ -1083,12 +1099,14 @@ def clip_inputs(
             ],
             "ref_labels": [r.label for r in refs],
         }
-    if story.reference_uri and (fresh or not start_frame_uri):
-        refs = [u for u in (start_frame_uri, story.reference_uri) if u]
+    if story.reference_uri and not start_frame_uri:
         return {
             "omni_mode": "ref2v",
             "r2v_references": [
-                APIReferenceImage(gcs_uri=u, mime_type=_image_mime(u)) for u in refs
+                APIReferenceImage(
+                    gcs_uri=story.reference_uri,
+                    mime_type=_image_mime(story.reference_uri),
+                )
             ],
         }
     if start_frame_uri:
@@ -1173,27 +1191,44 @@ def concat_args(
     ]
 
 
+def frame_parts(*uris: str) -> list[dict]:
+    """Image parts of an Omni thread turn, in order (empty URIs skipped)."""
+    return [{"type": "image", "uri": u, "mime_type": _image_mime(u)} for u in uris if u]
+
+
+def take_turn_frames(story: Story, index: int, first: bool) -> tuple[str, str]:
+    """(start, end) storyboard frames sent with scene `index`'s turn of its
+    take. The take's first clip only opens on its frame when it was made
+    fresh from it (not from the previous clip's last frame)."""
+    sc = story.scenes[index]
+    start = sc.frame_uri if not (first and sc.continues_from) else ""
+    return start, end_frame(story, index) if start else ""
+
+
 def take_history(
     story: Story, index: int, prev_clip_uri: str, story_set=None
 ) -> list[dict]:
     """The Omni thread of scene `index`'s continuous take so far: each earlier
-    scene's prompt (user turn) and clip (model turn), oldest first. The
-    clip of the scene just before is `prev_clip_uri`."""
+    scene's prompt and storyboard frames (user turn) and clip (model turn),
+    oldest first. The clip of the scene just before is `prev_clip_uri`."""
     start = story.take_start(index)
     history: list[dict] = []
     for j in range(start, index):
         sc = story.scenes[j]
+        first = j == start
+        frame, end = take_turn_frames(story, j, first)
+        text = clip_prompt(
+            story,
+            sc,
+            continuing=not first,
+            story_set=story_set,
+            start_frame=bool(frame) and not first,
+            end_frame=bool(end),
+        )
         history += [
             {
                 "type": "user_input",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": clip_prompt(
-                            story, sc, continuing=j > start, story_set=story_set
-                        ),
-                    }
-                ],
+                "content": [{"type": "text", "text": text}, *frame_parts(frame, end)],
             },
             {
                 "type": "model_output",
@@ -1388,9 +1423,16 @@ class VertexStoryBackend:
 
         scene = story.scenes[index]
         story_set = self._set(story)
-        extra = clip_inputs(story, scene, start_frame_uri, story_set)
+        end = end_frame(story, index) if start_frame_uri == scene.frame_uri else ""
+        extra = clip_inputs(story, scene, start_frame_uri, story_set, end)
         labels = extra.pop("ref_labels", None)
-        prompt = clip_prompt(story, scene, story_set=story_set, ref_labels=labels)
+        prompt = clip_prompt(
+            story,
+            scene,
+            story_set=story_set,
+            ref_labels=labels,
+            end_frame=extra.get("omni_mode") == "first_last",
+        )
         parts = clip_parts(scene.duration)
         uri, interaction_id = generate_omni_video(
             self._omni_request(story, index, prompt, duration_seconds=parts[0], **extra)
@@ -1580,14 +1622,35 @@ class VertexStoryBackend:
 
         scene = story.scenes[index]
         story_set = self._set(story)
-        prompt = clip_prompt(story, scene, continuing=True, story_set=story_set)
         prev = story.scenes[index - 1] if index > 0 else None
         prev_id = (prev.interaction_id if prev else "") or self.interaction_of(
             prev_clip_uri
         )
         if prev_id:
             # A chat follow-up makes the next part of the take at the scene's
-            # own length (sent in response_format, like a new clip).
+            # own length (sent in response_format, like a new clip). The
+            # thread keeps the person and voice; the storyboard frames sent
+            # with the turn set the shot, so the take follows the storyboard.
+            frame, end = take_turn_frames(story, index, first=False)
+            prompt = clip_prompt(
+                story,
+                scene,
+                continuing=True,
+                story_set=story_set,
+                start_frame=bool(frame),
+                end_frame=bool(end),
+            )
+            images = {}
+            if frame:
+                images.update(
+                    reference_image_gcs=frame,
+                    reference_image_mime_type=_image_mime(frame),
+                )
+            if end:
+                images.update(
+                    last_reference_image_gcs=end,
+                    last_reference_image_mime_type=_image_mime(end),
+                )
             request = self._omni_request(
                 story,
                 index,
@@ -1597,8 +1660,11 @@ class VertexStoryBackend:
                 chat_history_json=json.dumps(
                     take_history(story, index, prev_clip_uri, story_set)
                 ),
+                **images,
             )
         else:
+            # Omni's extend task takes only the video: it carries on the shot.
+            prompt = clip_prompt(story, scene, continuing=True, story_set=story_set)
             request = self._omni_request(
                 story,
                 index,

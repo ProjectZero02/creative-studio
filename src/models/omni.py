@@ -323,13 +323,18 @@ def _build_input_parts(request: OmniVideoGenerationRequest) -> list:
         except json.JSONDecodeError as je:
             raise GenerationError(f"Failed to decode chat history: {je}") from je
 
-        # Append current user prompt to history list
-        input_parts.append(
-            {
-                "type": "user_input",
-                "content": [{"type": "text", "text": modified_prompt}],
-            },
-        )
+        # Append current user prompt to history list, with any images sent
+        # for this turn (first, then last frame).
+        content = [{"type": "text", "text": modified_prompt}]
+        for uri, mime in (
+            (request.reference_image_gcs, request.reference_image_mime_type),
+            (request.last_reference_image_gcs, request.last_reference_image_mime_type),
+        ):
+            if uri:
+                content.append(
+                    {"type": "image", "mime_type": mime or "image/png", "uri": uri}
+                )
+        input_parts.append({"type": "user_input", "content": content})
     else:
         # Standard single-turn flow. Upscale is video-only: the API rejects any
         # text input for that task.
