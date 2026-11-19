@@ -1144,32 +1144,17 @@ def test_first_clip_is_image_to_video_from_its_frame(omni_calls):
     assert backend.interaction_of(uri) == "int-1"
 
 
-def test_take_clip_starts_on_its_frame_and_ends_on_the_next(omni_calls):
+def test_take_clip_starts_on_its_frame_and_never_ends_on_the_next(omni_calls):
+    # Ending on the next scene's frame made the clip morph into the next
+    # shot (the screen, the angle) halfway through its own line.
     backend = story_service.VertexStoryBackend()
     story = _omni_story()  # three spoken scenes: one continuous take
-    backend.generate_clip(story, 0, "gs://b/f0.png")
-    req = omni_calls[-1]
-    assert req.omni_mode == "first_last"
-    assert (req.reference_image_gcs, req.last_reference_image_gcs) == (
-        "gs://b/f0.png",
-        "gs://b/f1.png",
-    )
-    assert "End exactly on the last frame image" in req.prompt
-    # The last scene has nothing after it: it only opens on its frame.
-    backend.generate_clip(story, 2, "gs://b/f2.png")
-    assert omni_calls[-1].omni_mode == "i2v"
-
-
-def test_end_frame_only_inside_a_take():
-    story = _omni_story(durations=[8, 8, 8])
-    assert story_models.end_frame(story, 0) == "gs://b/f1.png"
-    assert story_models.end_frame(story, 2) == ""  # last scene
-    story.scenes[1].spoken = False  # narrated: the take is cut before it
-    assert story_models.end_frame(story, 0) == ""
-    long = _omni_story(durations=[20, 8])  # longer than one clip
-    assert story_models.end_frame(long, 0) == ""
-    off = _omni_story(continuous_takes=False)
-    assert story_models.end_frame(off, 0) == ""
+    for i in range(3):
+        backend.generate_clip(story, i, f"gs://b/f{i}.png")
+        req = omni_calls[-1]
+        assert req.omni_mode == "i2v" and req.reference_image_gcs == f"gs://b/f{i}.png"
+        assert not req.last_reference_image_gcs
+        assert "next scene" not in req.prompt
 
 
 def test_frames_win_over_references(omni_calls):
@@ -1211,21 +1196,17 @@ def test_continuation_carries_the_thread_and_its_history(omni_calls, monkeypatch
     assert "Carry on the same take" in req.prompt and "Maya" in req.prompt
     # The thread keeps the voice; the scene's storyboard frame sets the shot.
     assert req.reference_image_gcs == "gs://b/f2.png"
-    assert not req.last_reference_image_gcs  # last scene
+    assert not req.last_reference_image_gcs
+    assert "hold that shot" in req.prompt
     history = json.loads(req.chat_history_json)
     assert [h["type"] for h in history] == ["user_input", "model_output"] * 2
     assert history[0]["content"][0]["text"] == story_models.clip_prompt(
-        story, story.scenes[0], end_frame=True
+        story, story.scenes[0]
     )
-    assert [p["uri"] for p in history[0]["content"][1:]] == [
-        "gs://b/f0.png",
-        "gs://b/f1.png",
-    ]
+    # Each turn carries only its own frame.
+    assert [p["uri"] for p in history[0]["content"][1:]] == ["gs://b/f0.png"]
     assert "Carry on the same take" in history[2]["content"][0]["text"]
-    assert [p["uri"] for p in history[2]["content"][1:]] == [
-        "gs://b/f1.png",
-        "gs://b/f2.png",
-    ]
+    assert [p["uri"] for p in history[2]["content"][1:]] == ["gs://b/f1.png"]
     assert [h["content"][0]["gcs_uri"] for h in history[1::2]] == [
         "gs://b/c0.mp4",
         "gs://b/c1.mp4",
