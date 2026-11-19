@@ -941,3 +941,15 @@ def test_fill_only_calls_have_no_fix_tools():
 
     names = {d.name for d in tool_declarations(True, FILL)[0].function_declarations}
     assert "plan_film_fix" not in names and "run_film_fix" not in names
+
+
+def test_avatar_calls_ask_for_video_and_voice_calls_for_audio():
+    from routers.live_router import _live_config
+
+    voice = _live_config(None, "fill")
+    assert voice.response_modalities == ["AUDIO"] and voice.avatar_config is None
+    assert voice.speech_config is not None
+    avatar = _live_config(None, "fill", "Kira")
+    assert avatar.response_modalities == ["VIDEO"]
+    assert avatar.avatar_config.avatar_name == "Kira"
+    assert avatar.speech_config is None  # the avatar brings its own voice

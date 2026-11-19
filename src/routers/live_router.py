@@ -93,17 +93,29 @@ def _genai_client():
 
 
 def _live_config(
-    resume_handle: str | None, mode: str = FILL
+    resume_handle: str | None, mode: str = FILL, avatar: str = ""
 ) -> types.LiveConnectConfig:
-    return types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                    voice_name=Default.LIVE_VOICE
+    # Voice only (the default), or a Live Avatar: the model then answers with
+    # a fragmented MP4 (H.264 video with the AAC voice inside) and the avatar
+    # brings its own voice.
+    if avatar:
+        output = {
+            "response_modalities": ["VIDEO"],
+            "avatar_config": types.AvatarConfig(avatar_name=avatar),
+        }
+    else:
+        output = {
+            "response_modalities": ["AUDIO"],
+            "speech_config": types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=Default.LIVE_VOICE
+                    )
                 )
-            )
-        ),
+            ),
+        }
+    return types.LiveConnectConfig(
+        **output,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         system_instruction=system_prompt(mode),
@@ -118,10 +130,11 @@ def _live_config(
 class _Bridge:
     """One browser call."""
 
-    def __init__(self, ws: WebSocket, owner: str, mode: str = FILL):
+    def __init__(self, ws: WebSocket, owner: str, mode: str = FILL, avatar: str = ""):
         self.ws = ws
         self.owner = owner
         self.mode = mode
+        self.avatar = avatar
         self.jobs = get_live_jobs()
         self._send_lock = asyncio.Lock()
         self.inbox: asyncio.Queue = asyncio.Queue()
@@ -264,7 +277,7 @@ class _Bridge:
             reconnect = False
             await self.status("connecting")
             async with client.aio.live.connect(
-                model=model, config=_live_config(self.resume_handle, self.mode)
+                model=model, config=_live_config(self.resume_handle, self.mode, self.avatar)
             ) as session:
                 self.session = session
                 await self.status("live")
@@ -351,9 +364,10 @@ class _Bridge:
                 if content.model_turn:
                     for part in content.model_turn.parts or []:
                         if part.inline_data and part.inline_data.data:
+                            mime = part.inline_data.mime_type or ""
                             await self.send(
                                 {
-                                    "type": "audio",
+                                    "type": "video" if mime.startswith("video/") else "audio",
                                     "data": base64.b64encode(
                                         part.inline_data.data
                                     ).decode(),
@@ -420,7 +434,8 @@ async def live_socket(ws: WebSocket):
     # The typed offline agent only knows the job tools, so it always acts.
     offline = Default.LIVE_AGENT_OFFLINE or wants_offline
     mode = ACT if offline or ws.query_params.get("agent") == ACT else FILL
-    bridge = _Bridge(ws, owner, mode)
+    avatar = Default.LIVE_AVATAR if ws.query_params.get("avatar") == "1" else ""
+    bridge = _Bridge(ws, owner, mode, avatar)
     unsubscribe = bridge.jobs.subscribe(owner, bridge.on_job)
     reader = asyncio.create_task(bridge.read_browser())
     jobs_task = asyncio.create_task(bridge.pump_jobs())
