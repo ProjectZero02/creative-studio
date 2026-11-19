@@ -1029,14 +1029,18 @@ def test_clip_reference_cap_is_min_of_model_and_setting(monkeypatch):
     assert Default.__dataclass_fields__["STORY_MAX_CLIP_REFERENCES"].default == 6
 
 
-def test_clip_inputs_with_a_set_is_ref2v_in_order(monkeypatch):
+def test_clip_inputs_with_a_set_opens_on_the_frame(monkeypatch):
     monkeypatch.setattr(story_service, "clip_reference_cap", lambda: 6)
     scene = _set_scene()
+    # The frame was painted from the set, so the clip starts on it.
     out = story_service.clip_inputs(Story(), scene, scene.frame_uri, _full_set())
+    assert out["omni_mode"] == "i2v" and out["reference_image_gcs"] == scene.frame_uri
+    # Without a frame the set's images go in as references, in order.
+    out = story_service.clip_inputs(Story(), scene, "", _full_set())
     assert out["omni_mode"] == "ref2v"
     uris = [r.gcs_uri for r in out["r2v_references"]]
-    assert uris[0] == scene.frame_uri and len(uris) == 6
-    assert out["ref_labels"][1] == "Ana's face"
+    assert scene.frame_uri not in uris and len(uris) == 6
+    assert out["ref_labels"][0] == "Ana's face"
 
 
 def test_clip_inputs_continuity_and_no_set_paths_are_unchanged():
@@ -1048,10 +1052,11 @@ def test_clip_inputs_continuity_and_no_set_paths_are_unchanged():
     legacy = story_service.clip_inputs(
         Story(reference_uri="gs://b/ref.png"), scene, scene.frame_uri, None
     )
-    assert [r.gcs_uri for r in legacy["r2v_references"]] == [
-        scene.frame_uri,
-        "gs://b/ref.png",
-    ]
+    assert legacy["omni_mode"] == "i2v"
+    no_frame = story_service.clip_inputs(
+        Story(reference_uri="gs://b/ref.png"), scene, "", None
+    )
+    assert [r.gcs_uri for r in no_frame["r2v_references"]] == ["gs://b/ref.png"]
     # A set but nothing of it in this scene: same as without a set.
     empty = story_service.clip_inputs(
         Story(),
@@ -1143,12 +1148,8 @@ def test_vertex_frame_and_clip_send_set_references(monkeypatch, set_store):
     )
     backend.generate_clip(story, 0, story.scenes[0].frame_uri)
     req = sent["clip"]
-    assert req.omni_mode == "ref2v"
-    assert [r.gcs_uri for r in req.r2v_references][:2] == [
-        "gs://b/frame1.png",
-        "gs://b/a_face.png",
-    ]
-    assert "image 2 is Ana's face" in req.prompt
+    assert req.omni_mode == "i2v" and req.reference_image_gcs == "gs://b/frame1.png"
+    assert "Ana's face" not in req.prompt  # the set is in the frame itself
 
 
 def test_render_records_the_set_version(mock_backend, stores):
