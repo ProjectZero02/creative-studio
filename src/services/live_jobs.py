@@ -37,7 +37,7 @@ from common.analytics import get_logger
 logger = get_logger(__name__)
 
 QUEUED, RUNNING, DONE, FAILED = "queued", "running", "done", "failed"
-KINDS = ("image", "video", "music", "voice")
+KINDS = ("image", "video", "music", "voice", "story")
 MAX_RUNNING_PER_OWNER = 4
 
 
@@ -119,7 +119,7 @@ class LiveJobs:
             if text and job.id == text:
                 return job
         match = re.search(
-            r"(image|picture|photo|video|clip|music|track|song|voice|speech)?\s*#?\s*(\d+)",
+            r"(image|picture|photo|video|clip|music|track|song|voice|speech|story)?\s*#?\s*(\d+)",
             text,
         )
         want = kind
@@ -129,6 +129,8 @@ class LiveJobs:
             want = "music"
         elif any(w in text for w in ("voice", "speech", "narration")):
             want = "voice"
+        elif "story" in text:
+            want = "story"
         elif any(w in text for w in ("image", "picture", "photo", "edit")):
             want = "image"
         if match:
@@ -270,13 +272,21 @@ def default_runners() -> dict[str, Runner]:
             "video": _mock_video,
             "music": _mock_music,
             "voice": _mock_voice,
+            "story": _story_runner,
         }
     return {
         "image": _real_image,
         "video": _real_video,
         "music": _real_music,
         "voice": _real_voice,
+        "story": _story_runner,
     }
+
+
+def _story_runner(job: LiveJob) -> RunResult:
+    from services.live_story import run_story_job
+
+    return run_story_job(job)
 
 
 def _mock_image(job: LiveJob) -> RunResult:

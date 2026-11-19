@@ -171,6 +171,11 @@ def test_tool_declarations_mark_job_tools_non_blocking():
         "generate_video",
         "generate_music",
         "generate_voice",
+        "create_story",
+        "continue_story",
+        "render_film",
+        "story_status",
+        "open_story",
         "list_jobs",
         "show_job",
         "open_page",
@@ -183,8 +188,13 @@ def test_tool_declarations_mark_job_tools_non_blocking():
         "generate_video",
         "generate_music",
         "generate_voice",
+        "create_story",
+        "continue_story",
+        "render_film",
     ):
         assert decls[name].behavior == types.Behavior.NON_BLOCKING
+    assert decls["open_story"].behavior == types.Behavior.BLOCKING
+    assert decls["story_status"].behavior is None
     assert "Kore" in decls["generate_voice"].parameters.properties["voice"].description
     assert decls["show_job"].behavior == types.Behavior.BLOCKING
     blocking_only = {

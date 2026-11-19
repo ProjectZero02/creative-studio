@@ -57,6 +57,7 @@ JOB_PAGE = {
     "video": "/veo",
     "music": "/lyria",
     "voice": "/voice",
+    "story": "/story",
 }
 UI_TIMEOUT_S = 10.0
 
@@ -68,9 +69,10 @@ How you talk:
 - When a job finishes you get its result. Say so in a few words at the next pause, e.g. "Image 1 is ready." Do not open it unless asked or nothing else is happening on screen.
 
 How you work:
-- Use generate_image, edit_image, generate_video, generate_music and generate_voice. They run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
+- Use generate_image, edit_image, generate_video, generate_music, generate_voice and the Story Studio tools (create_story, continue_story, render_film, story_status, open_story). Job tools run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
 - Write rich prompts for the models from what the presenter says: subject, style, lighting, camera, or genre, instruments, mood. Keep their words and intent.
-- Jobs have short names: "image 1", "video 1", "music 1", "voice 1". "The image" means the latest image unless the presenter says otherwise. Say which one you act on.
+- Jobs have short names: "image 1", "video 1", "music 1", "voice 1", "story 1". "The image" or "the story" means the latest one unless the presenter says otherwise. Say which one you act on.
+- For Story Studio, move one step at a time with continue_story (approve scenario, build set, paint storyboard, then render film) so the presenter stays in control.
 - edit_image needs a finished image. If it is still rendering, say so and offer to edit it once it is ready.
 - Use show_job to bring a result on screen, open_page to move between studios, download to save a file to the presenter's computer, and end_call when they say goodbye.
 - If a job fails, say why in plain words and offer to retry.
@@ -194,6 +196,85 @@ def tool_declarations(async_tools: bool = True) -> list[types.Tool]:
                     job,
                 ),
                 fd(
+                    "create_story",
+                    "Start a new Story Studio film from an idea and write its scenario. Runs in the background.",
+                    {
+                        "idea": (
+                            "STRING",
+                            "The film idea in a sentence or two.",
+                        ),
+                        "length": (
+                            "STRING",
+                            "Optional total film length, e.g. '30 seconds' or '1 minute'.",
+                        ),
+                        "aspect_ratio": (
+                            "STRING",
+                            "Optional: '16:9' or '9:16'.",
+                        ),
+                        "style": (
+                            "STRING",
+                            "Optional visual style: photographic, 2d, 3d, anime, or claymation.",
+                        ),
+                        "language": (
+                            "STRING",
+                            "Optional language name or code, e.g. 'English', 'Arabic', 'en-US'.",
+                        ),
+                    },
+                    ["idea"],
+                    job,
+                ),
+                fd(
+                    "continue_story",
+                    "Advance a Story Studio film by one step (approve scenario, build set, paint storyboard, or render film).",
+                    {
+                        "story": (
+                            "STRING",
+                            "Optional story title or id. Empty means the latest story.",
+                        )
+                    },
+                    [],
+                    job,
+                ),
+                fd(
+                    "render_film",
+                    "Render the Story Studio film once every scene has a storyboard frame. Runs in the background.",
+                    {
+                        "story": (
+                            "STRING",
+                            "Optional story title or id. Empty means the latest story.",
+                        )
+                    },
+                    [],
+                    job,
+                ),
+                fd(
+                    "story_status",
+                    "Check a Story Studio film's current step, active job progress, and whether a film is ready.",
+                    {
+                        "story": (
+                            "STRING",
+                            "Optional story title or id. Empty means the latest story.",
+                        )
+                    },
+                    [],
+                ),
+                fd(
+                    "open_story",
+                    "Open a Story Studio film on screen at the requested or current step.",
+                    {
+                        "story": (
+                            "STRING",
+                            "Optional story title or id. Empty means the latest story.",
+                        ),
+                        "step": (
+                            "STRING",
+                            "Optional step: create, scenario, set, storyboard, editor, or video.",
+                        ),
+                    },
+                    [],
+                    screen,
+                ),
+                fd(
                     "list_jobs",
                     "List every job in this call with its status, and what page is on screen.",
                 ),
@@ -240,6 +321,14 @@ def tool_declarations(async_tools: bool = True) -> list[types.Tool]:
 
 def page_params(job: LiveJob) -> dict:
     """Query params so the studio shows the same model and input as the job."""
+    if job.kind == "story":
+        story_id = str(job.params.get("story_id") or "")
+        if not story_id:
+            return {}
+        return {
+            "id": story_id,
+            "step": str(job.params.get("story_step") or "scenario"),
+        }
     if job.kind != "video":
         return {}
     from config.video_studio_models import DEFAULT_STUDIO_MODEL_ID
@@ -279,6 +368,7 @@ class LiveCall:
         self.jobs = jobs
         self.screen = "/home"
         self.ended = False
+        self.latest_story_id = ""
         self._waiters: dict[str, asyncio.Future] = {}
 
     # -- browser round trips ----------------------------------------------
@@ -390,6 +480,127 @@ class LiveCall:
         }
         return await self._start("voice", script, params=params)
 
+    async def _start_story(
+        self, story, action: str, step: str, prompt: str
+    ) -> Deferred:
+        self.latest_story_id = story.id
+        job = self.jobs.submit(
+            self.owner,
+            "story",
+            prompt,
+            params={
+                "story_id": story.id,
+                "story_action": action,
+                "story_step": step,
+                "story_title": story.title,
+            },
+        )
+        await self.ui(
+            "navigate",
+            {"page": "/story", "params": {"id": story.id, "step": step}},
+            wait=False,
+        )
+        self.screen = "/story"
+        return Deferred(job)
+
+    async def _tool_create_story(
+        self,
+        idea: str,
+        length: str = "",
+        aspect_ratio: str = "",
+        style: str = "",
+        language: str = "",
+    ) -> Deferred:
+        from services import live_story
+
+        story = live_story.create_story_record(
+            self.owner,
+            idea,
+            length=length,
+            aspect_ratio=aspect_ratio,
+            style=style,
+            language=language,
+        )
+        return await self._start_story(story, "scenario", "scenario", story.idea)
+
+    async def _tool_continue_story(self, story: str = "") -> dict | Deferred:
+        from services import live_story
+
+        found = live_story.resolve_story(self.owner, story, self.latest_story_id)
+        if found is None:
+            return {"error": "There is no story yet. Create one first."}
+        self.latest_story_id = found.id
+        action = live_story.next_step_action(found)
+        if action == "done":
+            return {
+                "story_id": found.id,
+                "title": found.title or found.idea[:60],
+                "step": "video",
+                "has_film": True,
+                "note": "The film is already rendered.",
+            }
+        if action == "approve":
+            approved = live_story.approve_story(found.id, self.owner)
+            await self.ui(
+                "navigate",
+                {"page": "/story", "params": {"id": approved.id, "step": "set"}},
+                wait=False,
+            )
+            self.screen = "/story"
+            return {
+                "story_id": approved.id,
+                "title": approved.title or approved.idea[:60],
+                "step": "set",
+                "approved": True,
+                "note": "Scenario approved. Call continue_story again to build the set.",
+            }
+        step = "video" if action == "video" else action
+        label = found.title or found.idea[:60]
+        return await self._start_story(found, action, step, f"{action}: {label}")
+
+    async def _tool_render_film(self, story: str = "") -> dict | Deferred:
+        from services import live_story
+
+        found = live_story.resolve_story(self.owner, story, self.latest_story_id)
+        if found is None:
+            return {"error": "There is no story yet. Create one first."}
+        self.latest_story_id = found.id
+        problem = live_story.check_render_ready(found)
+        if problem:
+            return {"error": problem}
+        label = found.title or found.idea[:60]
+        return await self._start_story(found, "video", "video", f"render: {label}")
+
+    async def _tool_story_status(self, story: str = "") -> dict:
+        from services import live_story
+
+        found = live_story.resolve_story(self.owner, story, self.latest_story_id)
+        if found is None:
+            return {"error": "There is no story yet."}
+        self.latest_story_id = found.id
+        return live_story.story_status_summary(found, self.owner)
+
+    async def _tool_open_story(self, story: str = "", step: str = "") -> dict:
+        from services import live_story
+
+        found = live_story.resolve_story(self.owner, story, self.latest_story_id)
+        if found is None:
+            return {"error": "There is no story yet."}
+        self.latest_story_id = found.id
+        target = live_story.open_step_for(found, step)
+        result = await self.ui(
+            "navigate",
+            {"page": "/story", "params": {"id": found.id, "step": target}},
+        )
+        self.screen = "/story"
+        return {
+            "story_id": found.id,
+            "title": found.title or found.idea[:60],
+            "step": target,
+            "url": f"/story?id={found.id}&step={target}",
+            "ok": bool(result.get("ok")),
+        }
+
     async def _tool_list_jobs(self) -> dict:
         return {
             "on_screen": self.screen,
@@ -438,6 +649,23 @@ class LiveCall:
     @staticmethod
     def job_result(job: LiveJob) -> dict:
         if job.status == DONE:
+            if job.kind == "story":
+                action = job.params.get("story_action") or "step"
+                step = job.params.get("story_step") or ""
+                out: dict[str, Any] = {
+                    "job": job.handle,
+                    "status": "done",
+                    "story_id": job.params.get("story_id", ""),
+                    "title": job.params.get("story_title", ""),
+                    "step": step,
+                    "has_film": bool(job.params.get("has_film")),
+                    "note": (
+                        f"Story {action} is ready (took {int(job.public()['seconds'])} seconds)."
+                    ),
+                }
+                if job.params.get("has_film") and job.display_url:
+                    out["film_url"] = job.display_url
+                return out
             what = "edit" if job.is_edit else job.kind
             return {
                 "job": job.handle,
