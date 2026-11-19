@@ -35,19 +35,25 @@ OWNER = "presenter@example.com"
 
 
 def instant_runners(delay: float = 0.0, fail_on: str = ""):
+    ext_map = {
+        "video": ("mp4", "video/mp4"),
+        "music": ("wav", "audio/wav"),
+        "voice": ("wav", "audio/wav"),
+    }
+
     def run(job):
         if delay:
             time.sleep(delay)
         if fail_on and fail_on in job.prompt:
             raise RuntimeError("boom")
-        ext = "mp4" if job.kind == "video" else "png"
+        ext, mime = ext_map.get(job.kind, ("png", "image/png"))
         return RunResult(
             gcs_uri=f"gs://bucket/{job.handle.replace(' ', '_')}.{ext}",
             display_url=f"https://example.test/{job.id}.{ext}",
-            mime_type="video/mp4" if job.kind == "video" else "image/png",
+            mime_type=mime,
         )
 
-    return {"image": run, "video": run}
+    return {"image": run, "video": run, "music": run, "voice": run}
 
 
 # --- job service -----------------------------------------------------------
@@ -108,7 +114,7 @@ def test_empty_prompt_and_unknown_kind_rejected():
     with pytest.raises(ValueError):
         jobs.submit(OWNER, "image", "  ")
     with pytest.raises(ValueError):
-        jobs.submit(OWNER, "music", "song")
+        jobs.submit(OWNER, "unknown", "song")
 
 
 def test_resolve_by_what_people_say():
@@ -163,14 +169,33 @@ def test_tool_declarations_mark_job_tools_non_blocking():
         "generate_image",
         "edit_image",
         "generate_video",
+        "generate_music",
+        "generate_voice",
+        "create_story",
+        "continue_story",
+        "render_film",
+        "story_status",
+        "open_story",
         "list_jobs",
         "show_job",
         "open_page",
         "download",
         "end_call",
     }
-    for name in ("generate_image", "edit_image", "generate_video"):
+    for name in (
+        "generate_image",
+        "edit_image",
+        "generate_video",
+        "generate_music",
+        "generate_voice",
+        "create_story",
+        "continue_story",
+        "render_film",
+    ):
         assert decls[name].behavior == types.Behavior.NON_BLOCKING
+    assert decls["open_story"].behavior == types.Behavior.BLOCKING
+    assert decls["story_status"].behavior is None
+    assert "Kore" in decls["generate_voice"].parameters.properties["voice"].description
     assert decls["show_job"].behavior == types.Behavior.BLOCKING
     blocking_only = {
         d.name: d for d in tool_declarations(False)[0].function_declarations
@@ -238,6 +263,90 @@ def test_generate_image_defers_and_drives_the_screen():
     wait_done(call)
     result = LiveCall.job_result(out.job)
     assert result["status"] == "done" and result["job"] == "image 1"
+
+
+def test_music_job_runs_in_parallel_with_image_and_resolves():
+    jobs = LiveJobs(instant_runners(delay=0.3))
+    start = time.time()
+    img = jobs.submit(OWNER, "image", "fox")
+    mus = jobs.submit(OWNER, "music", "calm piano")
+    while any(j.status != DONE for j in (img, mus)):
+        assert time.time() - start < 3
+        time.sleep(0.02)
+    assert time.time() - start < 0.55
+    assert mus.handle == "music 1"
+    assert jobs.resolve(OWNER, "music 1") is mus
+    assert jobs.resolve(OWNER, "the song") is mus
+    assert jobs.resolve(OWNER, "track") is mus
+
+
+def test_generate_music_tool_defers_and_mock_runner_returns_audio(monkeypatch):
+    from common import mock_generation
+    from services import live_jobs
+
+    call, browser = make_call()
+    out = run(
+        call.run_tool(
+            "generate_music",
+            {"prompt": "calm piano", "lyrics": "hello world"},
+        )
+    )
+    assert isinstance(out, Deferred)
+    assert out.job.handle == "music 1"
+    assert out.job.params == {"lyrics": "hello world"}
+    compose = [m for m in browser.sent if m.get("action") == "compose"][0]
+    assert compose["args"]["page"] == "/lyria"
+    assert call.screen == "/lyria"
+    wait_done(call)
+    assert LiveCall.job_result(out.job)["status"] == "done"
+
+    monkeypatch.setattr(mock_generation, "fake_wait", lambda *_a, **_kw: None)
+    monkeypatch.setenv("GENMEDIA_MOCK_GENERATION", "true")
+    monkeypatch.setenv("APP_ENV", "local")
+    assert live_jobs.default_runners()["music"] is live_jobs._mock_music
+    res = live_jobs._mock_music(out.job)
+    assert res.mime_type == "audio/wav"
+    assert res.display_url.startswith(mock_generation.MOCK_AUDIO_ROUTE)
+
+
+def test_generate_voice_tool_defaults_unknown_voice_and_mock_runner(monkeypatch):
+    from common import mock_generation
+    from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE
+    from services import live_jobs
+
+    call, browser = make_call()
+    out1 = run(
+        call.run_tool(
+            "generate_voice",
+            {"script": "Welcome to the demo", "voice": "puck", "language": "en-GB"},
+        )
+    )
+    assert isinstance(out1, Deferred)
+    assert out1.job.handle == "voice 1"
+    assert out1.job.params == {"voice": "Puck", "language": "en-GB"}
+    compose = [m for m in browser.sent if m.get("action") == "compose"][0]
+    assert compose["args"]["page"] == "/voice"
+    assert call.screen == "/voice"
+
+    out2 = run(
+        call.run_tool(
+            "generate_voice",
+            {"script": "Fallback check", "voice": "nonexistent-voice"},
+        )
+    )
+    assert isinstance(out2, Deferred)
+    assert out2.job.params == {"voice": DEFAULT_VOICE, "language": DEFAULT_LANGUAGE}
+    wait_done(call)
+    assert call.jobs.resolve(OWNER, "voice 1") is out1.job
+    assert call.jobs.resolve(OWNER, "the speech") is out2.job
+
+    monkeypatch.setattr(mock_generation, "fake_wait", lambda *_a, **_kw: None)
+    monkeypatch.setenv("GENMEDIA_MOCK_GENERATION", "true")
+    monkeypatch.setenv("APP_ENV", "local")
+    assert live_jobs.default_runners()["voice"] is live_jobs._mock_voice
+    res = live_jobs._mock_voice(out1.job)
+    assert res.mime_type == "audio/wav"
+    assert res.display_url.startswith(mock_generation.MOCK_AUDIO_ROUTE)
 
 
 def test_edit_waits_for_a_finished_image():
@@ -383,6 +492,34 @@ def test_scripted_agent_runs_the_demo():
     assert "Starting the image: image 1." in lines
     assert any(line.startswith("Downloading image 2") for line in lines)
     assert call.ended is True
+
+
+def test_scripted_agent_music_voice_and_help():
+    call, _ = make_call()
+    lines = []
+
+    async def say(text):
+        lines.append(text)
+
+    agent = ScriptedAgent(call, say)
+
+    async def go():
+        await agent.handle("music of calm rain on piano")
+        await agent.handle("say welcome to the demo")
+        await asyncio.sleep(0.1)
+        await agent.handle("show music 1")
+        await agent.handle("download voice 1")
+        await agent.handle("gibberish command")
+
+    run(go())
+    handles = [j.handle for j in call.jobs.list(OWNER)]
+    assert handles == ["music 1", "voice 1"]
+    assert call.jobs.resolve(OWNER, "music 1").prompt == "calm rain on piano"
+    assert call.jobs.resolve(OWNER, "voice 1").prompt == "welcome to the demo"
+    assert "Starting the music: music 1." in lines
+    assert "Starting the voice: voice 1." in lines
+    assert any("Downloading voice 1" in line for line in lines)
+    assert "music of" in lines[-1] and "make a story" in lines[-1]
 
 
 # --- WebSocket route (offline agent, no model) ------------------------------
