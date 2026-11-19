@@ -304,6 +304,8 @@ class Story:
     # The timeline was edited after final_uri was made: Download still gives
     # the old film until the edit is exported.
     film_edited: bool = False
+    # The story and its set before the last AI fix (JSON), for undo.
+    fix_undo_json: str = ""
     # Second-language version: same clips and music, narration translated
     # into alt_language and voiced again. Needs the voiceover on.
     second_on: bool = False

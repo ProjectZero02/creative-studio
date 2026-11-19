@@ -1531,7 +1531,7 @@ class VertexStoryBackend:
         from services.story_fix import fix_media, fix_prompt
 
         return self._json_text(
-            fix_prompt(story, request, scene, seconds),
+            fix_prompt(story, request, scene, seconds, self._set(story)),
             temperature=0.2,
             task="story_fix",
             media=fix_media(story),

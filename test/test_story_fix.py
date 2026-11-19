@@ -19,7 +19,13 @@ import pytest
 
 from services import story_fix, story_jobs, story_service, story_store
 from services import story_timeline as tlm
-from services.story_fix import FixPlan, apply_timeline_ops, parse_fix_plan, plan_steps
+from services.story_fix import (
+    FixChange,
+    FixPlan,
+    apply_timeline_ops,
+    parse_fix_plan,
+    plan_steps,
+)
 from services.story_models import ScenarioError, Scene, Story
 
 OWNER = "alice@example.com"
@@ -65,6 +71,11 @@ def _story(**kw) -> Story:
     return Story(**base)
 
 
+def _one(**kw) -> FixPlan:
+    """A plan with one change."""
+    return FixPlan(summary="Fix", changes=[FixChange(**kw)])
+
+
 # ---------------------------------------------------------------------------
 # Parsing Gemini's JSON
 # ---------------------------------------------------------------------------
@@ -87,8 +98,9 @@ def test_parse_timeline_trim_maps_scene_numbers_and_clamps():
         + "\n```",
         _story(),
     )
-    assert plan.action == "timeline"
-    assert plan.timeline == [
+    (change,) = plan.changes
+    assert change.action == "timeline"
+    assert change.timeline == [
         {"op": "trim", "scene": 2, "cut_start": 0.0, "cut_end": story_fix.TRIM_MAX_CUT}
     ]
 
@@ -107,10 +119,11 @@ def test_parse_rewrite_keeps_only_changed_fields():
         ),
         story,
     )
-    assert plan.scene == 1
-    assert plan.narration == "A new line."
-    assert plan.visual is None
-    assert plan.camera == "dolly_in"
+    (change,) = plan.changes
+    assert change.scene == 1
+    assert change.narration == "A new line."
+    assert change.visual is None
+    assert change.camera == "dolly_in"
 
 
 def test_parse_empty_or_unknown_plans_become_questions():
@@ -124,7 +137,7 @@ def test_parse_empty_or_unknown_plans_become_questions():
         {"action": "none", "question": "Which scene?"},
     ):
         plan = parse_fix_plan(json.dumps(raw), story)
-        assert plan.action == "none" and plan.question, raw
+        assert not plan.runnable and plan.question, raw
         assert plan_steps(story, plan) == []
 
 
@@ -133,7 +146,7 @@ def test_parse_timeline_without_a_rendered_film_asks():
         json.dumps({"action": "timeline", "timeline": [{"op": "remove", "scene": 1}]}),
         _story(timeline_json=""),
     )
-    assert plan.action == "none" and "Render" in plan.question
+    assert not plan.runnable and "Render" in plan.question
 
 
 def test_parse_rejects_bad_json():
@@ -148,7 +161,7 @@ def test_parse_rejects_bad_json():
 
 def test_timeline_plan_is_free():
     story = _story()
-    plan = FixPlan(
+    plan = _one(
         action="timeline",
         timeline=[{"op": "trim", "scene": 2, "cut_start": 0, "cut_end": 1.0}],
     )
@@ -159,7 +172,7 @@ def test_timeline_plan_is_free():
 
 def test_narrated_line_change_keeps_the_clip():
     story = _story(voice_on=True)
-    plan = FixPlan(action="rewrite_scene", scene=1, narration="New words.")
+    plan = _one(action="rewrite_scene", scene=1, narration="New words.")
     labels = [s.label for s in plan_steps(story, plan)]
     assert not any("video clip" in label for label in labels)
     assert any("voiceover" in label for label in labels)
@@ -171,8 +184,8 @@ def test_repaint_includes_the_rest_of_a_continuous_take():
     for sc in story.scenes:
         sc.spoken = True
     assert story.continues_take(1) and story.continues_take(2)
-    plan = FixPlan(action="repaint_frame", scene=0, visual="Brighter room.")
-    assert story_fix.repaint_indices(story, plan) == [0, 1, 2]
+    plan = _one(action="repaint_frame", scene=0, visual="Brighter room.")
+    assert story_fix.effects(story, plan).frames == [0, 1, 2]
     labels = [s.label for s in plan_steps(story, plan)]
     assert any("frame of scenes 1, 2, 3" in label for label in labels)
     assert any("clip of scenes 1, 2, 3" in label for label in labels)
@@ -296,8 +309,9 @@ def test_mock_planner_end_of_scene_is_a_free_trim(backend):
     plan = story_fix.plan_fix(
         s.id, OWNER, "I don't like the end of scene 3, the slide goes blank"
     )
-    assert plan.action == "timeline"
-    assert plan.timeline == [{"op": "trim", "scene": 2, "cut_start": 0.0, "cut_end": 1.0}]
+    (change,) = plan.changes
+    assert change.action == "timeline"
+    assert change.timeline == [{"op": "trim", "scene": 2, "cut_start": 0.0, "cut_end": 1.0}]
     job = _run(story_fix.start_fix(s.id, OWNER, plan))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert backend.clips == [] and backend.frames == []  # nothing paid
@@ -309,12 +323,12 @@ def test_mock_planner_end_of_scene_is_a_free_trim(backend):
 def test_mock_planner_uses_the_pointed_time(backend):
     s = _saved()
     plan = story_fix.plan_fix(s.id, OWNER, "it goes black here", seconds=5.0)
-    assert plan.timeline[0]["scene"] == 1
+    assert plan.changes[0].timeline[0]["scene"] == 1
 
 
 def test_repaint_fix_paints_then_renders_only_that_scene(backend):
     s = _saved()
-    plan = FixPlan(action="repaint_frame", scene=1, visual="Visual 1, at dusk.")
+    plan = _one(action="repaint_frame", scene=1, visual="Visual 1, at dusk.")
     job = _run(story_fix.start_fix(s.id, OWNER, plan))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert backend.frames == [1]
@@ -328,7 +342,7 @@ def test_repaint_fix_paints_then_renders_only_that_scene(backend):
 
 def test_rewrite_fix_re_renders_the_clip_without_a_new_frame(backend):
     s = _saved()
-    plan = FixPlan(action="rewrite_scene", scene=2, camera="orbit")
+    plan = _one(action="rewrite_scene", scene=2, camera="orbit")
     job = _run(story_fix.start_fix(s.id, OWNER, plan))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert backend.frames == [] and backend.clips == [2]
@@ -337,7 +351,7 @@ def test_rewrite_fix_re_renders_the_clip_without_a_new_frame(backend):
 
 def test_music_fix_makes_music_and_exports(backend):
     s = _saved()
-    plan = FixPlan(action="music", music_prompt="Quiet piano.")
+    plan = _one(action="music", music_prompt="Quiet piano.")
     job = _run(story_fix.start_fix(s.id, OWNER, plan))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
     assert backend.music == ["Quiet piano."]
@@ -360,7 +374,7 @@ def test_a_failed_step_fails_the_fix_and_retry_resumes(backend):
         return real(story, index, ref)
 
     backend.generate_frame = flaky
-    plan = FixPlan(action="repaint_frame", scene=0, visual="New look.")
+    plan = _one(action="repaint_frame", scene=0, visual="New look.")
     job = _run(story_fix.start_fix(s.id, OWNER, plan))
     assert job.status == "failed"
     assert backend.clips == []  # the render never started
@@ -372,7 +386,7 @@ def test_a_failed_step_fails_the_fix_and_retry_resumes(backend):
 def test_question_plans_do_not_run(backend):
     s = _saved()
     with pytest.raises(ScenarioError):
-        story_fix.start_fix(s.id, OWNER, FixPlan(action="none", question="Which?"))
+        story_fix.start_fix(s.id, OWNER, FixPlan(question="Which?"))
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +419,8 @@ def test_plan_then_apply_from_the_edit_step(backend, monkeypatch):
     list(page.on_plan_fix(None))
     assert not st.fix_planning and not st.error
     plan = page._fix_plan()
-    assert plan.action == "timeline" and plan.timeline[0]["scene"] == 2
+    assert plan.changes[0].action == "timeline"
+    assert plan.changes[0].timeline[0]["scene"] == 2
     # Nothing changes before the user confirms.
     assert story_store.get_store().get(s.id, OWNER).timeline_json == s.timeline_json
     page.on_apply_fix(None)
@@ -434,3 +449,128 @@ def test_the_planner_watches_the_film_and_the_frames(monkeypatch):
     assert seen == {"task": "story_fix", "media": story_fix.fix_media(story)}
     assert story_service._media_mime("gs://b/film.mp4") == "video/mp4"
     assert story_service._media_mime("gs://b/f.png") == "image/png"
+
+
+# ---------------------------------------------------------------------------
+# Several changes, going back further, undo
+# ---------------------------------------------------------------------------
+
+
+def _set_story():
+    from services.story_sets import Character, Location, StorySet
+
+    lead = Character(id="lead", name="Maya", description="woman in her 30s")
+    hall = Location(id="hall", name="Hall", description="dark auditorium")
+    story_set = StorySet(id="set1", characters=[lead], locations=[hall])
+    story = _story(set_id="set1")
+    for i, sc in enumerate(story.scenes):
+        sc.cast = ["lead"] if i != 1 else []
+        sc.location_id = "hall"
+        sc.speaker_id = "lead" if i == 2 else ""
+    story.scenes[2].spoken = True
+    return story, story_set
+
+
+def test_parse_keeps_several_changes_and_drops_bad_ones():
+    story = _story()
+    plan = parse_fix_plan(
+        json.dumps(
+            {
+                "summary": "Cut and brighten.",
+                "changes": [
+                    {"action": "timeline", "timeline": [{"op": "remove", "scene": 2}]},
+                    {"action": "repaint_frame", "scene": 1, "visual": "Brighter room."},
+                    {"action": "repaint_frame", "scene": 7, "visual": "No such scene."},
+                ],
+            }
+        ),
+        story,
+    )
+    assert [c.action for c in plan.changes] == ["timeline", "repaint_frame"]
+    labels = [s.label for s in plan_steps(story, plan)]
+    assert labels[0] == "New picture description for scene 1"
+    assert "Remove scene 2 from the film" in labels and labels[-1] == "Export the edited film"
+
+
+def test_a_scenario_rewrite_runs_alone():
+    story = _story()
+    plan = parse_fix_plan(
+        json.dumps(
+            {
+                "changes": [
+                    {"action": "music", "music_prompt": "Piano."},
+                    {"action": "scenario", "direction": "End on a hopeful note."},
+                ]
+            }
+        ),
+        story,
+    )
+    assert [c.action for c in plan.changes] == ["scenario"]
+    assert story_fix._follow_ups(story, plan) == [
+        ("scenario", []),
+        ("set", []),
+        ("storyboard", []),
+        ("video", []),
+    ]
+    assert story_fix.costs_money(story, plan)
+
+
+def test_a_set_look_change_repaints_the_asset_and_its_scenes():
+    story, story_set = _set_story()
+    plan = parse_fix_plan(
+        json.dumps({"changes": [{"action": "set", "asset": "maya", "outfit": "red suit"}]}),
+        story,
+        story_set,
+    )
+    (change,) = plan.changes
+    assert (change.asset_kind, change.asset_id, change.outfit) == ("character", "lead", "red suit")
+    fx = story_fix.effects(story, plan, story_set)
+    assert fx.frames == [0, 2] and fx.clips == [0, 2]
+    assert ["character", "lead", "front"] in fx.set_targets
+    assert ["character", "lead", "voice"] not in fx.set_targets
+    assert story_fix._follow_ups(story, plan, story_set)[:3] == [
+        ("set", fx.set_targets),
+        ("storyboard", [0, 2]),
+        ("video", []),
+    ]
+
+
+def test_a_set_voice_change_remakes_only_the_scenes_it_speaks_in():
+    story, story_set = _set_story()
+    plan = _one(action="set", asset_kind="character", asset_id="lead", asset_name="Maya",
+                voice="a deep calm voice")
+    fx = story_fix.effects(story, plan, story_set)
+    assert fx.frames == [] and fx.clips == [2]
+    assert fx.set_targets == [["character", "lead", "voice"]]
+
+
+def test_an_unknown_asset_asks_back():
+    story, story_set = _set_story()
+    plan = parse_fix_plan(
+        json.dumps({"changes": [{"action": "set", "asset": "Bob", "outfit": "hat"}]}),
+        story,
+        story_set,
+    )
+    assert not plan.runnable and "person, place or prop" in plan.question
+
+
+def test_a_plan_saved_before_multi_change_fixes_still_loads():
+    old = {"action": "music", "summary": "New music", "music_prompt": "Jazz", "scene": -1}
+    plan = FixPlan.from_dict(old)
+    assert plan.summary == "New music" and plan.changes[0].music_prompt == "Jazz"
+    assert not FixPlan.from_dict({"action": "none", "question": "Which?"}).runnable
+
+
+def test_undo_puts_the_previous_film_back(backend):
+    s = _saved()
+    plan = _one(action="rewrite_scene", scene=2, camera="orbit")
+    job = _run(story_fix.start_fix(s.id, OWNER, plan))
+    assert job.status == "done"
+    after = story_store.get_store().get(s.id, OWNER)
+    assert after.final_uri == "local://film2.mp4" and story_fix.can_undo(after)
+    back = story_fix.undo_fix(s.id, OWNER)
+    assert back.final_uri == "local://film.mp4"
+    assert back.scenes[2].camera == "static" and back.scenes[2].clip_uri == "local://clip2.mp4"
+    assert back.timeline_json == s.timeline_json and not story_fix.can_undo(back)
+    with pytest.raises(ScenarioError):
+        story_fix.undo_fix(s.id, OWNER)
