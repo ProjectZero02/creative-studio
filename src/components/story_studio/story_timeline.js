@@ -458,7 +458,11 @@ class StoryTimeline extends LitElement {
       v.src = url;
       v.addEventListener('loadedmetadata', () => {
         const on = this._activeVideo(this._t);
-        if (on && this._url(on.src) === url) this._sync(this._playing, true);
+        if (on && this._url(on.src) === url) { this._sync(this._playing, true); return; }
+        // Not on screen yet: wait on the clip's first frame, so the browser
+        // buffers from there (a continued take starts 6 or 12 s into its file).
+        const first = this._clips('video').find((c) => this._url(c.src) === url && c.start > this._t);
+        if (first && +first.in > 0) { try { v.currentTime = +first.in; } catch (e) { /* loading */ } }
       });
       this._vids.set(url, v);
     }
