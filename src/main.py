@@ -554,6 +554,53 @@ def _is_proxy_bucket_allowed(bucket_name: str) -> bool:
     return bucket_name in _allowed_proxy_buckets()
 
 
+# Most a single ranged reply sends; the player asks again for the rest.
+MEDIA_RANGE_CHUNK = 4 * 1024 * 1024
+# First read from GCS while streaming: small, so the first bytes reach the
+# player quickly instead of after the whole range has downloaded. Each later
+# read doubles, up to MEDIA_STREAM_PIECE_MAX, to keep round trips few.
+MEDIA_STREAM_PIECE = 256 * 1024
+MEDIA_STREAM_PIECE_MAX = 2 * 1024 * 1024
+
+
+def _gcs_pieces(blob, start: int, end: int):
+    """Yield bytes start..end (inclusive) of a blob, one piece at a time."""
+    pos, piece = start, MEDIA_STREAM_PIECE
+    while pos <= end:
+        last = min(end, pos + piece - 1)
+        yield blob.download_as_bytes(start=pos, end=last)
+        pos = last + 1
+        piece = min(piece * 2, max(MEDIA_STREAM_PIECE, MEDIA_STREAM_PIECE_MAX))
+
+
+def parse_byte_range(header: str | None, size: int) -> tuple[int, int] | None | bool:
+    """The (start, end) bytes, inclusive, of a ``Range: bytes=...`` header.
+
+    None when there is no usable range header (send the whole file), False
+    when the range cannot be satisfied (416). Only the first range of a
+    multi-range request is served. A long range is cut to MEDIA_RANGE_CHUNK.
+    """
+    if not header or not header.strip().lower().startswith("bytes=") or size <= 0:
+        return None
+    spec = header.split("=", 1)[1].split(",")[0].strip()
+    first, _, last = spec.partition("-")
+    try:
+        if first == "":  # the last N bytes
+            n = int(last)
+            if n <= 0:
+                return False
+            start, end = max(0, size - n), size - 1
+        else:
+            start = int(first)
+            end = int(last) if last else size - 1
+    except ValueError:
+        return None
+    if start >= size or end < start:
+        return False
+    end = min(end, size - 1, start + MEDIA_RANGE_CHUNK - 1)
+    return start, end
+
+
 # Add a new endpoint to proxy GCS media for better caching.
 @app.get("/media/{bucket_name}/{object_path:path}")
 def get_media_proxy(request: Request, bucket_name: str, object_path: str):
@@ -589,12 +636,35 @@ def get_media_proxy(request: Request, bucket_name: str, object_path: str):
 
         blob.reload()
         content_type = blob.content_type
+        size = blob.size if isinstance(blob.size, int) else 0  # 0: unknown
 
         # Set a cache header to instruct browsers and CDNs to cache for 1 hour.
-        headers = {"Cache-Control": "public, max-age=3600"}
+        # Byte ranges let video and audio players seek (the editor preview
+        # jumps between clips) instead of playing every file from the start.
+        headers = {"Cache-Control": "public, max-age=3600", "Accept-Ranges": "bytes"}
+        span = parse_byte_range(request.headers.get("range"), size)
+        if span is False:
+            return Response(
+                status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"}
+            )
+        if span:
+            start, end = span
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            headers["Content-Length"] = str(end - start + 1)
+            return StreamingResponse(
+                _gcs_pieces(blob, start, end),
+                status_code=206,
+                media_type=content_type,
+                headers=headers,
+            )
+        if size:
+            headers["Content-Length"] = str(size)
+            return StreamingResponse(
+                _gcs_pieces(blob, 0, size - 1), media_type=content_type, headers=headers
+            )
 
-        # Stream the file content directly from GCS to the user.
-        stream = blob.open("rb")
+        # Size unknown: stream the file content directly from GCS to the user.
+        stream = blob.open("rb", chunk_size=MEDIA_STREAM_PIECE)
         return StreamingResponse(stream, media_type=content_type, headers=headers)
 
     except HTTPException:
