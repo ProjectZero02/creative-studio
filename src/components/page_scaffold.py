@@ -58,7 +58,7 @@ def page_scaffold(page_name: str):
     # Voice agent: one invisible bridge per page; the call itself lives in the
     # browser outside Mesop's tree, so it survives navigation.
     if Default.LIVE_AGENT_ENABLED:
-        live_agent_bridge()
+        live_agent_bridge(page=page_name)
 
     sidenav("")
 

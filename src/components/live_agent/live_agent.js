@@ -23,7 +23,12 @@
  * the speaker (24 kHz PCM16), and the overlays: call dock, captions, job tray,
  * result viewer and the on-screen cursor.
  *
- * <live-agent-bridge> (one per page) turns "go to page" into a Mesop event.
+ * <live-agent-bridge> (one per page) turns "go to page" and "fill these
+ * fields" into Mesop events, and carries the page's fillable fields.
+ *
+ * A call is "Fill only" (the agent only fills the page; the presenter presses
+ * Generate) or "Do it for me" (the agent also runs jobs). The dock's switch
+ * picks it; the choice is remembered in this browser.
  * <live-call-button> is the big call button on the home page.
  */
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
@@ -43,7 +48,14 @@ const DEFAULT_STRINGS = {
   download: 'Download',
   close: 'Close',
   nomic: 'No microphone access. You can still type.',
+  fill: 'Fill only',
+  act: 'Do it for me',
+  modeHint: 'Fill only: the agent fills the page and you press Generate. Do it for me: it also runs the jobs.',
 };
+const MODE_KEY = 'gm-live-mode';
+function savedMode() {
+  try { return localStorage.getItem(MODE_KEY) === 'act' ? 'act' : 'fill'; } catch (e) { return 'fill'; }
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isAudioJob = (job) =>
@@ -111,6 +123,9 @@ const STYLE = `
 .gml-input { flex: 1; min-width: 0; height: 40px; border-radius: 20px; padding: 0 14px; font: inherit; font-size: 14px;
   border: 1px solid var(--sys-outline-variant, #c4c6cf); background: var(--sys-surface-container-lowest, #fff);
   color: inherit; pointer-events: auto; }
+.gml-mode { height: 32px; padding: 0 12px; flex: none; font-size: 13px; font-weight: 500;
+  background: var(--sys-surface-container-high, #e6e8ec); color: inherit; white-space: nowrap; }
+.gml-mode[data-mode="act"] { background: var(--sys-primary-container, #d8e2ff); color: var(--sys-on-primary-container, #001a41); }
 .gml-icon { width: 40px; height: 40px; flex: none; background: var(--sys-surface-container-high, #e6e8ec); color: inherit; }
 .gml-icon[aria-pressed="true"] { background: #fce8e6; color: #c5221f; }
 .gml-hang { width: 40px; height: 40px; flex: none; background: #d93025; color: #fff; }
@@ -241,6 +256,10 @@ class GmLive {
         this.input.value = '';
       }
     });
+    this.mode = savedMode();
+    this.modeBtn = this._el('button', 'gml-btn gml-mode', this.dock);
+    this.modeBtn.type = 'button';
+    this.modeBtn.addEventListener('click', () => this.setMode(this.mode === 'fill' ? 'act' : 'fill'));
     this.muteBtn = this._el('button', 'gml-btn gml-icon', this.dock, ICON_MIC);
     this.muteBtn.addEventListener('click', () => this.toggleMute());
     this.hangBtn = this._el('button', 'gml-btn gml-hang', this.dock, ICON_HANG);
@@ -264,6 +283,7 @@ class GmLive {
     const s = this.strings;
     this.launch.querySelector('span').textContent = s.talk;
     this.launch.setAttribute('aria-label', s.talk);
+    this._renderMode();
     this.input.placeholder = s.type;
     this.input.setAttribute('aria-label', s.type);
     this.hangBtn.setAttribute('aria-label', s.hangup);
@@ -480,6 +500,53 @@ class GmLive {
     if (card) await this.pointAt(card);
   }
 
+  /** The page's fillable fields, as the bridge carries them. */
+  readPage() {
+    let fields = [];
+    try { fields = JSON.parse((this.bridge && this.bridge.fieldsJson) || '[]'); } catch (e) { fields = []; }
+    return { ok: true, page: location.pathname, fields };
+  }
+
+  /** Fill fields through the page's own state (a Mesop event), wait for the
+   * page to answer, then point at what changed. Never presses Generate. */
+  async fill(args) {
+    const bridge = this.bridge;
+    if (!bridge || !bridge.actionEvent) return { ok: false, error: 'This page cannot be filled.' };
+    const before = this.readPage().fields;
+    const id = Math.random().toString(36).slice(2, 10);
+    bridge.dispatchEvent(new MesopEvent(bridge.actionEvent, { action: 'fill', id, page: bridge.page || '', fields: args.fields || {} }));
+    let result = null;
+    for (let i = 0; i < 50 && !result; i++) {
+      await sleep(100);
+      try {
+        const last = JSON.parse((this.bridge && this.bridge.lastFillJson) || '{}');
+        if (last.id === id) result = last;
+      } catch (e) { /* not yet */ }
+    }
+    if (!result) return { ok: false, error: 'The page did not answer in time.' };
+    for (const name of Object.keys(result.changed || {})) {
+      const f = before.find((x) => x.name === name);
+      const el = f && this._fieldEl(f.label);
+      if (el) await this.pointAt(el);
+    }
+    return { ok: !result.error, changed: result.changed || {}, refused: result.refused || {}, error: result.error };
+  }
+
+  /** The on-screen control whose label reads `label` (best effort). */
+  _fieldEl(label) {
+    const want = String(label || '').trim().toLowerCase();
+    if (!want) return null;
+    const nodes = document.querySelectorAll('.gm-page label, .gm-page mat-label, .gm-page [aria-label]');
+    for (const n of nodes) {
+      const text = (n.getAttribute('aria-label') || n.textContent || '').trim().toLowerCase();
+      if (text === want || text.startsWith(want)) {
+        const box = n.closest('.mat-mdc-form-field, mat-form-field, button, [role="button"]') || n;
+        if (box.getBoundingClientRect().width > 0) return box;
+      }
+    }
+    return null;
+  }
+
   async showJob(args) {
     await this.navigate(args.page, args.params);
     const job = this.jobs.get(args.job.id) || args.job;
@@ -526,6 +593,8 @@ class GmLive {
       if (msg.action === 'navigate') result = { ok: await this.navigate(a.page, a.params) };
       else if (msg.action === 'compose') { this.compose(a); return; }
       else if (msg.action === 'show_job') result = await this.showJob(a);
+      else if (msg.action === 'read_page') result = this.readPage();
+      else if (msg.action === 'fill') result = await this.fill(a);
       else if (msg.action === 'download') {
         const job = this.jobs.get(a.job.id) || a.job;
         const card = this.tray.querySelector(`[data-job="${job.id}"]`);
@@ -544,6 +613,29 @@ class GmLive {
   // ------------------------------------------------------------ call -----
 
   toggle() { return this.state === 'idle' ? this.start() : this.stop(); }
+
+  /** Switch Fill only / Do it for me. A call in progress reconnects, since
+   * the agent's tools are set when it connects. */
+  async setMode(mode) {
+    this.mode = mode === 'act' ? 'act' : 'fill';
+    try { localStorage.setItem(MODE_KEY, this.mode); } catch (e) { /* not kept */ }
+    this._renderMode();
+    if (this.state !== 'idle') {
+      this.stop();
+      await sleep(250);
+      this.start();
+    }
+  }
+
+  _renderMode() {
+    if (!this.modeBtn) return;
+    const s = this.strings || DEFAULT_STRINGS;
+    const fill = this.mode !== 'act';
+    this.modeBtn.textContent = fill ? (s.fill || DEFAULT_STRINGS.fill) : (s.act || DEFAULT_STRINGS.act);
+    this.modeBtn.setAttribute('aria-pressed', fill ? 'false' : 'true');
+    this.modeBtn.title = s.modeHint || DEFAULT_STRINGS.modeHint;
+    this.modeBtn.dataset.mode = this.mode;
+  }
 
   async start() {
     if (this.state !== 'idle') return;
@@ -566,8 +658,9 @@ class GmLive {
       this._caption('user', this.strings.nomic, true);
     }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const mode = new URLSearchParams(location.search).get('live') === 'offline' ? '?mode=offline' : '';
-    const ws = new WebSocket(`${proto}://${location.host}/api/live${mode}`);
+    const params = new URLSearchParams({ agent: this.mode === 'act' ? 'act' : 'fill' });
+    if (new URLSearchParams(location.search).get('live') === 'offline') params.set('mode', 'offline');
+    const ws = new WebSocket(`${proto}://${location.host}/api/live?${params}`);
     this.ws = ws;
     ws.onopen = () => this._sendScreen();
     ws.onmessage = (e) => { try { this._onMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } };
@@ -699,6 +792,9 @@ class LiveAgentBridge extends LitElement {
   static properties = {
     actionEvent: { type: String },
     stringsJson: { type: String },
+    page: { type: String },
+    fieldsJson: { type: String },
+    lastFillJson: { type: String },
   };
 
   connectedCallback() {
