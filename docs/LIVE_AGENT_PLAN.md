@@ -1,20 +1,20 @@
 # Live Agent: a voice orchestrator on the home page
 
-Status (2026-11-17): **v1 built.** It passes the unit tests and an offline browser run of the full demo script. It has not been tried against real Gemini Live yet; that happens on Cloud Run.
+Status (2026-11-19): **v1.1 built (images, videos, music, voice, and Story Studio).** It passes the offline unit tests (`test/test_live_agent.py` and `test/test_live_story.py`) with parallel jobs, audio tray playback/download, and step-by-step Story Studio orchestration.
 
-## What v1 is (lean cut of the design below)
+## What is built
 
-To keep the build short, v1 drops two things from the full plan:
-- **No changes to studio pages.** The agent's jobs run in a new job service and show in their own job tray and result viewer, drawn over the page. The studios' own Generate buttons work exactly as before.
-- **Images and videos only.** Music and voice are left for later.
+- **No changes to studio pages.** The agent's jobs run in `services/live_jobs.py` (and `services/live_story.py` wrapping `services/story_jobs.py`) and show in their own job tray and result viewer, drawn over the page. The studios' own Generate buttons work exactly as before.
+- **Full core media suite:** images, image edits, videos, music (Lyria), voice (TTS), and Story Studio films.
 
 | File | What it does |
 |---|---|
-| `src/services/live_jobs.py` | Runs each job in its own thread, so jobs run side by side and survive page changes. Jobs have spoken names ("image 1", "video 1"), a limit of 4 running per person, and save to GCS and the Library like the studios. Mock mode gives instant placeholders. |
-| `src/services/live_agent.py` | The tools, the agent's instructions, the per-call tool logic, and a typed offline agent for demos without a model. |
+| `src/services/live_jobs.py` | Runs each job in its own thread (`image`, `video`, `music`, `voice`, `story`), so jobs run side by side and survive page changes. Jobs have spoken names ("image 1", "video 1", "music 1", "voice 1", "story 1"), a limit of 4 running per person, and save to GCS and the Library like the studios. Mock mode gives instant placeholders and sample audio. |
+| `src/services/live_story.py` | Wraps `services/story_jobs.py` and `services/story_store.py` so the Live agent can create a story, advance it one step at a time (approve, set, storyboard, render), check status, and open it on screen without editing Story Studio files. |
+| `src/services/live_agent.py` | The tools, the agent's instructions, the per-call tool logic, and the typed offline `ScriptedAgent` for demos without a model. |
 | `src/routers/live_router.py` | `WebSocket /api/live`. Holds the Gemini Live session on Vertex with the app's own credentials. Relays audio and transcripts. Job tools are `NON_BLOCKING`, and each result is sent back at the next pause (`WHEN_IDLE`). Reconnects with session resumption. Checks identity and origin itself. Falls back to the typed offline agent if Live can't be reached. |
-| `src/components/live_agent/` | `window.gmLive`, attached to `document.body`, so the call survives `me.navigate`. It runs the mic (16 kHz) and speaker (24 kHz), the call dock with mute, typed requests and hang-up, live captions, the job tray, the result viewer with Download, and the on-screen cursor that types the prompt into the studio's box and points at Generate. One invisible bridge per page (`page_scaffold.py`) handles navigation. The big **Talk to the studio** button is on Home. |
-| `test/test_live_agent.py` | 24 offline tests: parallel jobs, the job limit, handles, every tool, the WebSocket route in offline mode, and a fake Live session that checks the `WHEN_IDLE` reply. |
+| `src/components/live_agent/` | `window.gmLive`, attached to `document.body`, so the call survives `me.navigate`. It runs the mic (16 kHz) and speaker (24 kHz), the call dock with mute, typed requests and hang-up, live captions, the job tray (with inline `<audio controls>` for music/voice), the result viewer with Download (`.png`, `.mp4`, `.wav`), and the on-screen cursor. One invisible bridge per page (`page_scaffold.py`) handles navigation. |
+| `test/test_live_agent.py` & `test/test_live_story.py` | 33 offline tests: parallel jobs, the job limit, handles, music/voice/Story Studio tools, `ScriptedAgent` phrases, the WebSocket route in offline mode, and a fake Live session that checks the `WHEN_IDLE` reply. |
 
 Settings are in `docs/environment_variables.md` under "Live voice agent". Try it without a model: add `?live=offline` to any page URL and type requests.
 
@@ -31,8 +31,10 @@ Settings are in `docs/environment_variables.md` under "Live voice agent". Try it
 The presenter clicks **Call** on the home page and talks:
 
 > "Make an image of a red fox in a snowy forest, cinematic."
-> "While that's going, start a video of waves crashing on black rocks at sunset."
-> "Go back to the image. Nice. Make it night time with northern lights."
+> "While that's going, make some calm piano music."
+> "Say welcome to the demo in a warm voice."
+> "Make a story about a tiny lighthouse on Mars."
+> "Next step" (approve scenario -> build set -> paint storyboard -> render film)
 > "Download that to my laptop."
 
 The agent answers by voice. The audience watches the app move by itself: it opens Image Studio, the prompt types itself into the box, a cursor glides to Generate, and then the app switches to Video Studio while the image keeps rendering. A tray in the corner shows every running job. When the image is ready the agent says so at the next pause, goes back to it, edits it, and the file lands in the laptop's Downloads folder.
@@ -134,16 +136,21 @@ A new `routers/live_router.py` with `WebSocket /api/live`, tied to the user from
 
 | Tool | Where it runs | What it does |
 |---|---|---|
-| `generate_image(prompt, aspect_ratio?, count?)` | server, non-blocking | New image job, then opens it on screen |
-| `edit_image(source, instruction)` | server, non-blocking | Edits "image 1", "the last image" or the one on screen |
-| `generate_video(prompt, from_image?, seconds?, aspect_ratio?, with_sound?)` | server, non-blocking | Veo or Omni job (image-to-video when `from_image` is set) |
-| `generate_music(prompt, instrumental?)` / `generate_voice(script, voice?)` | server, non-blocking | Lyria / TTS job |
-| `list_jobs()` | server | What is running and what is done, by handle |
-| `open_page(page)` | browser | Home, Image, Video, Music, Voice, Library |
-| `show_job(job)` | browser | Opens the studio for that job and scrolls to its result |
-| `type_prompt(text)` + `press_generate()` | browser | Show-only: types into the visible prompt box and moves the cursor to Generate. The real work is the server job, so a failed animation never loses a job. |
-| `download(job_or_media)` | browser | Signed URL → file saved to Downloads |
-| `end_call()` | browser | Hangs up |
+| `generate_image(prompt, aspect_ratio?)` | server, non-blocking | New image job in Image Studio (`/nano-banana`) |
+| `edit_image(instruction, image?)` | server, non-blocking | Edits `"image 1"` or the latest finished image |
+| `generate_video(prompt, from_image?, aspect_ratio?)` | server, non-blocking | Video Studio job (text-to-video or image-to-video when `from_image` is set) |
+| `generate_music(prompt, lyrics?)` | server, non-blocking | Lyria music track job in Music Studio (`/lyria`) |
+| `generate_voice(script, voice?, language?)` | server, non-blocking | TTS job in Voice Studio (`/voice`); validates voice name and falls back to default |
+| `create_story(idea, length?, aspect_ratio?, style?, language?)` | server, non-blocking | Saves a new Story Studio record (merging inferred + explicit settings) and writes its scenario |
+| `continue_story(story?)` | server, non-blocking | Advances the story by one step (approve scenario, build set, paint storyboard, or render film) |
+| `render_film(story?)` | server, non-blocking | Starts `story_jobs.start_video` once every scene has a storyboard frame |
+| `story_status(story?)` | server | Current step, active job progress from `job_snapshot`, and whether a film exists |
+| `open_story(story?, step?)` | browser, blocking | Navigates to `/story?id=<id>&step=<step>` |
+| `list_jobs()` | server | What is running and what is done, by handle, plus the current page |
+| `open_page(page)` | browser, blocking | Home, Image, Video, Music, Voice, Story, Library |
+| `show_job(job?)` | browser, blocking | Opens the studio for that job and opens the result viewer |
+| `download(job?)` | browser, blocking | Signed URL → file saved to Downloads (`.png`, `.mp4`, `.wav`) |
+| `end_call()` | browser, blocking | Hangs up |
 
 The system prompt keeps spoken replies short ("On it. Starting the video now."). The agent never waits silently for a job; it confirms and moves on. When a request is ambiguous it picks the job on screen, and it says which job it is acting on.
 
