@@ -628,3 +628,47 @@ def test_clip_sound_eases_in_and_out_at_cuts():
     graph = args[args.index("-filter_complex") + 1]
     assert f"afade=t=in:st=0:d={T.JOIN_FADE:.3f}" in graph
     assert "tpad=stop_mode=clone" in graph
+
+
+def _dark_frames(path):
+    import re
+
+    err = subprocess.run(
+        [
+            _ff(),
+            "-hide_banner",
+            "-i",
+            path,
+            "-vf",
+            "signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stderr
+    values = [float(v) for v in re.findall(r"YAVG=([\d.]+)", err)]
+    return sum(1 for v in values if v < 25), len(values)
+
+
+def test_joins_between_frames_never_show_black(tmp_path):
+    # A continuous take's offsets (6.04, 12.03) put cuts between two frames
+    # at 24 fps (11.96 s). Every output frame must still show a clip,
+    # including the last one.
+    a = _clip(tmp_path / "a.mp4", "red", 440, secs=6.0)
+    b = _clip(tmp_path / "b.mp4", "blue", 660, secs=12.0)
+    c = _clip(tmp_path / "c.mp4", "green", 550, secs=18.0)
+    tl = T.empty_timeline(320, 180, 24)
+    T.track(tl, "video")["clips"] = [
+        {"src": a, "in": 0, "out": 6.0, "gain": 0},
+        {"src": b, "in": 6.04, "out": 12.0, "gain": 0},
+        {"src": c, "in": 12.03, "out": 18.0, "gain": 0},
+    ]
+    out = T.render_timeline(
+        tl, lambda u, p: shutil.copyfile(u, p), str(tmp_path / "f.mp4")
+    )
+    dark, total = _dark_frames(out)
+    assert total == round(17.93 * 24) and dark == 0

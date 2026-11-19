@@ -594,22 +594,33 @@ def render_args(
     for k, c in enumerate(track(timeline, "video")["clips"]):
         idx = add_input(paths[c["src"]])
         length = clip_length(c)
+        # Snap the clip's slot to whole output frames. A start like 11.96 s
+        # falls between two frames at 24 fps; without this the frame at
+        # 11.958 belonged to neither clip and showed the black canvas.
+        f0 = round(c["start"] * fps)
+        frames = max(1, round((c["start"] + length) * fps) - f0)
+        start, slot = f0 / fps, frames / fps
+        # One spare frame past the slot (hidden by `enable`): overlay treats a
+        # clip as over at its last frame's time, which blacked out the film's
+        # final frame.
         chain = (
             f"[{idx}:v]trim=start={c['in']:.3f}:end={c['out']:.3f},setpts=PTS-STARTPTS,"
             f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
             # A clip whose picture ends early holds its last frame instead of
             # showing the black canvas, and never runs past its slot.
-            f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=end={length:.3f},"
+            f"tpad=stop_mode=clone:stop_duration={slot + 2 / fps:.3f},trim=end_frame={frames + 1},"
             "format=yuva420p"
         )
         if c.get("fade_in"):
             chain += f",fade=t=in:st=0:d={c['fade_in']:.3f}:alpha=1"
-        chain += f",setpts=PTS+{c['start']:.3f}/TB[v{k}]"
+        # Offset by whole frames (the fps filter set the time base to 1/fps):
+        # PTS+11.958333/TB rounds down to frame 286 instead of 287.
+        chain += f",setpts=PTS+{f0}[v{k}]"
         filters.append(chain)
         filters.append(
-            f"[{last}][v{k}]overlay=eof_action=pass:enable='between(t,{c['start']:.3f},"
-            f"{c['start'] + length:.3f})'[o{k}]"
+            f"[{last}][v{k}]overlay=eof_action=pass:enable='between(t,{start:.6f},"
+            f"{start + slot - 0.5 / fps:.6f})'[o{k}]"
         )
         last = f"o{k}"
         if c.get("gain", 0) > 0 and has_audio.get(c["src"]):

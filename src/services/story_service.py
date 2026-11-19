@@ -1743,7 +1743,7 @@ class VertexStoryBackend:
         previous clip. Returns (clip, seconds of it that repeat the previous
         clip), measured, since the model may return the joined video."""
         from models.omni import generate_omni_video
-        from services.story_timeline import probe
+        from services.story_timeline import clip_edges, probe
 
         scene = story.scenes[index]
         story_set = self._set(story)
@@ -1807,7 +1807,10 @@ class VertexStoryBackend:
             prev_path, new_path = os.path.join(tmp, "a.mp4"), os.path.join(tmp, "b.mp4")
             _gcs_fetch(prev_clip_uri, prev_path)
             _gcs_fetch(uri, new_path)
-            prev_len, new_len = probe(prev_path)[0], probe(new_path)[0]
+            # The picture's own lengths: the file runs a little longer with
+            # its sound, which put every later cut between two frames.
+            prev_len = clip_edges(prev_path)[0] or probe(prev_path)[0]
+            new_len = clip_edges(new_path)[0] or probe(new_path)[0]
         joined = new_len > prev_len + 1.0
         return uri, round(prev_len, 3) if joined else 0.0
 
