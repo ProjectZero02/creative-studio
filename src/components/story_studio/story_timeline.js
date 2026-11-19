@@ -21,7 +21,8 @@
  * own files, no render needed) and one lane per track. Each clip file has its
  * own preloaded <video>, so a cut swaps players instead of loading a file,
  * and the playhead follows the picture (it waits while a clip buffers, so
- * the sound never runs ahead). Clips can be moved,
+ * the sound never runs ahead). Speech recorded in a clip shows on the Voice
+ * lane, linked to its clip. Clips can be moved,
  * trimmed at either edge, re-ordered (video), turned up or down, and titles
  * can be added and edited. Every finished change sends `changeEvent` with the
  * whole timeline JSON; the server validates and stores it, and "Export"
@@ -98,6 +99,14 @@ class StoryTimeline extends LitElement {
     .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; border-radius: 0; }
     .stage video.hide { visibility: hidden; }
     .vids { position: absolute; inset: 0; }
+    .speech { position: absolute; top: 8px; bottom: 8px; border-radius: 6px; box-sizing: border-box; overflow: hidden;
+              display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 12px; white-space: nowrap; cursor: pointer;
+              color: var(--tl-muted); background: color-mix(in srgb, var(--tl-voice) 40%, transparent);
+              border: 1px dashed color-mix(in srgb, var(--tl-voice) 90%, var(--tl-line)); outline: 2px solid transparent; outline-offset: -2px; }
+    .speech svg { width: 16px; height: 16px; flex: none; fill: currentColor; }
+    .speech span { overflow: hidden; text-overflow: ellipsis; }
+    .speech.muted { opacity: .55; }
+    .speech.sel { outline-color: var(--tl-accent); }
     .title { position: absolute; left: 7%; right: 7%; text-align: center; color: #fff; font-weight: 600;
              text-shadow: 0 2px 6px rgba(0,0,0,.7); pointer-events: none; line-height: 1.25; }
     .title.top { top: 8%; } .title.center { top: 50%; transform: translateY(-50%); } .title.bottom { bottom: 8%; }
@@ -661,6 +670,19 @@ class StoryTimeline extends LitElement {
     </div>`;
   }
 
+  /** Speech recorded in a clip, shown on the Voice lane under its clip.
+   * Selecting it selects the clip, whose volume sets the speech level. */
+  _speechEl(c) {
+    const left = (+c.start || 0) * this._pps + (c._dx ? c._dx * this._pps : 0);
+    const width = Math.max(14, clipLen(c) * this._pps);
+    const muted = !(+c.gain > 0);
+    const label = `${c.label || 'Clip'} speech${muted ? ' (muted)' : ''}`;
+    return html`<div class="speech ${this._sel === c.id ? 'sel' : ''} ${muted ? 'muted' : ''}" role="button" tabindex="-1"
+        title="Speech recorded in ${c.label || 'this clip'}. It moves with the clip; select it to change its volume."
+        style="left:${left}px;width:${width}px"
+        @click=${() => { this._sel = c.id; }}>${ICON.wave}<span>${label}</span></div>`;
+  }
+
   _ticks(total) {
     const pps = this._pps;
     const step = [0.5, 1, 2, 5, 10, 15, 30, 60].find((s) => s * pps >= 64) || 120;
@@ -692,7 +714,7 @@ class StoryTimeline extends LitElement {
             ${[[32, 'Small'], [48, 'Medium'], [72, 'Large'], [104, 'Huge']].map(([v, l]) => html`<option value=${v} ?selected=${+c.size === v}>${l}</option>`)}
           </select></label>
         </div>` : html`
-        <label class="field"><span>Volume <span class="val">${pct}%</span></span>
+        <label class="field"><span>${kind !== 'video' ? 'Volume' : c.ambient ? 'Clip sound' : 'Speech volume'} <span class="val">${pct}%</span></span>
           <input type="range" min="0" max="200" step="5" .value=${String(pct)}
             @change=${(e) => this._set(c.id, 'gain', +e.target.value / 100)}></label>`}
       ${kind === 'video' ? html`
@@ -784,7 +806,7 @@ class StoryTimeline extends LitElement {
         <div class="scroll" @pointerdown=${(e) => { if (e.target.classList.contains('lane')) this._sel = ''; }}>
           <div class="inner" style="width:${width}px">
             <div class="ruler" @pointerdown=${(e) => this._rulerDown(e)} aria-hidden="true">${this._ticks(total)}</div>
-            ${KINDS.map((k) => html`<div class="lane h-${k}" aria-label="${LANE_LABEL[k]} track">${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c))}</div>`)}
+            ${KINDS.map((k) => html`<div class="lane h-${k}" aria-label="${LANE_LABEL[k]} track">${k === 'voice' ? repeat(this._clips('video').filter((c) => !c.ambient), (c) => `s-${c.id}`, (c) => this._speechEl(c)) : nothing}${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c))}</div>`)}
             <div class="head" style="left:${t * this._pps}px"></div>
           </div>
         </div>
@@ -817,6 +839,7 @@ const ICON = {
   redo: svg('M11.5 8c2.65 0 5.05 1 6.9 2.6L22 7v9h-9l3.62-3.62A7.95 7.95 0 0 0 3.6 16l-2.36-.78A10.5 10.5 0 0 1 11.5 8z'),
   left: svg('M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z'),
   right: svg('M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z'),
+  wave: svg('M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z'),
   split: svg('M11 2h2v20h-2zM4 7h5v10H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm11 0h5a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-5z'),
 };
 const TRACK_ICON = {
