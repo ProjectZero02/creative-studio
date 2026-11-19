@@ -112,3 +112,29 @@ def test_retry_transient_does_not_retry_a_bad_request():
         story_service._retry_transient(bad, "voiceover")
     assert len(calls) == 1
 
+
+def test_a_frame_later_in_a_take_keeps_the_set_of_its_first_frame():
+    from services.story_models import Scene, frame_prompt
+
+    scenes = [
+        Scene(
+            visual="Wide shot.",
+            narration="a",
+            spoken=True,
+            duration=4,
+            frame_uri="gs://b/f1.png",
+        ),
+        Scene(
+            visual="Closer.",
+            narration="b",
+            spoken=True,
+            duration=4,
+            frame_uri="gs://b/f2.png",
+        ),
+    ]
+    story = Story(scenes=scenes, continuous_takes=True)
+    assert story_service.take_frame(story, 1) == "gs://b/f1.png"
+    assert story_service.take_frame(story, 0) == ""
+    keep = frame_prompt(story, scenes[1], True, same_take=True)
+    assert "same continuous shot" in keep and "any screen" in keep
+    assert "same continuous shot" not in frame_prompt(story, scenes[1], True)

@@ -47,6 +47,7 @@ from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
     LANGUAGES,
+    SAME_TAKE_REF,
     STYLE_BY_ID,
     Scene,
     StitchPlan,
@@ -1242,6 +1243,14 @@ def frame_parts(*uris: str) -> list[dict]:
     return [{"type": "image", "uri": u, "mime_type": _image_mime(u)} for u in uris if u]
 
 
+def take_frame(story: Story, index: int) -> str:
+    """The storyboard frame that opens the continuous take scene `index`
+    continues ("" when the scene starts its own shot)."""
+    if not story.continues_take(index):
+        return ""
+    return story.scenes[story.take_start(index)].frame_uri
+
+
 def take_turn_frames(story: Story, index: int, first: bool) -> tuple[str, str]:
     """(start, end) storyboard frames sent with scene `index`'s turn of its
     take. The take's first clip only opens on its frame when it was made
@@ -1445,13 +1454,23 @@ class VertexStoryBackend:
         set_refs = frame_refs(story_set, scene)
         refs = [r.uri for r in set_refs]
         labels = [r.label for r in set_refs]
+        same_take = bool(reference_uri) and reference_uri == take_frame(story, index)
         if reference_uri and reference_uri not in refs:
             refs.append(reference_uri)
             if labels:
-                labels.append("the look, palette and art style of the film")
+                labels.append(
+                    SAME_TAKE_REF
+                    if same_take
+                    else "the look, palette and art style of the film"
+                )
         uris, _, _, _, _ = generate_image_from_prompt_and_images(
             prompt=frame_prompt(
-                story, scene, bool(reference_uri), story_set, labels or None
+                story,
+                scene,
+                bool(reference_uri),
+                story_set,
+                labels or None,
+                same_take=same_take,
             ),
             images=refs,
             aspect_ratio=story.aspect_ratio,

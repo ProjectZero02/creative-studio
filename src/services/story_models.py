@@ -1232,16 +1232,23 @@ def _cast_text(story: Story, scene: Scene, story_set) -> str:
     return story.character
 
 
+# How frame_prompt names the take's first frame among the reference images.
+SAME_TAKE_REF = "the earlier frame of this take"
+
+
 def frame_prompt(
     story: Story,
     scene: Scene,
     has_reference: bool,
     story_set=None,
     ref_labels: list[str] | None = None,
+    same_take: bool = False,
 ) -> str:
     """Image prompt for a storyboard frame. With a set, the scene's cast,
     place and props are described and each reference image is named
-    (`ref_labels`, in image order)."""
+    (`ref_labels`, in image order). ``same_take``: the reference is the
+    first frame of the continuous take this scene belongs to, so the room
+    must stay as it is there."""
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     keep = (
         " Keep the same main character, wardrobe, palette and art style as the "
@@ -1249,6 +1256,16 @@ def frame_prompt(
         if has_reference and not ref_labels
         else ""
     )
+    if has_reference and same_take:
+        # One continuous take is filmed in one place without a cut, so the
+        # set cannot change between its frames (seen: a slide went blank and
+        # an audience appeared, and the take followed the frames).
+        keep += (
+            f" This frame is later in the same continuous shot as {SAME_TAKE_REF}: "
+            "keep the same room, set and props, exactly what is shown on any "
+            "screen or board, and the same people in the same places. Only "
+            "the camera framing and the action change, as described."
+        )
     cast = scene_cast(story_set, scene)
     who = _cast_text(story, scene, story_set)
     character = f" {'On screen' if cast else 'Main character'}: {who}." if who else ""
