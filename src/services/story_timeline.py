@@ -54,6 +54,17 @@ AMBIENT_GAIN = 0.25
 MASTER_LUFS = -14.0
 # Short fade on every audio cut so joins never click.
 EDGE_FADE = 0.04
+# A little longer on a clip's own sound, so a level change at a cut is
+# eased rather than a jump.
+JOIN_FADE = 0.08
+# Frozen picture at a clip's start or end (models often hold the first or
+# last frame): shorter holds are left, longer ones trimmed up to the cap,
+# and a clip always keeps at least MIN_KEEP seconds.
+STILL_MIN = 0.25
+STILL_CAP = 1.0
+MIN_KEEP = 2.0
+FREEZE_NOISE = "-60dB"
+SILENCE_NOISE = "-35dB"
 
 
 def new_clip_id() -> str:
@@ -314,6 +325,7 @@ def build_timeline(
     voice_uris: dict[int, str] | None = None,
     voice_lengths: dict[int, float] | None = None,
     clip_gains: dict[int, float] | None = None,
+    clip_stills: dict[int, tuple[float, float]] | None = None,
     music_uri: str = "",
     music_length: float = 0.0,
 ) -> dict:
@@ -323,7 +335,8 @@ def build_timeline(
     keeps its own sound at ``clip_gains[index]``: spoken scenes levelled to
     ``DIALOGUE_LUFS``, narrated scenes to ``AMBIENT_LUFS`` as a bed under the
     narrator (see :func:`clip_gain`). Narration starts just after each
-    crossfade.
+    crossfade. ``clip_stills[index]`` is the frozen (head, tail) of a clip
+    (see :func:`clip_edges`), trimmed off so cuts land on movement.
     """
     tl = empty_timeline(width, height, fps)
     vids, voices = track(tl, "video")["clips"], track(tl, "voice")["clips"]
@@ -332,8 +345,11 @@ def build_timeline(
         i = seg.index
         cin = float(getattr(seg, "trim_head", 0.0))
         src_len = (clip_lengths or {}).get(i, cin + float(seg.duration))
+        head, tail = (clip_stills or {}).get(i, (0.0, 0.0))
+        cin = max(cin, min(head, src_len - MIN_KEEP))
+        usable = max(cin + 0.1, src_len - tail)
         # The measured clip may be a little shorter than planned.
-        length = max(0.1, min(float(seg.duration), src_len - cin))
+        length = max(0.1, min(float(seg.duration), usable - cin))
         default = 1.0 if seg.spoken else AMBIENT_GAIN
         gain = (clip_gains or {}).get(i, default)
         clip = {
@@ -411,6 +427,88 @@ def probe(path: str) -> tuple[float, bool]:
     m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", err)
     secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
     return secs, bool(re.search(r"Stream #.*Audio:", err))
+
+
+def _spans(err: str, key: str, length: float) -> list[tuple[float, float]]:
+    """(start, end) spans from freezedetect / silencedetect log lines; a span
+    still open at the end of the file ends at ``length``."""
+    import re
+
+    marks = re.findall(rf"{key}_(start|end): (-?[\d.]+)", err)
+    spans, begin = [], None
+    for kind, value in marks:
+        if kind == "start":
+            begin = float(value)
+        elif begin is not None:
+            spans.append((begin, float(value)))
+            begin = None
+    if begin is not None:
+        spans.append((begin, length))
+    return spans
+
+
+def _edges(spans: list[tuple[float, float]], length: float) -> tuple[float, float]:
+    # Back-to-back spans (the detector restarts after a keyframe) are one hold.
+    merged: list[list[float]] = []
+    for s, e in sorted(spans):
+        if merged and s - merged[-1][1] <= 0.1:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    spans = [(s, e) for s, e in merged]
+    head = next((e for s, e in spans if s <= 0.05), 0.0)
+    tail = next((length - s for s, e in spans if e >= length - 0.05), 0.0)
+    return max(0.0, head), max(0.0, tail)
+
+
+def clip_edges(path: str, spoken: bool = False) -> tuple[float, float, float]:
+    """(picture length, still head, still tail) of a video clip, in seconds.
+
+    The length is the video stream's own (the file can run longer when its
+    sound does, which left black frames at the cuts). The still head and tail
+    are frozen picture at either end, worth trimming; for a spoken clip only
+    where it is also silent, so no line is cut. (0, 0, 0) when unreadable.
+    """
+    import re
+
+    cmd = [
+        _ffmpeg(),
+        "-hide_banner",
+        "-i",
+        path,
+        "-map",
+        "0:v:0",
+        "-vf",
+        f"freezedetect=n={FREEZE_NOISE}:d={STILL_MIN}",
+    ]
+    if spoken:
+        cmd += [
+            "-map",
+            "0:a:0",
+            "-af",
+            f"silencedetect=n={SILENCE_NOISE}:d={STILL_MIN}",
+        ]
+    err = subprocess.run(
+        [*cmd, "-f", "null", "-"], capture_output=True, text=True, check=False
+    ).stderr
+    frames = re.findall(r"frame=\s*(\d+)", err)
+    fps = re.search(r"Stream #.*Video:.*?([\d.]+) fps", err)
+    if not frames or not fps or float(fps.group(1)) <= 0:
+        return 0.0, 0.0, 0.0
+    length = int(frames[-1]) / float(fps.group(1))
+    frozen = _spans(err, "lavfi.freezedetect.freeze", length)
+    head, tail = _edges(frozen, length)
+    if head >= length - 0.1:
+        return round(length, 3), 0.0, 0.0  # a still shot by design: keep it whole
+    if spoken:
+        quiet = _edges(_spans(err, "silence", length), length)
+        head, tail = min(head, quiet[0]), min(tail, quiet[1])
+    head, tail = (min(STILL_CAP, x) if x >= STILL_MIN else 0.0 for x in (head, tail))
+    spare = length - MIN_KEEP
+    if head + tail > spare:
+        scale = max(0.0, spare) / (head + tail)
+        head, tail = head * scale, tail * scale
+    return round(length, 3), round(head, 3), round(tail, 3)
 
 
 def measure_lufs(path: str) -> float | None:
@@ -499,7 +597,11 @@ def render_args(
         chain = (
             f"[{idx}:v]trim=start={c['in']:.3f}:end={c['out']:.3f},setpts=PTS-STARTPTS,"
             f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,"
-            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuva420p"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+            # A clip whose picture ends early holds its last frame instead of
+            # showing the black canvas, and never runs past its slot.
+            f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=end={length:.3f},"
+            "format=yuva420p"
         )
         if c.get("fade_in"):
             chain += f",fade=t=in:st=0:d={c['fade_in']:.3f}:alpha=1"
@@ -512,7 +614,9 @@ def render_args(
         last = f"o{k}"
         if c.get("gain", 0) > 0 and has_audio.get(c["src"]):
             bucket = beds if c.get("ambient") else dialogue
-            bucket.append(_audio_chain(filters, idx, c, length, f"d{k}"))
+            bucket.append(
+                _audio_chain(filters, idx, c, length, f"d{k}", fade=JOIN_FADE)
+            )
     for k, c in enumerate(track(timeline, "text")["clips"]):
         png = overlays.get(c["id"])
         if not png:
