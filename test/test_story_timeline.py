@@ -511,3 +511,120 @@ def test_rerender_with_a_remade_clip_starts_that_scene_fresh():
     T.track(new, "video")["clips"][1]["src"] = "c1-new"
     out = T.keep_edits(new, json.dumps(T.normalize(old)))
     assert T.track(out, "video")["clips"][1]["out"] == 6
+
+
+# -- clean cuts: picture length, frozen edges, no black frames ------------------
+
+
+def _still_then_moving(path, still=1.0, moving=3.0, sound=None):
+    """A clip whose first ``still`` seconds are one frozen frame, then
+    movement; its sound runs ``sound`` seconds (longer than the picture)."""
+    sound = sound or still + moving
+    subprocess.run(
+        [
+            _ff(),
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f=440:d={sound}",
+            "-filter_complex",
+            f"color=c=red:s=320x180:r=12:d={still}[a];"
+            f"testsrc=s=320x180:r=12:d={moving}[b];[a][b]concat=n=2:v=1:a=0[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "0:a",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            str(path),
+        ],
+        check=True,
+    )
+    return str(path)
+
+
+def test_clip_edges_measures_the_picture_and_its_frozen_head(tmp_path):
+    path = _still_then_moving(tmp_path / "c.mp4", still=1.0, moving=3.0, sound=5.0)
+    assert T.probe(path)[0] == pytest.approx(5.0, abs=0.1)  # the file, with its sound
+    length, head, tail = T.clip_edges(path)
+    assert length == pytest.approx(4.0, abs=0.1)  # the picture alone
+    assert head == pytest.approx(1.0, abs=0.15) and tail == 0
+
+
+def test_clip_edges_never_cuts_into_speech(tmp_path):
+    # Spoken clip: sound plays over the frozen head, so it stays.
+    path = _still_then_moving(tmp_path / "c.mp4", still=1.0, moving=3.0)
+    assert T.clip_edges(path, spoken=True)[1] == 0
+
+
+def test_clip_edges_caps_the_trim_and_keeps_enough_clip(tmp_path):
+    path = _still_then_moving(tmp_path / "c.mp4", still=2.0, moving=1.5)
+    length, head, _ = T.clip_edges(path)
+    assert head <= T.STILL_CAP and length - head >= T.MIN_KEEP - 0.01
+
+
+def test_build_timeline_trims_frozen_heads_and_tails():
+    plan = build_stitch_plan(_scenes(2), 0.0)
+    tl = T.build_timeline(
+        Story(scenes=_scenes(2)),
+        plan,
+        width=1280,
+        height=720,
+        clip_lengths={0: 4.0, 1: 4.0},
+        clip_stills={0: (0.8, 0.0), 1: (0.0, 0.5)},
+    )
+    first, second = T.track(tl, "video")["clips"]
+    assert (first["in"], first["out"]) == (0.8, 4.0)
+    assert (second["in"], second["out"]) == (0.0, 3.5)
+
+
+def test_a_clip_shorter_than_its_slot_holds_its_last_frame(tmp_path):
+    # Picture 1.5 s, sound 2.5 s: the slot asks for 2.5 s of picture. The
+    # gap must hold the last frame, not show the black canvas.
+    a = _still_then_moving(tmp_path / "a.mp4", still=0.5, moving=1.0, sound=2.5)
+    b = _clip(tmp_path / "b.mp4", "blue", 660)
+    tl = T.empty_timeline(320, 180, 12)
+    T.track(tl, "video")["clips"] = [
+        {"src": a, "in": 0, "out": 2.5, "gain": 1},
+        {"src": b, "in": 0, "out": 2, "gain": 1},
+    ]
+    out = T.render_timeline(
+        tl, lambda u, p: shutil.copyfile(u, p), str(tmp_path / "f.mp4")
+    )
+    err = subprocess.run(
+        [
+            _ff(),
+            "-hide_banner",
+            "-i",
+            out,
+            "-vf",
+            "blackdetect=d=0.04:pix_th=0.05",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stderr
+    assert "black_start" not in err
+
+
+def test_clip_sound_eases_in_and_out_at_cuts():
+    tl = T.empty_timeline(320, 180, 12)
+    T.track(tl, "video")["clips"] = [
+        {"src": "a", "in": 0, "out": 2, "gain": 1.0},
+        {"src": "b", "in": 0, "out": 2, "gain": 1.0},
+    ]
+    args = T.render_args(
+        T.normalize(tl), {"a": "a", "b": "b"}, {"a": True, "b": True}, {}, "o.mp4"
+    )
+    graph = args[args.index("-filter_complex") + 1]
+    assert f"afade=t=in:st=0:d={T.JOIN_FADE:.3f}" in graph
+    assert "tpad=stop_mode=clone" in graph
