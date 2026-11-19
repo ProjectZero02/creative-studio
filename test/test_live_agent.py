@@ -180,8 +180,11 @@ def test_tool_declarations_mark_job_tools_non_blocking():
         "show_job",
         "open_page",
         "download",
+        "read_page",
+        "fill_fields",
         "end_call",
     }
+    assert decls["fill_fields"].behavior == types.Behavior.BLOCKING
     for name in (
         "generate_image",
         "edit_image",
@@ -709,7 +712,7 @@ def test_websocket_live_flow_with_fake_session(monkeypatch):
 
     app = FastAPI()
     app.include_router(live_router.router)
-    with TestClient(app).websocket_connect("/api/live") as ws:
+    with TestClient(app).websocket_connect("/api/live?agent=act") as ws:
         ws.send_json(
             {"type": "audio", "data": base64.b64encode(b"\x00\x00" * 160).decode()}
         )
@@ -738,6 +741,8 @@ def test_websocket_live_flow_with_fake_session(monkeypatch):
     assert session.audio_chunks >= 1
     config = fake_live.configs[0]
     assert config.system_instruction and config.tools
+    names = {f.name for f in config.tools[0].function_declarations}
+    assert "generate_image" in names and "fill_fields" in names
 
 
 def test_video_jobs_open_video_studio_on_omni():
@@ -777,3 +782,88 @@ def test_navigation_handler_only_allows_known_routes_and_params(monkeypatch):
     fire({"action": "navigate", "page": "https://evil.example"})
     fire({"action": "navigate", "page": "/home"})
     assert calls == [("/veo", {"veo_model": "3.1-fast"}), ("/home", None)]
+
+
+# ---------------------------------------------------------------------------
+# Fill only: the agent fills the page in front of the presenter
+# ---------------------------------------------------------------------------
+
+
+def test_fill_only_calls_cannot_start_jobs():
+    from services.live_agent import FILL, FILL_TOOLS, system_prompt
+
+    names = {d.name for d in tool_declarations(True, FILL)[0].function_declarations}
+    assert names == FILL_TOOLS
+    assert "generate_image" not in names and "read_page" in names
+    act = {d.name for d in tool_declarations(True)[0].function_declarations}
+    assert {"generate_image", "read_page", "fill_fields"} <= act
+    assert "never start a generation" in system_prompt(FILL)
+    assert "fill_fields" in system_prompt("act")
+
+    browser = FakeBrowser()
+    call = LiveCall(OWNER, browser.send, LiveJobs(instant_runners()), FILL)
+    browser.call = call
+    out = run(call.run_tool("generate_image", {"prompt": "a fox"}))
+    assert "Fill only" in out["error"] and call.jobs.list(OWNER) == []
+
+
+class FormBrowser(FakeBrowser):
+    """Answers read_page and fill like the page bridge does."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = answers
+
+    async def send(self, message):
+        self.sent.append(message)
+        if message.get("type") == "ui":
+            answer = self.answers.get(message["action"], {"ok": True})
+            asyncio.get_running_loop().call_soon(self.call.ui_result, message["id"], answer)
+
+
+def test_read_page_and_fill_fields_round_trip_through_the_browser():
+    from services.live_agent import FILL
+
+    fields = [{"name": "prompt", "label": "Prompt", "kind": "text", "value": ""}]
+    browser = FormBrowser(
+        {
+            "read_page": {"ok": True, "page": "/veo", "fields": fields},
+            "fill": {"ok": True, "changed": {"prompt": "A fox"}, "refused": {"x": "no"}},
+        }
+    )
+    call = LiveCall(OWNER, browser.send, LiveJobs(instant_runners()), FILL)
+    browser.call = call
+    assert run(call.run_tool("read_page", {})) == {"page": "/veo", "fields": fields}
+    out = run(call.run_tool("fill_fields", {"values_json": '{"prompt": "A fox", "x": 1}'}))
+    assert out == {"changed": {"prompt": "A fox"}, "refused": {"x": "no"}}
+    fill = [m for m in browser.sent if m.get("action") == "fill"][0]
+    assert fill["args"] == {"fields": {"prompt": "A fox", "x": 1}}
+    assert "JSON object" in run(call.run_tool("fill_fields", {"values_json": "[1]"}))["error"]
+    assert "at least one" in run(call.run_tool("fill_fields", {}))["error"]
+
+
+def test_read_page_on_a_page_without_fields_says_so():
+    from services.live_agent import FILL
+
+    browser = FormBrowser({"read_page": {"ok": True, "page": "/home", "fields": []}})
+    call = LiveCall(OWNER, browser.send, LiveJobs(instant_runners()), FILL)
+    browser.call = call
+    assert "Open a studio" in run(call.run_tool("read_page", {}))["note"]
+
+
+def test_the_page_bridge_fills_through_mesop_state(monkeypatch):
+    import json
+
+    import components.live_agent.live_agent as bridge
+    from state.veo_state import PageState as VideoState
+
+    made = {}
+    monkeypatch.setattr(bridge.me, "state", lambda cls: made.setdefault(cls, cls()))
+    event = type("E", (), {"value": {"action": "fill", "id": "f1", "page": "veo",
+                                     "fields": {"prompt": "A fox", "resolution": "8K"}}})()
+    list(bridge.on_live_action(event))
+    last = json.loads(made[bridge.LiveFormState].last_fill_json)
+    assert last["id"] == "f1" and last["changed"] == {"prompt": "A fox"}
+    assert "resolution" in last["refused"]
+    assert made[VideoState].veo_prompt_input == "A fox"
+    assert json.loads(bridge.page_fields_json("veo"))[0]["value"] == "A fox"
