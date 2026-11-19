@@ -1176,3 +1176,108 @@ def test_render_records_the_set_version(mock_backend, stores):
     finally:
         story_service.set_backend(mock_backend)
     assert story_db.get(story.id, OWNER).set_version == st.version
+
+
+def _lookalike_backend(monkeypatch, set_store, replies):
+    """A Vertex backend whose Omni calls answer from `replies` in order (an
+    exception is raised); returns (backend, story, sent requests)."""
+    import models.omni as omni
+
+    from common.error_handling import GenerationError
+
+    st = set_store.save(_full_set(), OWNER)
+    story = Story(owner=OWNER, set_id=st.id, aspect_ratio="16:9", scenes=[_set_scene()])
+    sent = []
+    seq = iter(replies)
+
+    def fake_omni(request):
+        sent.append(request)
+        reply = next(seq)
+        if isinstance(reply, str):
+            raise GenerationError(reply)
+        return reply
+
+    monkeypatch.setattr(omni, "generate_omni_video", fake_omni)
+    monkeypatch.setattr(story_service, "clip_reference_cap", lambda: 6)
+    monkeypatch.setattr(
+        story_service,
+        "apply_caps",
+        lambda n, d: SimpleNamespace(duration=6, resolution="720p"),
+    )
+    monkeypatch.setattr(
+        "config.omni_models.clamp_duration", lambda model, s: s, raising=False
+    )
+    backend = story_service.VertexStoryBackend.__new__(story_service.VertexStoryBackend)
+    backend.cfg = SimpleNamespace(
+        STORY_VIDEO_MODEL="gemini-omni-1.2-flash", STORY_VIDEO_RESOLUTION="720p"
+    )
+    backend._interactions = {}
+    return backend, story, sent
+
+
+REFUSED = (
+    "Omni generation failed: Error code: 400 - The input could not be submitted. "
+    "This input contains certain prominent individuals that violate Google's "
+    "Responsible AI practices."
+)
+
+
+def test_lookalike_frame_is_retried_from_the_set(monkeypatch, set_store):
+    backend, story, sent = _lookalike_backend(
+        monkeypatch, set_store, [REFUSED, ("gs://b/clip.mp4", "int-2")]
+    )
+    uri = backend.generate_clip(story, 0, story.scenes[0].frame_uri)
+    assert uri == "gs://b/clip.mp4" and backend.interaction_of(uri) == "int-2"
+    first, retry = sent
+    assert first.omni_mode == "i2v"
+    assert retry.omni_mode == "ref2v"
+    uris = [r.gcs_uri for r in retry.r2v_references]
+    assert story.scenes[0].frame_uri not in uris and "gs://b/a_face.png" in uris
+    assert "Ana's face" in retry.prompt
+
+
+def test_lookalike_refused_twice_says_what_to_do(monkeypatch, set_store):
+    from common.error_handling import GenerationError
+
+    backend, story, _ = _lookalike_backend(monkeypatch, set_store, [REFUSED, REFUSED])
+    with pytest.raises(GenerationError) as err:
+        backend.generate_clip(story, 0, story.scenes[0].frame_uri)
+    assert str(err.value) == story_service.LOOKALIKE_MESSAGE
+    assert story_jobs.friendly_error(err.value) == story_service.LOOKALIKE_MESSAGE
+
+
+def test_other_omni_errors_are_not_retried(monkeypatch, set_store):
+    from common.error_handling import GenerationError
+
+    backend, story, sent = _lookalike_backend(monkeypatch, set_store, ["quota"])
+    with pytest.raises(GenerationError, match="quota"):
+        backend.generate_clip(story, 0, story.scenes[0].frame_uri)
+    assert len(sent) == 1
+
+
+def test_people_are_invented_as_ordinary_and_face_their_audience():
+    from services.story_models import (
+        NOT_FAMOUS,
+        SPEAKER_FACING,
+        clip_prompt,
+        frame_prompt,
+        scenario_prompt,
+        set_build_prompt,
+    )
+
+    story = Story(
+        idea="A man speaks to an audience about a product.",
+        speech_mode="on_camera",
+        character="Sam, 40s",
+        scenes=[Scene(narration="Hello all.", spoken=True, visual="Sam on stage.")],
+    )
+    scen = scenario_prompt(story)
+    assert "facing the camera" not in scen
+    assert SPEAKER_FACING in scen and NOT_FAMOUS in scen
+    assert NOT_FAMOUS in set_build_prompt(story)
+    frame = frame_prompt(story, story.scenes[0], False)
+    assert SPEAKER_FACING in frame and NOT_FAMOUS in frame
+    clip = clip_prompt(story, story.scenes[0])
+    assert "looks at the camera" not in clip and "the audience in the scene" in clip
+    char = _full_set().characters[0]
+    assert NOT_FAMOUS in story_sets.image_prompt(_full_set(), char, "front")
