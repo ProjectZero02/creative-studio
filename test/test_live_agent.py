@@ -176,6 +176,8 @@ def test_tool_declarations_mark_job_tools_non_blocking():
         "render_film",
         "story_status",
         "open_story",
+        "plan_film_fix",
+        "run_film_fix",
         "list_jobs",
         "show_job",
         "open_page",
@@ -867,3 +869,75 @@ def test_the_page_bridge_fills_through_mesop_state(monkeypatch):
     assert "resolution" in last["refused"]
     assert made[VideoState].veo_prompt_input == "A fox"
     assert json.loads(bridge.page_fields_json("veo"))[0]["value"] == "A fox"
+
+
+def test_screen_changes_become_a_quiet_note_for_the_model():
+    from services.live_agent import FILL
+
+    call = LiveCall(OWNER, FakeBrowser().send, LiveJobs(instant_runners()), FILL)
+    call.screen = "/veo"
+    assert call.screen_changed("/veo", []) == ""  # the agent's own move
+    note = call.screen_changed(
+        "/lyria", [{"name": "prompt", "value": "x" * 80}, {"name": "tracks", "value": 2}]
+    )
+    assert call.screen == "/lyria" and "/lyria" in note
+    assert "prompt='" + "x" * 60 + "...'" in note and "tracks=2" in note
+    assert "Do not reply" in note
+    assert "no fields" in call.screen_changed("/home", None)
+
+
+def test_voice_fix_plans_first_then_runs_on_yes(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from services import live_story, story_fix
+
+    story = SimpleNamespace(id="s1", final_uri="gs://b/film.mp4", title="Fox", idea="A fox")
+    plan = story_fix.FixPlan(
+        summary="Brighter scene 2",
+        changes=[story_fix.FixChange(action="repaint_frame", summary="Repaint scene 2", scene=1)],
+    )
+    asked = {}
+
+    def fake_plan(story_id, owner, request, scene, seconds):
+        asked.update(story_id=story_id, request=request, seconds=seconds)
+        return plan
+
+    monkeypatch.setattr(live_story, "resolve_story", lambda owner, ref, latest: story)
+    monkeypatch.setattr(story_fix, "plan_fix", fake_plan)
+    monkeypatch.setattr(story_fix, "story_set_of", lambda s: None)
+    monkeypatch.setattr(
+        story_fix, "plan_steps", lambda s, p, ss=None: [story_fix.FixStep("Repaint scene 2", True)]
+    )
+    seen = {}
+
+    def story_runner(job):
+        seen.update(job.params)
+        return RunResult(gcs_uri="", display_url="", mime_type="")
+
+    browser = FakeBrowser()
+    call = LiveCall(OWNER, browser.send, LiveJobs({"story": story_runner}))
+    browser.call = call
+
+    assert "Plan the fix first" in run(call.run_tool("run_film_fix", {}))["error"]
+    out = run(call.run_tool("plan_film_fix", {"request": "too dark", "at_seconds": "12.5"}))
+    assert asked == {"story_id": "s1", "request": "too dark", "seconds": 12.5}
+    assert out["changes"] == ["Repaint scene 2"] and out["costs_money"] is True
+    assert "navigate" in browser.actions()
+
+    deferred = run(call.run_tool("run_film_fix", {}))
+    assert isinstance(deferred, Deferred)
+    wait_done(call)
+    assert seen["story_action"] == "fix"
+    assert json.loads(seen["fix_plan_json"])["summary"] == "Brighter scene 2"
+    assert call.pending_fix is None
+
+    story.final_uri = ""
+    assert "not rendered" in run(call.run_tool("plan_film_fix", {"request": "x"}))["error"]
+
+
+def test_fill_only_calls_have_no_fix_tools():
+    from services.live_agent import FILL
+
+    names = {d.name for d in tool_declarations(True, FILL)[0].function_declarations}
+    assert "plan_film_fix" not in names and "run_film_fix" not in names

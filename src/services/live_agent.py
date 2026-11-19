@@ -37,6 +37,7 @@ without a model.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable
@@ -47,6 +48,8 @@ from google.genai import types
 
 from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE, VOICES as VOICE_NAMES
 from services.live_jobs import DONE, FAILED, JobLimitError, LiveJob, LiveJobs
+
+logger = logging.getLogger(__name__)
 
 Send = Callable[[dict], Awaitable[None]]
 
@@ -92,6 +95,7 @@ How you work:
 - Use generate_image, edit_image, generate_video, generate_music, generate_voice and the Story Studio tools (create_story, continue_story, render_film, story_status, open_story). Job tools run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
 - Write rich prompts for the models from what the presenter says: subject, style, lighting, camera, or genre, instruments, mood. Keep their words and intent.
 - Jobs have short names: "image 1", "video 1", "music 1", "voice 1", "story 1". "The image" or "the story" means the latest one unless the presenter says otherwise. Say which one you act on.
+- When the presenter dislikes something in a finished film, call plan_film_fix with their words (and the moment in seconds if they name one). Say in one sentence what will change and whether it costs a new render, then wait for a yes before run_film_fix.
 - For Story Studio, move one step at a time with continue_story (approve scenario, build set, paint storyboard, then render film) so the presenter stays in control.
 - edit_image needs a finished image. If it is still rendering, say so and offer to edit it once it is ready.
 - Use show_job to bring a result on screen, open_page to move between studios, download to save a file to the presenter's computer, and end_call when they say goodbye.
@@ -303,6 +307,22 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                     job,
                 ),
                 fd(
+                    "plan_film_fix",
+                    "Plan a Fix with AI for a finished Story Studio film: Gemini watches the film and decides what to change (lines, pictures, the set, music, cuts, or the story). Changes nothing yet.",
+                    {
+                        "request": ("STRING", "What the presenter dislikes or wants changed, in their words."),
+                        "at_seconds": ("STRING", "Optional moment of the film in seconds, e.g. 12.5."),
+                        "story": ("STRING", "Optional story title or id. Empty means the latest story."),
+                    },
+                    ["request"],
+                    screen,
+                ),
+                fd(
+                    "run_film_fix",
+                    "Run the fix planned by plan_film_fix, after the presenter said yes. Runs in the background.",
+                    behavior=job,
+                ),
+                fd(
                     "story_status",
                     "Check a Story Studio film's current step, active job progress, and whether a film is ready.",
                     {
@@ -439,6 +459,8 @@ class LiveCall:
         self.send = send
         self.jobs = jobs
         self.mode = mode if mode in MODES else FILL
+        # (story_id, FixPlan) waiting for the presenter's yes.
+        self.pending_fix = None
         self.screen = "/home"
         self.ended = False
         self.latest_story_id = ""
@@ -559,7 +581,7 @@ class LiveCall:
         return await self._start("voice", script, params=params)
 
     async def _start_story(
-        self, story, action: str, step: str, prompt: str
+        self, story, action: str, step: str, prompt: str, extra: dict | None = None
     ) -> Deferred:
         self.latest_story_id = story.id
         job = self.jobs.submit(
@@ -571,6 +593,7 @@ class LiveCall:
                 "story_action": action,
                 "story_step": step,
                 "story_title": story.title,
+                **(extra or {}),
             },
         )
         await self.ui(
@@ -678,6 +701,68 @@ class LiveCall:
             "url": f"/story?id={found.id}&step={target}",
             "ok": bool(result.get("ok")),
         }
+
+    async def _tool_plan_film_fix(
+        self, request: str, at_seconds: str = "", story: str = ""
+    ) -> dict:
+        from services import live_story, story_fix
+
+        found = live_story.resolve_story(self.owner, story, self.latest_story_id)
+        if found is None:
+            return {"error": "There is no story yet."}
+        if not found.final_uri:
+            return {"error": "This film is not rendered yet, so there is nothing to fix."}
+        self.latest_story_id = found.id
+        try:
+            seconds = float(at_seconds) if str(at_seconds).strip() else None
+        except ValueError:
+            seconds = None
+        try:
+            plan = await asyncio.to_thread(
+                story_fix.plan_fix, found.id, self.owner, request, -1, seconds
+            )
+        except Exception as exc:  # a planner failure is said, not raised
+            logger.exception("Live: fix planning failed")
+            return {"error": f"Could not plan the fix: {str(exc)[:160]}"}
+        if not plan.runnable:
+            self.pending_fix = None
+            return {"question": plan.question or "What exactly should change?"}
+        story_set = story_fix.story_set_of(found)
+        steps = story_fix.plan_steps(found, plan, story_set)
+        self.pending_fix = (found.id, plan)
+        await self.ui(
+            "navigate",
+            {"page": "/story", "params": {"id": found.id, "step": "video"}},
+            wait=False,
+        )
+        self.screen = "/story"
+        return {
+            "summary": plan.summary,
+            "changes": [c.summary for c in plan.changes if c.summary],
+            "steps": [s.label for s in steps],
+            "costs_money": any(s.paid for s in steps),
+            "note": "Tell the presenter what will change and ask before run_film_fix.",
+        }
+
+    async def _tool_run_film_fix(self) -> dict | Deferred:
+        import json
+
+        if self.pending_fix is None:
+            return {"error": "Plan the fix first with plan_film_fix."}
+        story_id, plan = self.pending_fix
+        self.pending_fix = None
+        from services import live_story
+
+        found = live_story.resolve_story(self.owner, story_id, story_id)
+        if found is None:
+            return {"error": "The story is gone."}
+        return await self._start_story(
+            found,
+            "fix",
+            "video",
+            f"fix: {plan.summary[:60] or 'film'}",
+            {"fix_plan_json": json.dumps(plan.to_dict())},
+        )
 
     async def _tool_list_jobs(self) -> dict:
         return {
