@@ -19,8 +19,15 @@ Two kinds of tools:
   background job in :mod:`services.live_jobs` and return nothing yet. The
   Live API keeps talking (``NON_BLOCKING``); the result is sent when the job
   finishes with ``WHEN_IDLE``, so the agent mentions it at the next pause.
-* **Screen tools** (open_page, show_job, download, end_call) run in the
-  browser: the server sends ``{"type": "ui", ...}`` and waits for the result.
+* **Screen tools** (open_page, show_job, download, end_call, read_page,
+  fill_fields) run in the browser: the server sends ``{"type": "ui", ...}``
+  and waits for the result.
+
+A call runs in one of two modes. **Fill only** (the default) only reads and
+fills the fields of the page in front of the presenter (see
+:mod:`services.page_forms`): the job tools are not even declared, so the
+model cannot start a generation; the presenter presses Generate. **Do it for
+me** adds the job tools, which run generations in the background.
 
 ``LiveCall`` holds no Gemini session itself; the router wires it to one, and
 the offline :class:`ScriptedAgent` drives it the same way for tests and demos
@@ -42,6 +49,19 @@ from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE, VOICES as VOICE_NAMES
 from services.live_jobs import DONE, FAILED, JobLimitError, LiveJob, LiveJobs
 
 Send = Callable[[dict], Awaitable[None]]
+
+FILL, ACT = "fill", "act"
+MODES = (FILL, ACT)
+# Tools a Fill only call has: read and fill the page, move around, look.
+FILL_TOOLS = {
+    "read_page",
+    "fill_fields",
+    "open_page",
+    "list_jobs",
+    "show_job",
+    "download",
+    "end_call",
+}
 
 PAGES = {
     "home": "/home",
@@ -79,6 +99,32 @@ How you work:
 - Only do media tasks in this app. Politely decline anything else."""
 
 
+FILL_PROMPT = """You are the voice of GenMedia Studio, a creative studio built on Google's media models. You help the presenter fill in the page in front of them while an audience watches the screen.
+
+How you talk:
+- Short and warm. One sentence per reply, two at most. Never read out URLs, ids or long prompts.
+
+How you work:
+- You only fill in fields. You never start a generation and never say you did: the presenter presses Generate (or Plan the fix) themselves.
+- Call read_page first to see the page's fields, their current values and the allowed choices. Call it again after the presenter changes page.
+- Call fill_fields with only the fields to change, as a JSON object of field name to value. Use the choices exactly as listed.
+- Write rich prompts from what the presenter says: subject, style, lighting, camera, or genre, instruments, mood. Keep their words and intent.
+- After filling, say in a few words what you set, e.g. "Done: a tall fox video, eight seconds, with sound. Press Generate when ready."
+- If a field was refused, say why in plain words and use an allowed value.
+- If the fields they want are on another studio, use open_page, then read_page.
+- In Story Studio, the Create step has the film's idea and settings, and the Edit step has the Fix with AI box (fix_request, and fix_time for a moment of the film).
+- When asked to generate, fill the fields and tell them it is ready for them to press Generate.
+- Only do media tasks in this app. Politely decline anything else."""
+
+PAGE_NOTE = """
+- You can also fill the page in front of the presenter: read_page shows its fields and fill_fields sets them, without pressing Generate. Use this when they ask you to fill or set up the page rather than to make something."""
+
+
+def system_prompt(mode: str = FILL) -> str:
+    """Instructions for a call in `mode` (FILL or ACT)."""
+    return FILL_PROMPT if mode == FILL else SYSTEM_PROMPT + PAGE_NOTE
+
+
 def _resolve_voice(voice: str) -> str:
     """Match a requested voice name case-insensitively, or fall back to default."""
     target = (voice or "").strip().lower()
@@ -99,7 +145,16 @@ def _schema(props: dict[str, tuple[str, str]], required: list[str]) -> types.Sch
     )
 
 
-def tool_declarations(async_tools: bool = True) -> list[types.Tool]:
+def tool_declarations(async_tools: bool = True, mode: str = ACT) -> list[types.Tool]:
+    """The call's tools. A Fill only call gets FILL_TOOLS alone."""
+    tools = _all_declarations(async_tools)
+    if mode == FILL:
+        keep = [f for f in tools[0].function_declarations if f.name in FILL_TOOLS]
+        return [types.Tool(function_declarations=keep)]
+    return tools
+
+
+def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
     job = types.Behavior.NON_BLOCKING if async_tools else None
     screen = types.Behavior.BLOCKING if async_tools else None
 
@@ -310,6 +365,23 @@ def tool_declarations(async_tools: bool = True) -> list[types.Tool]:
                     screen,
                 ),
                 fd(
+                    "read_page",
+                    "Read the fields of the page on screen: each field's name, label, kind, current value and allowed choices or range.",
+                    behavior=screen,
+                ),
+                fd(
+                    "fill_fields",
+                    "Fill fields of the page on screen, as if the presenter typed them. Never presses Generate. Returns what changed and what was refused.",
+                    {
+                        "values_json": (
+                            "STRING",
+                            'A JSON object of field name to new value, e.g. {"prompt": "A red fox in snow", "aspect_ratio": "9:16", "sound": true}.',
+                        )
+                    },
+                    ["values_json"],
+                    screen,
+                ),
+                fd(
                     "end_call",
                     "Hang up when the presenter says goodbye.",
                     behavior=screen,
@@ -362,10 +434,11 @@ class Deferred:
 class LiveCall:
     """Tool handling for one call. ``send`` pushes JSON to the browser."""
 
-    def __init__(self, owner: str, send: Send, jobs: LiveJobs):
+    def __init__(self, owner: str, send: Send, jobs: LiveJobs, mode: str = ACT):
         self.owner = owner
         self.send = send
         self.jobs = jobs
+        self.mode = mode if mode in MODES else FILL
         self.screen = "/home"
         self.ended = False
         self.latest_story_id = ""
@@ -401,6 +474,11 @@ class LiveCall:
         handler = getattr(self, f"_tool_{name}", None)
         if handler is None:
             return {"error": f"Unknown tool {name}."}
+        if self.mode == FILL and name not in FILL_TOOLS:
+            return {
+                "error": "Fill only mode: fill the fields with fill_fields instead. "
+                "The presenter presses Generate."
+            }
         try:
             return await handler(**{k: v for k, v in args.items() if v is not None})
         except TypeError as exc:
@@ -638,6 +716,37 @@ class LiveCall:
             return {"error": f"{found.handle} is not finished yet."}
         result = await self.ui("download", {"job": found.public()})
         return {"downloaded": found.handle, **result}
+
+    async def _tool_read_page(self) -> dict:
+        result = await self.ui("read_page", {})
+        if not result.get("ok", True):
+            return {"error": result.get("error") or "Could not read the page."}
+        fields = result.get("fields") or []
+        out = {"page": result.get("page") or self.screen, "fields": fields}
+        if not fields:
+            out["note"] = "This page has no fields you can fill. Open a studio first."
+        return out
+
+    async def _tool_fill_fields(self, values_json: str = "", **values) -> dict:
+        import json
+
+        if values_json:
+            try:
+                parsed = json.loads(values_json)
+            except ValueError:
+                return {"error": "values_json must be a JSON object."}
+            if not isinstance(parsed, dict):
+                return {"error": "values_json must be a JSON object."}
+            values = {**values, **parsed}
+        if not values:
+            return {"error": "Name at least one field to fill."}
+        result = await self.ui("fill", {"fields": values})
+        if not result.get("ok", True):
+            return {"error": result.get("error") or "Could not fill the page."}
+        return {
+            "changed": result.get("changed") or {},
+            "refused": result.get("refused") or {},
+        }
 
     async def _tool_end_call(self) -> dict:
         self.ended = True
