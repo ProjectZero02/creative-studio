@@ -2843,6 +2843,7 @@ def edit_view(story: Story) -> None:
                 aspect=story.aspect_ratio,
                 busy=busy,
                 on_change=on_timeline_change,
+                on_point=on_fix_point,
                 key="ss-timeline",
             )
         if story.final_alt_uri:
@@ -2881,21 +2882,37 @@ def parse_film_time(text: str) -> float | None:
     return value if value >= 0 else None
 
 
-def _fix_changes(story: Story, plan: story_fix.FixPlan) -> list[tuple[str, str, str]]:
-    """(field, now, after) rows of a scene fix, for the preview."""
-    if plan.scene < 0 or plan.scene >= len(story.scenes):
-        return []
-    cur = story.scenes[plan.scene]
+def _fix_changes(
+    story: Story, plan: story_fix.FixPlan, story_set=None
+) -> list[tuple[str, str, str]]:
+    """(what, now, after) rows of a fix's text changes, for the preview."""
+    say = {True: "Spoken on camera", False: "Narrated over the picture"}
     rows = []
-    if plan.narration is not None:
-        rows.append(("Line", cur.narration or "(none)", plan.narration))
-    if plan.visual is not None:
-        rows.append(("Picture", cur.visual, plan.visual))
-    if plan.camera is not None:
-        rows.append(("Camera", cur.camera, plan.camera))
-    if plan.spoken is not None:
-        say = {True: "Spoken on camera", False: "Narrated over the picture"}
-        rows.append(("Speech", say[cur.spoken], say[plan.spoken]))
+    for c in plan.changes:
+        if c.action in ("rewrite_scene", "repaint_frame") and 0 <= c.scene < len(story.scenes):
+            cur = story.scenes[c.scene]
+            n = f"Scene {c.scene + 1}"
+            if c.narration is not None:
+                rows.append((f"{n} line", cur.narration or "(none)", c.narration))
+            if c.visual is not None:
+                rows.append((f"{n} picture", cur.visual, c.visual))
+            if c.camera is not None:
+                rows.append((f"{n} camera", cur.camera, c.camera))
+            if c.spoken is not None:
+                rows.append((f"{n} speech", say[cur.spoken], say[c.spoken]))
+        elif c.action == "set":
+            asset = story_set.asset(c.asset_kind, c.asset_id) if story_set else None
+            for label, new, old in (
+                ("look", c.description, getattr(asset, "description", "")),
+                ("outfit", c.outfit, getattr(asset, "outfit", "")),
+                ("voice", c.voice, asset.voice.description if c.asset_kind == "character" and asset else ""),
+            ):
+                if new is not None:
+                    rows.append((f"{c.asset_name} {label}", old or "(none)", new))
+        elif c.action == "music":
+            rows.append(("Music", story.music_prompt or "(default)", c.music_prompt))
+        elif c.action == "scenario":
+            rows.append(("Story", story.idea, c.direction))
     return rows
 
 
@@ -2910,11 +2927,22 @@ def fix_panel(story: Story, busy: bool) -> None:
             with me.box():
                 me.text("Fix with AI", style=me.Style(font_size=16, font_weight=600))
                 me.text(
-                    "Say what you don't like. Gemini picks the smallest change and "
-                    "shows it to you before anything is generated.",
+                    "Say what you don't like. Gemini watches the film, picks the "
+                    "smallest change (a cut, a scene, a person or place, or the "
+                    "whole story) and shows it to you before anything is generated. "
+                    "Pause the film to point at a moment.",
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
+                )
+            if story_fix.can_undo(story):
+                me.button(
+                    "Undo last fix",
+                    type="stroked",
+                    disabled=locked,
+                    on_click=on_undo_fix,
+                    key="ss-fix-undo",
+                    style=me.Style(margin=me.Margin(left="auto"), flex_shrink=0),
                 )
         me.textarea(
             label="What should change?",
@@ -2984,14 +3012,15 @@ def _fix_preview(story: Story, plan: story_fix.FixPlan, busy: bool) -> None:
                 plan.reason,
                 style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )
-        for name, now, after in _fix_changes(story, plan):
+        story_set = story_fix.story_set_of(story)
+        for name, now, after in _fix_changes(story, plan, story_set):
             with me.box(classes="ss-fix-change"):
                 me.text(name, style=me.Style(font_size=13, font_weight=600))
                 with me.box(classes="ss-fix-old"):
                     me.text(now)
                 with me.box(classes="ss-fix-new"):
                     me.text(after)
-        steps = story_fix.plan_steps(story, plan)
+        steps = story_fix.plan_steps(story, plan, story_set)
         with me.box(classes="ss-fix-steps"):
             for step in steps:
                 with me.box(classes="ss-fix-step"):
@@ -3068,6 +3097,28 @@ def on_plan_fix(e: me.ClickEvent):
 
 def on_cancel_fix(e: me.ClickEvent):
     me.state(StoryState).fix_plan_json = ""
+
+
+def on_fix_point(e: me.WebEvent):
+    """The viewer paused the film: point the fix at that moment."""
+    try:
+        seconds = float((e.value or {}).get("time"))
+    except (TypeError, ValueError):
+        return
+    if seconds >= 0:
+        me.state(StoryState).fix_time = f"{seconds:g}"
+
+
+def on_undo_fix(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    try:
+        story = story_fix.undo_fix(s.story_id, _owner())
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    s.fix_plan_json = ""
+    _set_story(story)
 
 
 def on_apply_fix(e: me.ClickEvent):

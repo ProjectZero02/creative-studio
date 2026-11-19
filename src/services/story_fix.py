@@ -811,7 +811,8 @@ def with_take(story: Story, index: int) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _story_set(story: Story):
+def story_set_of(story: Story):
+    """The story's set (owner-only), or None."""
     if not story.set_id:
         return None
     from services.story_sets import get_set_store
@@ -841,7 +842,7 @@ def plan_fix(
     if not request.strip():
         raise ScenarioError("Describe what you would like to change.")
     story = _load(story_id, owner)
-    story_set = _story_set(story)
+    story_set = story_set_of(story)
     backend = get_backend()
     last: Exception | None = None
     for _ in range(2):  # one automatic retry on malformed JSON
@@ -873,7 +874,7 @@ def _apply_edits(story_id: str, owner: str, plan: FixPlan) -> str:
     music and scene changes. What they make stale is cleared, so the jobs
     that follow make exactly that again."""
     story = _load(story_id, owner)
-    story_set = _story_set(story)
+    story_set = story_set_of(story)
     fx = effects(story, plan, story_set)
     before = snapshot(story, story_set)
 
@@ -1001,7 +1002,7 @@ def start_fix(story_id: str, owner: str, plan: FixPlan):
             story.scenes
         ):
             raise ScenarioError("That scene is gone. Describe the fix again.")
-    story_set = _story_set(story)
+    story_set = story_set_of(story)
     steps = _follow_ups(story, plan, story_set)
     job = story_jobs._new_job(owner, story_id, "fix", {"plan": plan.to_dict()})
     first = plan.changes[0].scene if len(plan.changes) == 1 else -1
@@ -1021,7 +1022,7 @@ def resume_fix(story_id: str, owner: str):
     still missing (set pictures, frames, then the film)."""
     story = _load(story_id, owner)
     steps: list[tuple[str, list]] = []
-    story_set = _story_set(story)
+    story_set = story_set_of(story)
     if story_set is not None:
         from services.story_jobs import _set_work
 

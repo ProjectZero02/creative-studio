@@ -574,3 +574,40 @@ def test_undo_puts_the_previous_film_back(backend):
     assert back.timeline_json == s.timeline_json and not story_fix.can_undo(back)
     with pytest.raises(ScenarioError):
         story_fix.undo_fix(s.id, OWNER)
+
+
+def test_pausing_the_film_points_the_fix_and_undo_restores(backend, monkeypatch):
+    import pages.story_studio as page
+    from state.story_state import StoryState
+
+    st = StoryState()
+    monkeypatch.setattr(page.me, "state", lambda cls: st)
+    monkeypatch.setattr(page, "_owner", lambda: OWNER)
+    page.on_fix_point(type("E", (), {"value": {"time": 7.5}})())
+    assert st.fix_time == "7.5"
+    page.on_fix_point(type("E", (), {"value": {"time": "soon"}})())
+    assert st.fix_time == "7.5"
+
+    s = _saved()
+    st.story_id = s.id
+    _run(story_fix.start_fix(s.id, OWNER, _one(action="rewrite_scene", scene=0, camera="orbit")))
+    page.on_undo_fix(None)
+    assert not st.error
+    assert story_store.get_store().get(s.id, OWNER).final_uri == "local://film.mp4"
+
+
+def test_preview_rows_cover_every_change():
+    import pages.story_studio as page
+
+    story, story_set = _set_story()
+    plan = FixPlan(
+        changes=[
+            FixChange(action="rewrite_scene", scene=0, narration="Hello."),
+            FixChange(action="set", asset_kind="character", asset_id="lead",
+                      asset_name="Maya", outfit="red suit"),
+            FixChange(action="music", music_prompt="Piano."),
+        ]
+    )
+    rows = page._fix_changes(story, plan, story_set)
+    assert [r[0] for r in rows] == ["Scene 1 line", "Maya outfit", "Music"]
+    assert rows[1] == ("Maya outfit", "(none)", "red suit")
