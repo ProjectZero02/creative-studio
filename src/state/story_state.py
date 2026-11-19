@@ -60,6 +60,13 @@ class StoryState:
     notice: str = ""
     confirm_delete_id: str = ""
     edit_music_open: bool = False  # Edit step: music row shown
+    # Edit step "Fix with AI": the request, the scene and film time it points
+    # at (-1 / "" = none), and Gemini's plan waiting for confirmation.
+    fix_request: str = ""
+    fix_scene: int = -1
+    fix_time: str = ""
+    fix_plan_json: str = ""
+    fix_planning: bool = False
 
     # Sets. `set_json` is the Set step's working copy of the story's set:
     # text edits stay here (set_dirty) until Update set / Regenerate saves them.
