@@ -44,6 +44,12 @@ KIND_LABELS = {
 }
 
 
+def _label(text: str, cls: str) -> None:
+    """Text with a CSS class (me.text itself takes no classes)."""
+    with me.box(classes=cls):
+        me.text(text)
+
+
 @me.stateclass
 class UsageState:
     days: int = 7
@@ -107,8 +113,8 @@ def page():
 
 def _stat(label: str, value: str) -> None:
     with me.box(classes="gm-usage-stat"):
-        me.text(label, classes="gm-usage-stat-label")
-        me.text(value, classes="gm-usage-stat-value")
+        _label(label, "gm-usage-stat-label")
+        _label(value, "gm-usage-stat-value")
 
 
 def _day_label(day: str) -> str:
@@ -154,6 +160,7 @@ def usage_content():
                         me.ButtonToggleButton(label="Last 7 days", value="7"),
                         me.ButtonToggleButton(label="Last 30 days", value="30"),
                     ],
+                    hide_selection_indicator=True,
                     on_change=on_days,
                     key="usage-days",
                 )
@@ -164,6 +171,7 @@ def usage_content():
                             me.ButtonToggleButton(label="Me", value="me"),
                             me.ButtonToggleButton(label="Everyone", value="everyone"),
                         ],
+                        hide_selection_indicator=True,
                         on_change=on_scope,
                         key="usage-scope",
                     )
@@ -182,27 +190,27 @@ def usage_content():
                 _stat("Generations", f"{total['calls']:,}")
                 _stat("Failed", f"{total['failed']:,}")
             with me.box(classes="gm-usage-card"):
-                me.text("Estimated cost per day", classes="gm-usage-title")
+                _label("Estimated cost per day", "gm-usage-title")
                 _chart(summary["days"])
             with me.box(classes="gm-usage-card"):
-                me.text("Per model", classes="gm-usage-title")
+                _label("Per model", "gm-usage-title")
                 with me.box(classes="gm-usage-table"):
                     for col in ("Model", "Type", "Calls", "Failed", "Est. cost"):
-                        me.text(col, classes="gm-usage-th")
+                        _label(col, "gm-usage-th")
                     for row in summary["models"]:
-                        me.text(row["model"], classes="gm-usage-model")
+                        _label(row["model"], "gm-usage-model")
                         me.text(KIND_LABELS.get(row["kind"], row["kind"].title()))
                         me.text(f"{row['calls']:,}")
                         me.text(f"{row['failed']:,}")
                         me.text(money(row["cost"]))
             if s.everyone and summary["owners"]:
                 with me.box(classes="gm-usage-card"):
-                    me.text("Per person", classes="gm-usage-title")
+                    _label("Per person", "gm-usage-title")
                     with me.box(classes="gm-usage-table gm-usage-table-3"):
                         for col in ("Person", "Calls", "Est. cost"):
-                            me.text(col, classes="gm-usage-th")
+                            _label(col, "gm-usage-th")
                         for row in summary["owners"]:
-                            me.text(row["owner"], classes="gm-usage-model")
+                            _label(row["owner"], "gm-usage-model")
                             me.text(f"{row['calls']:,}")
                             me.text(money(row["cost"]))
             me.text(

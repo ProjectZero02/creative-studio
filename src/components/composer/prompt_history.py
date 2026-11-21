@@ -29,6 +29,12 @@ from common import prompt_history
 from state.state import AppState
 
 
+def _label(text: str, cls: str) -> None:
+    """Text with a CSS class (me.text itself takes no classes)."""
+    with me.box(classes=cls):
+        me.text(text)
+
+
 @me.stateclass
 class PromptHistoryState:
     open_for: str = ""  # page key whose list is open
@@ -82,8 +88,7 @@ def history_panel(page: str) -> None:
             me.text("Recent prompts")
             me.button("Close", on_click=on_history_close, key=f"hist-close-{page}")
         if not prompts:
-            me.text("Nothing yet. Your prompts show up here after you generate.",
-                    classes="gm-history-empty")
+            _label("Nothing yet. Your prompts show up here after you generate.", "gm-history-empty")
         for i, text in enumerate(prompts):
             with me.box(
                 classes="gm-history-item",
