@@ -448,3 +448,7 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
   .ss-fix-row .mat-mdc-button-base { width: 100%; }
   .ss-fix-change { grid-template-columns: 1fr; }
 }
+
+/* "Use my brand kit" on the Create step (common/brand_kit.py). */
+.ss-brand-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.ss-brand-row a { font-size: 14px; }

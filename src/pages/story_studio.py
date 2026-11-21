@@ -26,6 +26,7 @@ import json
 import mesop as me
 
 from common.analytics import get_logger
+from common import brand_kit
 from common.notify import notify
 from common.prompt_prefill import is_new_prompt_arrival, read_prompt_param
 from components.dialog import dialog, dialog_actions
@@ -293,6 +294,7 @@ def _load_form(story: Story) -> None:
     s.character = story.character
     s.language = story.language
     s.speech_mode = story.speech_mode
+    s.use_brand = bool(story.brand_json)
     s.scene_count = story.scene_count
     s.duration = story.duration
     s.aspect_ratio = story.aspect_ratio
@@ -942,6 +944,14 @@ def create_step(story: Story | None) -> None:
                 SPEECH_HINTS.get(s.speech_mode, ""),
                 style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )
+            with me.box(classes="ss-brand-row"):
+                me.slide_toggle(
+                    "Use my brand",
+                    checked=s.use_brand,
+                    on_change=on_use_brand,
+                    key="ss-use-brand",
+                )
+                me.link(text="Edit my brand", url="/brand", open_in_new_tab=True)
             story_style_picker(
                 options=[
                     {
@@ -1169,6 +1179,23 @@ def on_language(e: me.SelectSelectionChangeEvent):
     _pin("language")
 
 
+def _brand_json(owner: str) -> str:
+    kit = brand_kit.load(owner)
+    return "" if brand_kit.is_empty(kit) else json.dumps(kit)
+
+
+def on_use_brand(e: me.SlideToggleChangeEvent):  # pylint: disable=unused-argument
+    s = me.state(StoryState)
+    if s.use_brand:
+        s.use_brand = False
+        return
+    if not _brand_json(_owner()):
+        s.error = "Your brand is empty. Set it up on the My brand page first."
+        return
+    s.error = ""
+    s.use_brand = True
+
+
 def on_speech_mode(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).speech_mode = e.value
     _pin("speech_mode")
@@ -1234,6 +1261,7 @@ def on_generate_scenario(e: me.ClickEvent):
         story.character = s.character.strip()
         story.language = s.language
         story.speech_mode = s.speech_mode
+        story.brand_json = _brand_json(owner) if s.use_brand else ""
         story.scene_count = caps.scene_count
         story.duration = caps.duration
         story.aspect_ratio = s.aspect_ratio

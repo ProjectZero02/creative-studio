@@ -37,6 +37,7 @@ class StoryState:
     character: str = ""
     language: str = "English"
     speech_mode: str = "auto"
+    use_brand: bool = False  # copy the brand kit onto the story at Create
     scene_count: int = 4
     duration: int = 6
     aspect_ratio: str = "16:9"
