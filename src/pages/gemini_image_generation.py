@@ -19,7 +19,7 @@ from dataclasses import field
 
 import mesop as me
 
-from common import prompt_settings
+from common import brand_kit, prompt_settings
 from common.analytics import analytics_logger, log_ui_click
 from common.i18n import t, tr
 from common.metadata import MediaItem, add_media_item_to_firestore
@@ -239,6 +239,8 @@ class PageState:
     settings_notice: str = ""
     settings_undo_json: str = ""
     settings_ignored_json: str = ""
+    # Add the brand kit's colours and tone to the prompt (common/brand_kit.py).
+    apply_brand: bool = False
 
 
 on_aspect_ratio_change = get_on_aspect_ratio_change(PageState)
@@ -411,6 +413,19 @@ def _image_chips(state: "PageState", model_config):
             ),
             on_change=on_chip_image_count,
         )
+    _brand_chip(state)
+
+
+def _brand_chip(state: "PageState") -> None:
+    chip_menu(
+        key="img_chip_brand",
+        label="Apply my brand: colours and tone",
+        icon="style",
+        kind="toggle",
+        value="Brand",
+        checked=state.apply_brand,
+        on_change=on_chip_image_brand,
+    )
 
 
 def _image_add_menu():
@@ -801,6 +816,19 @@ def on_chip_image_aspect(e: me.WebEvent):
 def on_chip_image_size(e: me.WebEvent):
     """Image size chip."""
     me.state(PageState).image_size = change_value(e)
+    yield
+
+
+def on_chip_image_brand(e: me.WebEvent):
+    state = me.state(PageState)
+    on = change_value(e) == "true"
+    if on and brand_kit.is_empty(brand_kit.load(me.state(AppState).user_email)):
+        state.apply_brand = False
+        state.settings_notice = "Your brand is empty. Set it up on the My brand page first."
+        state.settings_undo_json = ""
+        yield
+        return
+    state.apply_brand = on
     yield
 
 
@@ -1285,13 +1313,19 @@ def _generate_and_save(
     state.suggested_transformations = []
 
     state.num_images_to_generate = _requested_count(state)
+    typed_prompt = base_prompt
+    shown_prompt = shown_prompt or base_prompt
+    if state.apply_brand:
+        brand_line = brand_kit.prompt_line(brand_kit.load(app_state.user_email))
+        if brand_line:
+            base_prompt = f"{base_prompt}\n\n{brand_line}"
     final_prompt = _get_appended_prompt(base_prompt, state.num_images_to_generate)
     model_config_for_run = get_gemini_image_model_config(state.selected_model)
     # final_prompt = base_prompt
 
     state.is_generating = True
     state.generation_complete = False
-    state.last_prompt = base_prompt
+    state.last_prompt = typed_prompt  # a retry adds the brand line again
     state.last_input_uris = list(input_gcs_uris)
     progress_start(state, _image_stages(bool(input_gcs_uris)))
     yield
