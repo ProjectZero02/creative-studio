@@ -1285,6 +1285,10 @@ def retry(job_id: str, owner: str) -> Job | None:
         return start_export(job.story_id, owner)
     if job.kind == "music":
         return start_music(job.story_id, owner)
+    if job.kind == "fix":
+        from services.story_fix import resume_fix
+
+        return resume_fix(job.story_id, owner)
     if job.kind == "set":
         tt = job.params.get("task_targets") or {}
         failed = [

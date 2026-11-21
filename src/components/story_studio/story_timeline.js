@@ -61,6 +61,7 @@ class StoryTimeline extends LitElement {
     aspect: { type: String },
     busy: { type: Boolean },
     changeEvent: { type: String },
+    pointEvent: { type: String },
     _tl: { state: true },
     _playing: { state: true },
     _sel: { state: true },
@@ -202,6 +203,8 @@ class StoryTimeline extends LitElement {
     this.aspect = '16:9';
     this.busy = false;
     this.changeEvent = '';
+    this.pointEvent = '';
+    this._pointed = -1;
     this._tl = null;
     this._seen = '';
     this._t = 0;
@@ -382,7 +385,20 @@ class StoryTimeline extends LitElement {
   }
 
   // ---------- playback ----------
-  _togglePlay() { this._playing ? this._pause() : this._play(); }
+  _togglePlay() {
+    if (this._playing) { this._pause(); this._point(); } else this._play();
+  }
+  /** Tells the page where the viewer stopped (debounced), so "Fix with AI"
+   * can point at that moment. Not sent while playing or at the very start. */
+  _point() {
+    clearTimeout(this._pointTimer);
+    this._pointTimer = setTimeout(() => {
+      const t = Math.round(this._t * 10) / 10;
+      if (this._playing || !this.pointEvent || t <= 0 || t === this._pointed) return;
+      this._pointed = t;
+      this.dispatchEvent(new MesopEvent(this.pointEvent, { time: t }));
+    }, 400);
+  }
   _play() {
     if (!this._tl) return;
     if (this._t >= this._duration() - 0.05) this._t = 0;
@@ -430,6 +446,7 @@ class StoryTimeline extends LitElement {
     if (this._playing) this._clock = { wall: performance.now(), t: this._t };
     this._sync(this._playing, true);
     this.requestUpdate();
+    if (!this._playing) this._point();
   }
   /** Moves the playhead and time readout without a full re-render. */
   _paint() {

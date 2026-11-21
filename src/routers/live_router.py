@@ -47,10 +47,12 @@ from common.verified_identity import (
 )
 from config.default import Default
 from services.live_agent import (
-    SYSTEM_PROMPT,
+    ACT,
+    FILL,
     Deferred,
     LiveCall,
     ScriptedAgent,
+    system_prompt,
     tool_declarations,
 )
 from services.live_jobs import DONE, FAILED, get_live_jobs
@@ -90,20 +92,34 @@ def _genai_client():
     return client, Default.LIVE_MODEL
 
 
-def _live_config(resume_handle: str | None) -> types.LiveConnectConfig:
-    return types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                    voice_name=Default.LIVE_VOICE
+def _live_config(
+    resume_handle: str | None, mode: str = FILL, avatar: str = ""
+) -> types.LiveConnectConfig:
+    # Voice only (the default), or a Live Avatar: the model then answers with
+    # a fragmented MP4 (H.264 video with the AAC voice inside) and the avatar
+    # brings its own voice.
+    if avatar:
+        output = {
+            "response_modalities": ["VIDEO"],
+            "avatar_config": types.AvatarConfig(avatar_name=avatar),
+        }
+    else:
+        output = {
+            "response_modalities": ["AUDIO"],
+            "speech_config": types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=Default.LIVE_VOICE
+                    )
                 )
-            )
-        ),
+            ),
+        }
+    return types.LiveConnectConfig(
+        **output,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
-        system_instruction=SYSTEM_PROMPT,
-        tools=tool_declarations(Default.LIVE_ASYNC_TOOLS),
+        system_instruction=system_prompt(mode),
+        tools=tool_declarations(Default.LIVE_ASYNC_TOOLS, mode),
         session_resumption=types.SessionResumptionConfig(handle=resume_handle),
         context_window_compression=types.ContextWindowCompressionConfig(
             sliding_window=types.SlidingWindow()
@@ -114,14 +130,16 @@ def _live_config(resume_handle: str | None) -> types.LiveConnectConfig:
 class _Bridge:
     """One browser call."""
 
-    def __init__(self, ws: WebSocket, owner: str):
+    def __init__(self, ws: WebSocket, owner: str, mode: str = FILL, avatar: str = ""):
         self.ws = ws
         self.owner = owner
+        self.mode = mode
+        self.avatar = avatar
         self.jobs = get_live_jobs()
         self._send_lock = asyncio.Lock()
         self.inbox: asyncio.Queue = asyncio.Queue()
         self.job_events: asyncio.Queue = asyncio.Queue()
-        self.call = LiveCall(owner, self.send, self.jobs)
+        self.call = LiveCall(owner, self.send, self.jobs, mode)
         self.closed = False
         self.session = None
         self.session_gen = 0
@@ -161,7 +179,10 @@ class _Bridge:
                         str(message.get("id")), message.get("result") or {}
                     )
                 elif kind == "screen":
-                    self.call.screen = str(message.get("path") or "/home")[:200]
+                    path = str(message.get("path") or "/home")[:200]
+                    note = self.call.screen_changed(path, message.get("fields"))
+                    if note:
+                        await self.inbox.put({"type": "context", "text": note})
                 elif kind == "hangup":
                     break
                 else:
@@ -226,6 +247,9 @@ class _Bridge:
                 {"type": "transcript", "who": "agent", "text": text, "final": True}
             )
 
+        # The typed agent only knows the job tools (also after a failed Live
+        # connection in a Fill only call).
+        self.call.mode = ACT
         self.agent = ScriptedAgent(self.call, say)
         await self.status("offline", reason)
         await say(
@@ -253,7 +277,7 @@ class _Bridge:
             reconnect = False
             await self.status("connecting")
             async with client.aio.live.connect(
-                model=model, config=_live_config(self.resume_handle)
+                model=model, config=_live_config(self.resume_handle, self.mode, self.avatar)
             ) as session:
                 self.session = session
                 await self.status("live")
@@ -298,6 +322,14 @@ class _Bridge:
                     )
             elif kind == "audio_end":
                 await session.send_realtime_input(audio_stream_end=True)
+            elif kind == "context":
+                # What the presenter now sees. No reply: the turn stays open.
+                await session.send_client_content(
+                    turns=types.Content(
+                        role="user", parts=[types.Part(text=message["text"])]
+                    ),
+                    turn_complete=False,
+                )
             elif kind == "text":
                 text = str(message.get("text") or "")[:2000]
                 await self.send(
@@ -332,9 +364,10 @@ class _Bridge:
                 if content.model_turn:
                     for part in content.model_turn.parts or []:
                         if part.inline_data and part.inline_data.data:
+                            mime = part.inline_data.mime_type or ""
                             await self.send(
                                 {
-                                    "type": "audio",
+                                    "type": "video" if mime.startswith("video/") else "audio",
                                     "data": base64.b64encode(
                                         part.inline_data.data
                                     ).decode(),
@@ -397,16 +430,20 @@ async def live_socket(ws: WebSocket):
         await ws.close(code=CLOSE_FORBIDDEN)
         return
     await ws.accept()
-    bridge = _Bridge(ws, owner)
+    wants_offline = ws.query_params.get("mode") == "offline"
+    # The typed offline agent only knows the job tools, so it always acts.
+    offline = Default.LIVE_AGENT_OFFLINE or wants_offline
+    mode = ACT if offline or ws.query_params.get("agent") == ACT else FILL
+    avatar = Default.LIVE_AVATAR if ws.query_params.get("avatar") == "1" else ""
+    bridge = _Bridge(ws, owner, mode, avatar)
     unsubscribe = bridge.jobs.subscribe(owner, bridge.on_job)
     reader = asyncio.create_task(bridge.read_browser())
     jobs_task = asyncio.create_task(bridge.pump_jobs())
     # Show jobs from earlier calls in the tray.
     for job in bridge.jobs.list(owner):
         await bridge.send({"type": "job", "job": job.public()})
-    wants_offline = ws.query_params.get("mode") == "offline"
     try:
-        if Default.LIVE_AGENT_OFFLINE or wants_offline:
+        if offline:
             await bridge.run_offline()
         else:
             try:

@@ -23,7 +23,12 @@
  * the speaker (24 kHz PCM16), and the overlays: call dock, captions, job tray,
  * result viewer and the on-screen cursor.
  *
- * <live-agent-bridge> (one per page) turns "go to page" into a Mesop event.
+ * <live-agent-bridge> (one per page) turns "go to page" and "fill these
+ * fields" into Mesop events, and carries the page's fillable fields.
+ *
+ * A call is "Fill only" (the agent only fills the page; the presenter presses
+ * Generate) or "Do it for me" (the agent also runs jobs). The dock's switch
+ * picks it; the choice is remembered in this browser.
  * <live-call-button> is the big call button on the home page.
  */
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
@@ -43,7 +48,67 @@ const DEFAULT_STRINGS = {
   download: 'Download',
   close: 'Close',
   nomic: 'No microphone access. You can still type.',
+  avatarNoSupport: 'This browser cannot play the avatar, so the call is voice only.',
+  fill: 'Fill only',
+  act: 'Do it for me',
+  modeHint: 'Fill only: the agent fills the page and you press Generate. Do it for me: it also runs the jobs.',
 };
+const MODE_KEY = 'gm-live-mode';
+// What the dock says while the agent runs a tool (instead of "Listening").
+const TOOL_ACTIVITY = {
+  read_page: 'Reading the page',
+  fill_fields: 'Filling the page',
+  open_page: 'Opening the page',
+  plan_film_fix: 'Watching the film',
+  run_film_fix: 'Starting the fix',
+};
+const CAPTION_FADE_MS = 8000;
+// Live Avatar: the model streams one fragmented MP4 (H.264 Constrained
+// Baseline 704x1280 with the AAC voice inside), played through MediaSource.
+const AVATAR_KEY = 'gm-live-avatar';
+const AVATAR_MIME = 'video/mp4; codecs="avc1.42C01F, mp4a.40.2"';
+function savedAvatar() {
+  try { return localStorage.getItem(AVATAR_KEY) === '1'; } catch (e) { return false; }
+}
+function avatarSupported() {
+  return typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(AVATAR_MIME);
+}
+// The avatar's MediaSource, run in a dedicated worker (see _openAvatar).
+const AVATAR_WORKER = `
+let ms = null, sb = null;
+const queue = [];
+function feed() {
+  if (!sb || sb.updating) return;
+  const b = sb.buffered;
+  if (b.length) {
+    const end = b.end(b.length - 1);
+    postMessage({ end });
+    if (end - b.start(0) > 40) { sb.remove(b.start(0), end - 20); return; }
+  }
+  const next = queue.shift();
+  if (next) {
+    try { sb.appendBuffer(next); } catch (e) { postMessage({ error: String(e) }); }
+  }
+}
+onmessage = (e) => {
+  if (e.data.mime) {
+    ms = new MediaSource();
+    ms.addEventListener('sourceopen', () => {
+      sb = ms.addSourceBuffer(e.data.mime);
+      sb.mode = 'sequence';
+      sb.addEventListener('updateend', feed);
+      feed();
+    });
+    postMessage({ handle: ms.handle }, [ms.handle]);
+  } else if (e.data.bytes) {
+    queue.push(e.data.bytes);
+    feed();
+  }
+};
+`;
+function savedMode() {
+  try { return localStorage.getItem(MODE_KEY) === 'act' ? 'act' : 'fill'; } catch (e) { return 'fill'; }
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isAudioJob = (job) =>
@@ -105,12 +170,20 @@ const STYLE = `
 .gml-dot[data-s="live"] { background: #1e8e3e; box-shadow: 0 0 0 0 rgba(30,142,62,.5); animation: gml-pulse 1.6s infinite; }
 .gml-dot[data-s="speaking"] { background: var(--sys-primary, #1a5fd8); }
 .gml-dot[data-s="offline"] { background: #f29900; }
+.gml-dot[data-s="working"] { background: var(--sys-primary, #1a5fd8); animation: gml-pulse 1s infinite; }
+.gml-cap.faded { opacity: 0; }
+.gml-avatar { position: fixed; bottom: 84px; inset-inline-start: 16px; width: min(200px, 34vw); aspect-ratio: 704 / 1280;
+  border-radius: 18px; overflow: hidden; pointer-events: auto; animation: gml-in .35s ease-out; }
+.gml-avatar video { width: 100%; height: 100%; object-fit: cover; display: block; background: #0b0d12; }
 @keyframes gml-pulse { 0% { box-shadow: 0 0 0 0 rgba(30,142,62,.45); } 70% { box-shadow: 0 0 0 8px rgba(30,142,62,0); } 100% { box-shadow: 0 0 0 0 rgba(30,142,62,0); } }
 .gml-level { width: 46px; height: 6px; border-radius: 3px; background: var(--sys-surface-container-high, #e6e8ec); overflow: hidden; flex: none; }
 .gml-level i { display: block; height: 100%; width: 0; background: #1e8e3e; transition: width .08s; }
 .gml-input { flex: 1; min-width: 0; height: 40px; border-radius: 20px; padding: 0 14px; font: inherit; font-size: 14px;
   border: 1px solid var(--sys-outline-variant, #c4c6cf); background: var(--sys-surface-container-lowest, #fff);
   color: inherit; pointer-events: auto; }
+.gml-mode { height: 32px; padding: 0 12px; flex: none; font-size: 13px; font-weight: 500;
+  background: var(--sys-surface-container-high, #e6e8ec); color: inherit; white-space: nowrap; }
+.gml-mode[data-mode="act"] { background: var(--sys-primary-container, #d8e2ff); color: var(--sys-on-primary-container, #001a41); }
 .gml-icon { width: 40px; height: 40px; flex: none; background: var(--sys-surface-container-high, #e6e8ec); color: inherit; }
 .gml-icon[aria-pressed="true"] { background: #fce8e6; color: #c5221f; }
 .gml-hang { width: 40px; height: 40px; flex: none; background: #d93025; color: #fff; }
@@ -241,6 +314,14 @@ class GmLive {
         this.input.value = '';
       }
     });
+    this.mode = savedMode();
+    this.modeBtn = this._el('button', 'gml-btn gml-mode', this.dock);
+    this.modeBtn.type = 'button';
+    this.modeBtn.addEventListener('click', () => this.setMode(this.mode === 'fill' ? 'act' : 'fill'));
+    this.avatar = savedAvatar();
+    this.avatarBtn = this._el('button', 'gml-btn gml-mode', this.dock);
+    this.avatarBtn.type = 'button';
+    this.avatarBtn.addEventListener('click', () => this.setAvatar(!this.avatar));
     this.muteBtn = this._el('button', 'gml-btn gml-icon', this.dock, ICON_MIC);
     this.muteBtn.addEventListener('click', () => this.toggleMute());
     this.hangBtn = this._el('button', 'gml-btn gml-hang', this.dock, ICON_HANG);
@@ -264,6 +345,8 @@ class GmLive {
     const s = this.strings;
     this.launch.querySelector('span').textContent = s.talk;
     this.launch.setAttribute('aria-label', s.talk);
+    this._renderMode();
+    this._renderAvatar();
     this.input.placeholder = s.type;
     this.input.setAttribute('aria-label', s.type);
     this.hangBtn.setAttribute('aria-label', s.hangup);
@@ -295,6 +378,7 @@ class GmLive {
     else if (this.state === 'live') {
       label = speaking ? s.speaking : s.listening;
       if (speaking) key = 'speaking';
+      else if (this.activity) { label = `${this.activity}…`; key = 'working'; }
     }
     this.dot.dataset.s = key;
     this.stateText.textContent = label;
@@ -308,12 +392,24 @@ class GmLive {
 
   refreshLauncher() { this._renderState(); }
 
+  /** Show what the agent is doing in the dock; clears itself. */
+  _setActivity(label) {
+    this.activity = label;
+    clearTimeout(this._activityTimer);
+    if (label) this._activityTimer = setTimeout(() => this._setActivity(''), 20000);
+    this._renderState(false);
+  }
+
   _caption(who, text, final) {
     const el = who === 'user' ? this.capUser : this.capAgent;
     const key = who === 'user' ? 'userLine' : 'agentLine';
     if (final) this[key] = text;
     else this[key] = (this[key] + text).slice(-280);
     el.textContent = this[key];
+    // Captions fade after a quiet spell so they do not sit over the page.
+    el.classList.remove('faded');
+    clearTimeout(el._fade);
+    el._fade = setTimeout(() => el.classList.add('faded'), CAPTION_FADE_MS);
   }
 
   // ------------------------------------------------------------ jobs -----
@@ -480,6 +576,53 @@ class GmLive {
     if (card) await this.pointAt(card);
   }
 
+  /** The page's fillable fields, as the bridge carries them. */
+  readPage() {
+    let fields = [];
+    try { fields = JSON.parse((this.bridge && this.bridge.fieldsJson) || '[]'); } catch (e) { fields = []; }
+    return { ok: true, page: location.pathname, fields };
+  }
+
+  /** Fill fields through the page's own state (a Mesop event), wait for the
+   * page to answer, then point at what changed. Never presses Generate. */
+  async fill(args) {
+    const bridge = this.bridge;
+    if (!bridge || !bridge.actionEvent) return { ok: false, error: 'This page cannot be filled.' };
+    const before = this.readPage().fields;
+    const id = Math.random().toString(36).slice(2, 10);
+    bridge.dispatchEvent(new MesopEvent(bridge.actionEvent, { action: 'fill', id, page: bridge.page || '', fields: args.fields || {} }));
+    let result = null;
+    for (let i = 0; i < 50 && !result; i++) {
+      await sleep(100);
+      try {
+        const last = JSON.parse((this.bridge && this.bridge.lastFillJson) || '{}');
+        if (last.id === id) result = last;
+      } catch (e) { /* not yet */ }
+    }
+    if (!result) return { ok: false, error: 'The page did not answer in time.' };
+    for (const name of Object.keys(result.changed || {})) {
+      const f = before.find((x) => x.name === name);
+      const el = f && this._fieldEl(f.label);
+      if (el) await this.pointAt(el);
+    }
+    return { ok: !result.error, changed: result.changed || {}, refused: result.refused || {}, error: result.error };
+  }
+
+  /** The on-screen control whose label reads `label` (best effort). */
+  _fieldEl(label) {
+    const want = String(label || '').trim().toLowerCase();
+    if (!want) return null;
+    const nodes = document.querySelectorAll('.gm-page label, .gm-page mat-label, .gm-page [aria-label]');
+    for (const n of nodes) {
+      const text = (n.getAttribute('aria-label') || n.textContent || '').trim().toLowerCase();
+      if (text === want || text.startsWith(want)) {
+        const box = n.closest('.mat-mdc-form-field, mat-form-field, button, [role="button"]') || n;
+        if (box.getBoundingClientRect().width > 0) return box;
+      }
+    }
+    return null;
+  }
+
   async showJob(args) {
     await this.navigate(args.page, args.params);
     const job = this.jobs.get(args.job.id) || args.job;
@@ -526,6 +669,8 @@ class GmLive {
       if (msg.action === 'navigate') result = { ok: await this.navigate(a.page, a.params) };
       else if (msg.action === 'compose') { this.compose(a); return; }
       else if (msg.action === 'show_job') result = await this.showJob(a);
+      else if (msg.action === 'read_page') result = this.readPage();
+      else if (msg.action === 'fill') result = await this.fill(a);
       else if (msg.action === 'download') {
         const job = this.jobs.get(a.job.id) || a.job;
         const card = this.tray.querySelector(`[data-job="${job.id}"]`);
@@ -544,6 +689,156 @@ class GmLive {
   // ------------------------------------------------------------ call -----
 
   toggle() { return this.state === 'idle' ? this.start() : this.stop(); }
+
+  /** Switch Fill only / Do it for me. A call in progress reconnects, since
+   * the agent's tools are set when it connects. */
+  async setMode(mode) {
+    this.mode = mode === 'act' ? 'act' : 'fill';
+    try { localStorage.setItem(MODE_KEY, this.mode); } catch (e) { /* not kept */ }
+    this._renderMode();
+    await this._reconnect();
+  }
+
+  /** Turn the Live Avatar on or off (remembered in this browser). */
+  async setAvatar(on) {
+    this.avatar = !!on;
+    this.avatarBlocked = false; // try again when asked
+    try { localStorage.setItem(AVATAR_KEY, this.avatar ? '1' : '0'); } catch (e) { /* not kept */ }
+    this._renderAvatar();
+    await this._reconnect();
+  }
+
+  async _reconnect() {
+    if (this.state === 'idle') return;
+    this.stop();
+    await sleep(250);
+    this.start();
+  }
+
+  _renderAvatar() {
+    if (!this.avatarBtn) return;
+    const s = this.strings || DEFAULT_STRINGS;
+    this.avatarBtn.classList.toggle('gml-hidden', !s.avatarName);
+    this.avatarBtn.textContent = s.avatar || 'Avatar';
+    this.avatarBtn.title = s.avatarHint || '';
+    const on = this.avatar && !this.avatarBlocked;
+    this.avatarBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    this.avatarBtn.dataset.mode = on ? 'act' : 'fill';
+  }
+
+  /** The avatar card and its player. Made inside the click so the video may
+   * play with sound. The MediaSource lives in a worker when the browser can
+   * (its handle needs no blob URL and appends stay off the page's thread),
+   * else on the page behind a blob URL. */
+  _openAvatar() {
+    this._closeAvatar();
+    const card = this._el('div', 'gml-avatar gml-glass', this.root);
+    const video = this._el('video', '', card);
+    video.playsInline = true;
+    video.autoplay = true;
+    const av = { card, video, queue: [], worker: null, ms: null, sb: null, url: '' };
+    this.av = av;
+    // The voice is inside the video: if the browser refuses it, go voice only.
+    video.addEventListener('error', () => { if (this.av === av) this._avatarFailed(); });
+    if (typeof MediaSourceHandle !== 'undefined' && MediaSource.canConstructInDedicatedWorker) {
+      try {
+        const src = URL.createObjectURL(new Blob([AVATAR_WORKER], { type: 'text/javascript' }));
+        av.worker = new Worker(src);
+        URL.revokeObjectURL(src);
+        av.worker.onmessage = (e) => {
+          if (this.av !== av) return;
+          if (e.data.handle) { video.srcObject = e.data.handle; video.play().catch(() => {}); }
+          if (e.data.end) this._avatarEdge(e.data.end);
+          if (e.data.error) { console.error('avatar', e.data.error); this._avatarFailed(); }
+        };
+        av.worker.postMessage({ mime: AVATAR_MIME });
+        return;
+      } catch (e) {
+        av.worker = null;
+      }
+    }
+    av.ms = new MediaSource();
+    av.url = URL.createObjectURL(av.ms);
+    video.src = av.url;
+    av.ms.addEventListener('sourceopen', () => {
+      if (this.av !== av) return;
+      av.sb = av.ms.addSourceBuffer(AVATAR_MIME);
+      av.sb.mode = 'sequence'; // a resumed session starts its clock again
+      av.sb.addEventListener('updateend', () => this._feedAvatar());
+      this._feedAvatar();
+    });
+    video.play().catch(() => { /* starts once data arrives */ });
+  }
+
+  _video(b64) {
+    const av = this.av;
+    if (!av) return;
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    if (av.worker) av.worker.postMessage({ bytes }, [bytes.buffer]);
+    else { av.queue.push(bytes); this._feedAvatar(); }
+  }
+
+  /** Stay at the live edge: a late or resumed stream must not lag behind. */
+  _avatarEdge(end) {
+    const video = this.av && this.av.video;
+    if (!video) return;
+    if (end - video.currentTime > 0.8) video.currentTime = Math.max(0, end - 0.2);
+    if (video.paused) video.play().catch(() => {});
+  }
+
+  _feedAvatar() {
+    const av = this.av;
+    if (!av || !av.sb || av.sb.updating) return;
+    const b = av.sb.buffered;
+    if (b.length) {
+      this._avatarEdge(b.end(b.length - 1));
+      // Drop what is long played so the buffer stays small.
+      if (av.video.currentTime - b.start(0) > 30) {
+        av.sb.remove(b.start(0), av.video.currentTime - 10);
+        return;
+      }
+    }
+    const next = av.queue.shift();
+    if (next) {
+      try { av.sb.appendBuffer(next); } catch (e) { console.error('avatar', e); this._avatarFailed(); }
+    }
+  }
+
+  /** The avatar cannot play here: say so and reconnect voice only (for this
+   * call; the saved choice stays, another browser may play it). */
+  async _avatarFailed() {
+    if (!this.av) return;
+    console.warn('avatar', this.av.video.error && this.av.video.error.message);
+    this._closeAvatar();
+    this.avatarBlocked = true;
+    this._renderAvatar();
+    await this._reconnect();
+    this._caption('agent', this.strings.avatarNoSupport || DEFAULT_STRINGS.avatarNoSupport, true);
+  }
+
+  _closeAvatar() {
+    const av = this.av;
+    this.av = null;
+    if (!av) return;
+    if (av.worker) av.worker.terminate();
+    try { if (av.ms && av.ms.readyState === 'open') av.ms.endOfStream(); } catch (e) { /* closed */ }
+    if (av.url) URL.revokeObjectURL(av.url);
+    av.video.removeAttribute('src');
+    av.video.srcObject = null;
+    av.card.remove();
+  }
+
+  _renderMode() {
+    if (!this.modeBtn) return;
+    const s = this.strings || DEFAULT_STRINGS;
+    const fill = this.mode !== 'act';
+    this.modeBtn.textContent = fill ? (s.fill || DEFAULT_STRINGS.fill) : (s.act || DEFAULT_STRINGS.act);
+    this.modeBtn.setAttribute('aria-pressed', fill ? 'false' : 'true');
+    this.modeBtn.title = s.modeHint || DEFAULT_STRINGS.modeHint;
+    this.modeBtn.dataset.mode = this.mode;
+  }
 
   async start() {
     if (this.state !== 'idle') return;
@@ -566,8 +861,13 @@ class GmLive {
       this._caption('user', this.strings.nomic, true);
     }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const mode = new URLSearchParams(location.search).get('live') === 'offline' ? '?mode=offline' : '';
-    const ws = new WebSocket(`${proto}://${location.host}/api/live${mode}`);
+    const params = new URLSearchParams({ agent: this.mode === 'act' ? 'act' : 'fill' });
+    if (new URLSearchParams(location.search).get('live') === 'offline') params.set('mode', 'offline');
+    if (this.avatar && this.strings.avatarName && !this.avatarBlocked) {
+      if (avatarSupported()) { params.set('avatar', '1'); this._openAvatar(); }
+      else this._caption('agent', this.strings.avatarNoSupport, true);
+    }
+    const ws = new WebSocket(`${proto}://${location.host}/api/live?${params}`);
     this.ws = ws;
     ws.onopen = () => this._sendScreen();
     ws.onmessage = (e) => { try { this._onMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } };
@@ -591,6 +891,7 @@ class GmLive {
   _teardown() {
     this.ws = null;
     this._stopPlayback();
+    this._closeAvatar();
     if (this.micProc) { this.micProc.disconnect(); this.micProc.onaudioprocess = null; this.micProc = null; }
     if (this.micStream) { this.micStream.getTracks().forEach((t) => t.stop()); this.micStream = null; }
     if (this.inCtx) { this.inCtx.close().catch(() => {}); this.inCtx = null; }
@@ -610,7 +911,10 @@ class GmLive {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
   }
 
-  _sendScreen() { this._send({ type: 'screen', path: location.pathname }); }
+  _sendScreen() {
+    const fields = this.readPage().fields.map((f) => ({ name: f.name, value: f.value }));
+    this._send({ type: 'screen', path: location.pathname, fields });
+  }
 
   sendText(text) { this._send({ type: 'text', text }); }
 
@@ -674,14 +978,22 @@ class GmLive {
         this._renderState();
         break;
       case 'audio': this._play(m.data); break;
+      case 'video': this._video(m.data); break;
       case 'interrupted': this._stopPlayback(); this._renderState(false); break;
       case 'transcript':
         if (m.who === 'user' && !m.final && this._lastWho !== 'user') this.userLine = '';
         if (m.who === 'agent' && !m.final && this._lastWho !== 'agent') this.agentLine = '';
         this._lastWho = m.who;
         this._caption(m.who, m.text, !!m.final);
+        // The avatar's voice is inside the video, so the transcript says when it talks.
+        if (this.av && m.who === 'agent') this._renderState(true);
         break;
-      case 'turn_complete': this._lastWho = 'turn'; break;
+      case 'turn_complete':
+        this._lastWho = 'turn';
+        this._setActivity('');
+        if (this.av) setTimeout(() => this._renderState(false), 1500);
+        break;
+      case 'tool': this._setActivity(TOOL_ACTIVITY[m.name] || ''); break;
       case 'job': this._job(m.job); break;
       case 'ui': this._ui(m); break;
       case 'error': this._caption('agent', m.message, true); break;
@@ -699,6 +1011,9 @@ class LiveAgentBridge extends LitElement {
   static properties = {
     actionEvent: { type: String },
     stringsJson: { type: String },
+    page: { type: String },
+    fieldsJson: { type: String },
+    lastFillJson: { type: String },
   };
 
   connectedCallback() {

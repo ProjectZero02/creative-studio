@@ -243,11 +243,23 @@ def _display_url(uri: str) -> str:
     return uri
 
 
+def _fix_starter(job: LiveJob):
+    """A starter for a confirmed Fix with AI plan carried in the job."""
+    import json
+
+    from services import story_fix
+
+    plan = story_fix.FixPlan.from_dict(json.loads(job.params.get("fix_plan_json") or "{}"))
+    return lambda story_id, owner: story_fix.start_fix(story_id, owner, plan)
+
+
 def run_story_job(job: LiveJob) -> RunResult:
     """LiveJobs runner for kind='story': starts one story_jobs step and waits."""
     story_id = str(job.params.get("story_id") or "")
     action = str(job.params.get("story_action") or "")
     starter = _STARTERS.get(action)
+    if action == "fix":
+        starter = _fix_starter(job)
     if not story_id or starter is None:
         raise ValueError(f"Invalid story job action: {action or 'missing'}")
 

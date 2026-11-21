@@ -149,6 +149,9 @@ class StoryBackend(Protocol):
     ) -> str: ...
     def voice_sample(self, story_set, character) -> str: ...
     def rewrite_scene(self, story: Story, index: int) -> str: ...
+    def plan_fix(
+        self, story: Story, request: str, scene: int, seconds: float | None
+    ) -> str: ...
     def translate(self, story: Story) -> str: ...
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str: ...
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str: ...
@@ -566,6 +569,80 @@ class MockStoryBackend:
                 "narration": random.choice([b[1] for b in _MOCK_BEATS]),
                 "visual": f"A new angle: the {hero} pauses in {place}, looking toward the horizon.",
                 "camera": random.choice(CAMERA_IDS),
+            }
+        )
+
+    def plan_fix(
+        self, story: Story, request: str, scene: int, seconds: float | None
+    ) -> str:
+        """Demo stand-in for the fix planner: keyword rules, same JSON."""
+        from services.story_fix import scene_at
+        from services.story_timeline import normalize
+
+        self._sleep(0.6, 1.2)
+        text = request.lower()
+        m = re.search(r"scene\s+(\d+)", text)
+        if m:
+            n = int(m.group(1))
+        elif seconds is not None and story.timeline_json:
+            n = scene_at(normalize(story.timeline_json), seconds) + 1
+        else:
+            n = scene + 1 if scene >= 0 else 0
+        if not 1 <= n <= len(story.scenes):
+            n = 0
+        if "music" in text or "song" in text:
+            return json.dumps(
+                {
+                    "action": "music",
+                    "summary": "Use calmer music.",
+                    "reason": "The request is about the music.",
+                    "music_prompt": "Soft, warm piano with light strings, slow tempo.",
+                }
+            )
+        if not n:
+            return json.dumps(
+                {"action": "none", "question": "Which scene do you mean?"}
+            )
+        if any(w in text for w in ("blank", "black", "frozen", "freeze", "end")):
+            return json.dumps(
+                {
+                    "action": "timeline",
+                    "summary": f"Cut the last second of scene {n}.",
+                    "reason": "The clip holds a still or empty picture at its end.",
+                    "scene": n,
+                    "timeline": [
+                        {"op": "trim", "scene": n, "cut_start": 0, "cut_end": 1.0}
+                    ],
+                }
+            )
+        if any(w in text for w in ("remove", "drop", "delete")):
+            return json.dumps(
+                {
+                    "action": "timeline",
+                    "summary": f"Remove scene {n}.",
+                    "reason": "The viewer does not want this scene.",
+                    "scene": n,
+                    "timeline": [{"op": "remove", "scene": n}],
+                }
+            )
+        cur = story.scenes[n - 1]
+        if any(w in text for w in ("look", "face", "colour", "color", "picture")):
+            return json.dumps(
+                {
+                    "action": "repaint_frame",
+                    "summary": f"Paint scene {n} again, closer to the rest of the film.",
+                    "reason": "The picture does not match.",
+                    "scene": n,
+                    "visual": cur.visual + " Same character and palette as scene 1.",
+                }
+            )
+        return json.dumps(
+            {
+                "action": "rewrite_scene",
+                "summary": f"Rewrite scene {n}.",
+                "reason": "The viewer dislikes what happens in it.",
+                "scene": n,
+                "narration": random.choice([b[1] for b in _MOCK_BEATS]),
             }
         )
 
@@ -1032,6 +1109,18 @@ def _gcs_fetch(uri: str, path: str) -> None:
         f.write(download_from_gcs(uri))
 
 
+def _media_mime(uri: str) -> str:
+    """MIME type of a story asset from its extension (images, films, audio)."""
+    ext = uri.rsplit(".", 1)[-1].lower() if "." in uri else ""
+    return {
+        "mp4": "video/mp4",
+        "mov": "video/quicktime",
+        "webm": "video/webm",
+        "wav": "audio/wav",
+        "mp3": "audio/mpeg",
+    }.get(ext) or _image_mime(uri)
+
+
 def _image_mime(uri: str) -> str:
     return "image/jpeg" if uri.lower().split("?")[0].endswith((".jpg", ".jpeg")) else "image/png"
 
@@ -1335,17 +1424,25 @@ class VertexStoryBackend:
         temperature: float = 0.8,
         task: str = "story_scenario",
         model: str = "",
+        media: list[str] | None = None,
     ) -> str:
+        """One JSON Gemini call. `media`: GCS URIs (images, films) sent
+        before the prompt so the model can look at them."""
         from google.genai import types
 
         from common.analytics import track_model_call
         from models.gemini import client
 
         model = model or self.cfg.STORY_SCENARIO_MODEL_ID
+        parts = [
+            types.Part.from_uri(file_uri=u, mime_type=_media_mime(u))
+            for u in (media or [])
+            if u
+        ]
         with track_model_call(model_name=model, task=task):
             response = client.models.generate_content(
                 model=model,
-                contents=[prompt],
+                contents=[*parts, prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=temperature,
@@ -1425,6 +1522,20 @@ class VertexStoryBackend:
 
     def rewrite_scene(self, story: Story, index: int) -> str:
         return self._json_text(scene_regen_prompt(story, index))
+
+    def plan_fix(
+        self, story: Story, request: str, scene: int, seconds: float | None
+    ) -> str:
+        """One Gemini JSON call that watches the film (and looks at the
+        storyboard frames) before picking the smallest fix."""
+        from services.story_fix import fix_media, fix_prompt
+
+        return self._json_text(
+            fix_prompt(story, request, scene, seconds, self._set(story)),
+            temperature=0.2,
+            task="story_fix",
+            media=fix_media(story),
+        )
 
     def translate(self, story: Story) -> str:
         return self._json_text(

@@ -104,6 +104,10 @@ class Default:
     LIVE_MODEL: str = os.environ.get("LIVE_MODEL", "gemini-3.8-live")
     LIVE_LOCATION: str = os.environ.get("LIVE_LOCATION", "us-central1")
     LIVE_VOICE: str = os.environ.get("LIVE_VOICE", "Aoede")
+    # Live Avatar: a talking presenter video instead of voice only, when the
+    # presenter turns on "Avatar" in the call dock. A preset avatar name, or
+    # empty to hide the switch. Video costs far more tokens than audio.
+    LIVE_AVATAR: str = os.environ.get("LIVE_AVATAR", "Kira")
     # NON_BLOCKING job tools with WHEN_IDLE results. Set false for Live models
     # that only support blocking tools; results then arrive as text updates.
     LIVE_ASYNC_TOOLS: bool = (

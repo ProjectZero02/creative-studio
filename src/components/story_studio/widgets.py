@@ -96,13 +96,18 @@ def story_timeline(
     aspect: str,
     busy: bool,
     on_change: typing.Callable[[me.WebEvent], None],
+    on_point: typing.Callable[[me.WebEvent], None] | None = None,
     key: str | None = None,
 ):
     """Video editor: preview plus video, voice, music and title tracks.
 
     `media` maps each clip's stored URI to a browser URL. `on_change` gets
-    {"timeline": json} after every finished edit.
+    {"timeline": json} after every finished edit, `on_point` {"time": s}
+    where the viewer paused or scrubbed to.
     """
+    events = {"changeEvent": on_change}
+    if on_point is not None:
+        events["pointEvent"] = on_point
     return me.insert_web_component(
         key=key,
         name="story-timeline",
@@ -112,5 +117,5 @@ def story_timeline(
             "aspect": aspect,
             "busy": busy,
         },
-        events={"changeEvent": on_change},
+        events=events,
     )

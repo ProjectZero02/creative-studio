@@ -46,7 +46,7 @@ from components.story_studio.widgets import (
     story_timeline,
 )
 from config.default import Default
-from services import story_autoset, story_jobs
+from services import story_autoset, story_fix, story_jobs
 from services.story_models import (
     ASPECT_RATIOS,
     CAMERA_IDS,
@@ -461,7 +461,7 @@ def _outputs_ready(story: Story | None, kind: str) -> bool:
         return True
     if kind == "storyboard":
         return bool(story.scenes) and all(sc.frame_uri for sc in story.scenes)
-    if kind in ("video", "export"):
+    if kind in ("video", "export", "fix"):
         return bool(story.final_uri)
     if kind == "scenario":
         return bool(story.scenes)
@@ -518,6 +518,8 @@ def on_tick(e: me.WebEvent):
             s.notice = "Export finished. The new video is saved to your library."
         elif snap["kind"] == "music" and snap["status"] == "done":
             s.notice = "New music is on the timeline."
+        elif snap["kind"] == "fix" and snap["status"] == "done":
+            s.notice = "The fix is in the film. Play it back, or describe another fix."
         elif snap["kind"] == "set" and snap["status"] == "done":
             _refresh_sets()
 
@@ -2734,7 +2736,7 @@ def _media_map(story: Story) -> dict[str, str]:
 def edit_view(story: Story) -> None:
     """The film as an editable timeline, with export and music."""
     s = me.state(StoryState)
-    busy = _job_active_for("export", "music", "video")
+    busy = _job_active_for("export", "music", "video", "fix")
     exporting = _job_active_for("export")
     making_music = _job_active_for("music")
     # A finished job is reported by the notice; keep only running or failed panels.
@@ -2831,6 +2833,9 @@ def edit_view(story: Story) -> None:
                 progress_panel("Making music", ("music",))
         if job_open:
             progress_panel("Exporting", ("export",))
+        fix_panel(story, busy)
+        if job_open:
+            progress_panel("Applying the fix", ("fix",))
         with me.box(classes="ss-card ss-edit-main"):
             story_timeline(
                 timeline_json=story.timeline_json,
@@ -2838,11 +2843,299 @@ def edit_view(story: Story) -> None:
                 aspect=story.aspect_ratio,
                 busy=busy,
                 on_change=on_timeline_change,
+                on_point=on_fix_point,
                 key="ss-timeline",
             )
         if story.final_alt_uri:
             with me.box(classes="ss-card ss-player"):
                 _alt_film(story)
+
+
+# ---------------------------------------------------------------------------
+# Edit step: Fix with AI
+# ---------------------------------------------------------------------------
+
+
+def _fix_plan() -> story_fix.FixPlan | None:
+    s = me.state(StoryState)
+    if not s.fix_plan_json:
+        return None
+    try:
+        return story_fix.FixPlan.from_dict(json.loads(s.fix_plan_json))
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_film_time(text: str) -> float | None:
+    """'12.5', '12 s' or '0:12' -> seconds; None when empty or unreadable."""
+    raw = (text or "").strip().lower().rstrip("s").strip()
+    if not raw:
+        return None
+    try:
+        if ":" in raw:
+            minutes, seconds = raw.split(":", 1)
+            value = int(minutes or 0) * 60 + float(seconds or 0)
+        else:
+            value = float(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
+def _fix_changes(
+    story: Story, plan: story_fix.FixPlan, story_set=None
+) -> list[tuple[str, str, str]]:
+    """(what, now, after) rows of a fix's text changes, for the preview."""
+    say = {True: "Spoken on camera", False: "Narrated over the picture"}
+    rows = []
+    for c in plan.changes:
+        if c.action in ("rewrite_scene", "repaint_frame") and 0 <= c.scene < len(story.scenes):
+            cur = story.scenes[c.scene]
+            n = f"Scene {c.scene + 1}"
+            if c.narration is not None:
+                rows.append((f"{n} line", cur.narration or "(none)", c.narration))
+            if c.visual is not None:
+                rows.append((f"{n} picture", cur.visual, c.visual))
+            if c.camera is not None:
+                rows.append((f"{n} camera", cur.camera, c.camera))
+            if c.spoken is not None:
+                rows.append((f"{n} speech", say[cur.spoken], say[c.spoken]))
+        elif c.action == "set":
+            asset = story_set.asset(c.asset_kind, c.asset_id) if story_set else None
+            for label, new, old in (
+                ("look", c.description, getattr(asset, "description", "")),
+                ("outfit", c.outfit, getattr(asset, "outfit", "")),
+                ("voice", c.voice, asset.voice.description if c.asset_kind == "character" and asset else ""),
+            ):
+                if new is not None:
+                    rows.append((f"{c.asset_name} {label}", old or "(none)", new))
+        elif c.action == "music":
+            rows.append(("Music", story.music_prompt or "(default)", c.music_prompt))
+        elif c.action == "scenario":
+            rows.append(("Story", story.idea, c.direction))
+    return rows
+
+
+def fix_panel(story: Story, busy: bool) -> None:
+    """Type what you dislike; Gemini proposes one change; one click runs it."""
+    s = me.state(StoryState)
+    plan = _fix_plan()
+    locked = busy or s.fix_planning
+    with me.box(classes="ss-card ss-fix"):
+        with me.box(classes="ss-fix-head"):
+            me.icon("auto_fix_high", style=me.Style(font_size=20, width=20, height=20))
+            with me.box():
+                me.text("Fix with AI", style=me.Style(font_size=16, font_weight=600))
+                me.text(
+                    "Say what you don't like. Gemini watches the film, picks the "
+                    "smallest change (a cut, a scene, a person or place, or the "
+                    "whole story) and shows it to you before anything is generated. "
+                    "Pause the film to point at a moment.",
+                    style=me.Style(
+                        font_size=13, color=me.theme_var("on-surface-variant")
+                    ),
+                )
+            if story_fix.can_undo(story):
+                me.button(
+                    "Undo last fix",
+                    type="stroked",
+                    disabled=locked,
+                    on_click=on_undo_fix,
+                    key="ss-fix-undo",
+                    style=me.Style(margin=me.Margin(left="auto"), flex_shrink=0),
+                )
+        me.textarea(
+            label="What should change?",
+            placeholder="For example: the end of scene 3 goes blank",
+            value=s.fix_request,
+            rows=2,
+            appearance="outline",
+            disabled=locked,
+            on_blur=on_fix_request,
+            style=me.Style(width="100%"),
+            key="ss-fix-request",
+        )
+        with me.box(classes="ss-fix-row"):
+            with me.box(classes="ss-fix-scene"):
+                me.select(
+                    label="Scene",
+                    options=[me.SelectOption(label="Whole film", value="-1")]
+                    + [
+                        me.SelectOption(label=f"Scene {i + 1}", value=str(i))
+                        for i in range(len(story.scenes))
+                    ],
+                    value=str(s.fix_scene),
+                    appearance="outline",
+                    disabled=locked,
+                    on_selection_change=on_fix_scene,
+                    style=me.Style(width="100%"),
+                    key="ss-fix-scene",
+                )
+            with me.box(classes="ss-fix-time"):
+                me.input(
+                    label="At (seconds, optional)",
+                    placeholder="12.5",
+                    value=s.fix_time,
+                    appearance="outline",
+                    disabled=locked,
+                    on_blur=on_fix_time,
+                    style=me.Style(width="100%"),
+                    key="ss-fix-time",
+                )
+            with me.box(classes="ss-fix-go"):
+                me.button(
+                    "Planning…" if s.fix_planning else "Plan the fix",
+                    type="flat",
+                    color="primary",
+                    disabled=locked,
+                    on_click=on_plan_fix,
+                    key="ss-fix-plan",
+                )
+        if plan is not None and not s.fix_planning:
+            _fix_preview(story, plan, busy)
+
+
+def _fix_preview(story: Story, plan: story_fix.FixPlan, busy: bool) -> None:
+    with me.box(classes="ss-fix-plan"):
+        if not plan.runnable:
+            with me.box(classes="ss-fix-ask"):
+                me.icon("help_outline", style=me.Style(font_size=20, width=20, height=20))
+                me.text(
+                    plan.question or plan.summary or "Gemini found nothing to change.",
+                    style=me.Style(font_size=14, flex_grow=1),
+                )
+                me.button("Dismiss", type="stroked", on_click=on_cancel_fix, key="ss-fix-x")
+            return
+        me.text(plan.summary or "Proposed change", style=me.Style(font_weight=600))
+        if plan.reason:
+            me.text(
+                plan.reason,
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+            )
+        story_set = story_fix.story_set_of(story)
+        for name, now, after in _fix_changes(story, plan, story_set):
+            with me.box(classes="ss-fix-change"):
+                me.text(name, style=me.Style(font_size=13, font_weight=600))
+                with me.box(classes="ss-fix-old"):
+                    me.text(now)
+                with me.box(classes="ss-fix-new"):
+                    me.text(after)
+        steps = story_fix.plan_steps(story, plan, story_set)
+        with me.box(classes="ss-fix-steps"):
+            for step in steps:
+                with me.box(classes="ss-fix-step"):
+                    me.icon(
+                        "paid" if step.paid else "content_cut",
+                        style=me.Style(font_size=18, width=18, height=18),
+                    )
+                    me.text(step.label, style=me.Style(font_size=14))
+        paid = any(step.paid for step in steps)
+        cost = (
+            "Steps marked with a coin generate new media and cost money."
+            if paid and not is_mock_mode()
+            else "Demo mode: no cloud calls, no cost."
+            if is_mock_mode()
+            else "Only cuts what is already made. No new generation."
+        )
+        me.text(cost, style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")))
+        with me.box(classes="ss-fix-actions"):
+            me.button(
+                "Cancel", type="stroked", disabled=busy, on_click=on_cancel_fix, key="ss-fix-cancel"
+            )
+            me.button(
+                "Apply and generate" if paid else "Apply",
+                type="flat",
+                color="primary",
+                disabled=busy,
+                on_click=on_apply_fix,
+                key="ss-fix-apply",
+            )
+
+
+def on_fix_request(e: me.InputBlurEvent):
+    me.state(StoryState).fix_request = e.value
+
+
+def on_fix_scene(e: me.SelectSelectionChangeEvent):
+    try:
+        me.state(StoryState).fix_scene = int(e.value)
+    except (TypeError, ValueError):
+        me.state(StoryState).fix_scene = -1
+
+
+def on_fix_time(e: me.InputBlurEvent):
+    me.state(StoryState).fix_time = e.value
+
+
+def on_plan_fix(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    if not s.fix_request.strip():
+        s.error = "Describe what you would like to change first."
+        return
+    if s.fix_time.strip() and parse_film_time(s.fix_time) is None:
+        s.error = "Write the time in seconds, for example 12.5 or 0:12."
+        return
+    s.fix_plan_json = ""
+    s.fix_planning = True
+    yield
+    try:
+        plan = story_fix.plan_fix(
+            s.story_id,
+            _owner(),
+            s.fix_request,
+            s.fix_scene,
+            parse_film_time(s.fix_time),
+        )
+        s.fix_plan_json = json.dumps(plan.to_dict())
+    except Exception as exc:
+        logger.exception("Story Studio: fix planning failed")
+        s.error = story_jobs.friendly_error(exc)
+    s.fix_planning = False
+    yield
+
+
+def on_cancel_fix(e: me.ClickEvent):
+    me.state(StoryState).fix_plan_json = ""
+
+
+def on_fix_point(e: me.WebEvent):
+    """The viewer paused the film: point the fix at that moment."""
+    try:
+        seconds = float((e.value or {}).get("time"))
+    except (TypeError, ValueError):
+        return
+    if seconds >= 0:
+        me.state(StoryState).fix_time = f"{seconds:g}"
+
+
+def on_undo_fix(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    try:
+        story = story_fix.undo_fix(s.story_id, _owner())
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    s.fix_plan_json = ""
+    _set_story(story)
+
+
+def on_apply_fix(e: me.ClickEvent):
+    s = me.state(StoryState)
+    plan = _fix_plan()
+    if plan is None:
+        return
+    s.error = ""
+    try:
+        job = story_fix.start_fix(s.story_id, _owner(), plan)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    s.fix_plan_json = ""
+    s.fix_request = ""
+    s.fix_time = ""
+    _watch(job.id)
 
 
 def on_timeline_change(e: me.WebEvent):
