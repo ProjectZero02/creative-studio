@@ -84,6 +84,7 @@ import pages.character_sheet
 import pages.fashion
 import pages.shop_the_look
 import pages.story_studio
+import pages.usage
 import pages.storyboarder
 from app_factory import app
 from common.identity import (

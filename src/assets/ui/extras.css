@@ -1,0 +1,35 @@
+/*
+ * Studio extras: the usage page, Library stars and collections, prompt
+ * history and the brand kit (see docs/STUDIO_EXTRAS_PLAN.md).
+ */
+
+/* Usage page (/usage). */
+.gm-usage { display: flex; flex-direction: column; gap: 16px; max-width: 1040px; }
+.gm-usage-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.gm-usage-stat, .gm-usage-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 16px;
+  border-radius: var(--gm-radius-lg, 16px);
+  background: var(--sys-surface-container-low, rgba(127, 127, 127, 0.06));
+  border: 1px solid var(--sys-outline-variant, rgba(127, 127, 127, 0.2));
+}
+.gm-usage-stat-label { font-size: 13px; color: var(--sys-on-surface-variant); }
+.gm-usage-stat-value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gm-usage-title { font-size: 15px; font-weight: 600; }
+.gm-usage-chart { display: flex; flex-direction: row; align-items: flex-end; gap: 2px;
+  border-bottom: 1px solid var(--sys-outline-variant, rgba(127, 127, 127, 0.3)); }
+.gm-usage-chart > * { flex: 1 1 0; min-width: 0; height: 100%; display: flex; }
+.gm-usage-col { flex: 1 1 auto; height: 100%; display: flex; align-items: flex-end; justify-content: center; cursor: default; }
+.gm-usage-col:hover .gm-usage-bar { filter: brightness(1.15); }
+.gm-usage-bar { width: 100%; max-width: 28px; border-radius: 4px 4px 0 0; background: var(--sys-primary); }
+.gm-usage-bar.is-zero { background: var(--sys-outline-variant, rgba(127, 127, 127, 0.3)); }
+.gm-usage-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--sys-on-surface-variant); }
+.gm-usage-table { display: grid; grid-template-columns: minmax(0, 2fr) 1fr 0.7fr 0.7fr 1fr; gap: 8px 16px; font-size: 14px;
+  font-variant-numeric: tabular-nums; }
+.gm-usage-table-3 { grid-template-columns: minmax(0, 2fr) 0.7fr 1fr; }
+.gm-usage-th { font-size: 12px; font-weight: 600; color: var(--sys-on-surface-variant); }
+.gm-usage-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) {
+  .gm-usage-stats { grid-template-columns: 1fr; }
+  .gm-usage-table { grid-template-columns: minmax(0, 1.6fr) 0.8fr 0.6fr 0.9fr; }
+  .gm-usage-table > :nth-child(5n + 4) { display: none; }
+}
