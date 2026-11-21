@@ -65,6 +65,8 @@ class StoryState:
     fix_request: str = ""
     fix_scene: int = -1
     fix_time: str = ""
+    # Edit step: the film version shown next to the current one.
+    compare_uri: str = ""
     fix_plan_json: str = ""
     fix_planning: bool = False
 

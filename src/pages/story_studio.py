@@ -39,6 +39,7 @@ from components.story_studio.set_cards import (
     parse_key,
 )
 from components.story_studio.widgets import (
+    film_compare,
     story_idea_watch,
     story_stepper,
     story_style_picker,
@@ -46,7 +47,7 @@ from components.story_studio.widgets import (
     story_timeline,
 )
 from config.default import Default
-from services import story_autoset, story_fix, story_jobs, story_subtitles
+from services import story_autoset, story_fix, story_jobs, story_subtitles, story_versions
 from services.story_models import (
     ASPECT_RATIOS,
     CAMERA_IDS,
@@ -2851,9 +2852,106 @@ def edit_view(story: Story) -> None:
         if story.final_alt_uri:
             with me.box(classes="ss-card ss-player"):
                 _alt_film(story)
+        versions_panel(story, busy)
         if job_open:
             progress_panel("Adding subtitles", ("subtitles",))
         downloads_panel(story, busy)
+
+
+# ---------------------------------------------------------------------------
+# Edit step: film versions (compare, go back)
+# ---------------------------------------------------------------------------
+
+
+def versions_panel(story: Story, busy: bool) -> None:
+    """Earlier films of this story: compare one with the current film, or
+    bring it back. Shown once there is more than one film."""
+    rows = story_versions.versions(story)
+    if len(rows) < 2 and not (rows and rows[0]["uri"] != story.final_uri):
+        return
+    s = me.state(StoryState)
+    with me.box(classes="ss-card ss-dl"):
+        with me.box(classes="ss-dl-title"):
+            me.text("Versions", style=me.Style(font_size=16, font_weight=600))
+            me.text(
+                "Earlier films of this story. Compare one with the current film, or "
+                "bring it back with its edit (scenes and pictures stay as they are).",
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+            )
+        compare = next((r for r in rows if r["uri"] == s.compare_uri), None)
+        if compare and compare["uri"] != story.final_uri:
+            film_compare(
+                left_url=display_url(compare["uri"]),
+                right_url=display_url(story.final_uri),
+                left_label=f"{compare['label']} · {story_versions.ago(compare['at'])}",
+                right_label="Current film",
+                portrait=story.aspect_ratio == "9:16",
+                key=f"ss-compare-{compare['uri'][-24:]}",
+            )
+        for n, row in enumerate(rows):
+            current = row["uri"] == story.final_uri
+            with me.box(classes="ss-dl-row"):
+                with me.box(classes="ss-dl-name"):
+                    me.text(row["label"])
+                    me.text(
+                        story_versions.ago(row["at"]) + (" · current" if current else ""),
+                        style=me.Style(font_size=12, color=me.theme_var("on-surface-variant")),
+                    )
+                with me.box(classes="ss-dl-actions"):
+                    me.link(text="Download", url=display_url(row["uri"]), open_in_new_tab=True)
+                    if not current:
+                        me.button(
+                            "Hide" if s.compare_uri == row["uri"] else "Compare",
+                            type="stroked",
+                            on_click=on_compare_version,
+                            key=f"ss-vcmp-{n}",
+                        )
+                        me.button(
+                            "Use this version",
+                            type="stroked",
+                            disabled=busy,
+                            on_click=on_use_version,
+                            key=f"ss-vuse-{n}",
+                        )
+
+
+def _version_at(key: str, prefix: str) -> dict | None:
+    story = _story()
+    if story is None:
+        return None
+    try:
+        n = int((key or "").removeprefix(prefix))
+    except ValueError:
+        return None
+    rows = story_versions.versions(story)
+    return rows[n] if 0 <= n < len(rows) else None
+
+
+def on_compare_version(e: me.ClickEvent):
+    s = me.state(StoryState)
+    row = _version_at(e.key, "ss-vcmp-")
+    if row is not None:
+        s.compare_uri = "" if s.compare_uri == row["uri"] else row["uri"]
+
+
+def on_use_version(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    row = _version_at(e.key, "ss-vuse-")
+    if row is None:
+        return
+
+    def apply(story: Story) -> None:
+        story_versions.restore(story, row["uri"])
+
+    try:
+        story = story_jobs.mutate_story(s.story_id, _owner(), apply)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _set_story(story)
+    s.compare_uri = ""
+    s.notice = "That version is back, with its edit."
 
 
 # ---------------------------------------------------------------------------
