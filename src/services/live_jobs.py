@@ -223,8 +223,11 @@ class LiveJobs:
         job.status = RUNNING
         self._emit(job)
         try:
+            from common import usage
+
             runner = (self._runners or default_runners())[job.kind]
-            result = runner(job)
+            with usage.acting_for(job.owner):
+                result = runner(job)
             job.gcs_uri = result.gcs_uri
             job.display_url = result.display_url
             job.mime_type = result.mime_type

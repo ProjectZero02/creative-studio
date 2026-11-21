@@ -150,6 +150,19 @@ def log_model_call(
     analytics_logger.info(
         f"Model Call: {model_name} ({status})", extra={"extra_data": extra_data},
     )
+    try:
+        from common import usage
+
+        usage.record(
+            user_email if user_email != "unknown" else "",
+            model_name,
+            status,
+            billing_units,
+            page_name if page_name != "unknown" else "",
+            str((details or {}).get("task") or ""),
+        )
+    except Exception:  # usage is best effort
+        pass
 
 
 def track_click(element_id: str):

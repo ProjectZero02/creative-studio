@@ -32,11 +32,13 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 
 from common.analytics import get_logger
 from common.error_handling import GenerationError, classify_error
+from common import usage
 from services import story_versions
 from config.default import Default
 from services.story_models import (
@@ -240,10 +242,19 @@ def _finish(job: Job) -> None:
     job.finished_at = time.time()
 
 
+class _Pool(ThreadPoolExecutor):
+    """A thread pool whose tasks run in the caller's context, so model calls
+    made in them are counted for the job's owner (common.usage)."""
+
+    def submit(self, fn, /, *args, **kwargs):
+        return super().submit(contextvars.copy_context().run, fn, *args, **kwargs)
+
+
 def _spawn(job: Job, target: Callable[[Job], None]) -> Job:
     def runner():
         try:
-            target(job)
+            with usage.acting_for(job.owner):
+                target(job)
         except Exception as exc:
             logger.exception("Story Studio job crashed")
             job.message = friendly_error(exc)
@@ -479,11 +490,11 @@ def start_storyboard(
             return current.scenes[current.take_start(i)].frame_uri or reference
 
         workers = max(1, cfg.STORY_MAX_PARALLEL)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with _Pool(max_workers=workers) as pool:
             for i in rest:
                 if i not in later:
                     pool.submit(_run_task, tasks[i], lambda i=i: paint(i, reference))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with _Pool(max_workers=workers) as pool:
             for i in later:
                 pool.submit(
                     _run_task, tasks[i], lambda i=i: paint(i, take_reference(i))
@@ -789,7 +800,7 @@ def start_video(story_id: str, owner: str) -> Job:
         ]
         held = {id(t) for t, _ in after_clips}
 
-        with ThreadPoolExecutor(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
+        with _Pool(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
             futures = []
             if music_task:
                 seconds = sum(s.duration for s in story.scenes)
@@ -817,7 +828,7 @@ def start_video(story_id: str, owner: str) -> Job:
                 f.result()
         pending_lines = [(t, fn) for t, fn in after_clips if t.status == QUEUED]
         if pending_lines:
-            with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+            with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
                 for f in [
                     pool.submit(_run_task, t, lambda fn=fn, i=t.scene_index: fn(i))
                     for t, fn in pending_lines
@@ -868,7 +879,7 @@ def start_video(story_id: str, owner: str) -> Job:
             for i in sorted(pending_alt):
                 _run_task(alt_clip_tasks[i], lambda i=i: animate_alt(i))
         elif pending_alt:
-            with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+            with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
                 for f in [
                     pool.submit(_run_task, alt_clip_tasks[i], lambda i=i: animate_alt(i))
                     for i in pending_alt
@@ -1320,7 +1331,7 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
         for kind, aid, view in pieces:
             by_asset.setdefault((kind, aid), []).append(view)
         order = {"front": 0, "plate": 0, "voice": 9}
-        with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+        with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
             for (kind, aid), views in by_asset.items():
                 views.sort(key=lambda v: order.get(v, 1))
                 pool.submit(chain, kind, aid, views)
