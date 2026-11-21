@@ -26,6 +26,7 @@ import json
 import mesop as me
 
 from common.analytics import get_logger
+from common.notify import notify
 from common.prompt_prefill import is_new_prompt_arrival, read_prompt_param
 from components.dialog import dialog, dialog_actions
 from components.header import header
@@ -485,6 +486,10 @@ def _on_missing_job(s: StoryState) -> None:
         s.job_misses = 0
 
 
+# Jobs worth a browser notification (common/notify.py): the long ones.
+NOTIFY_KINDS = ("scenario", "storyboard", "video", "export", "music", "subtitles", "fix")
+
+
 def on_tick(e: me.WebEvent):
     s = me.state(StoryState)
     if not s.job_id:
@@ -525,6 +530,11 @@ def on_tick(e: me.WebEvent):
             s.notice = "The fix is in the film. Play it back, or describe another fix."
         elif snap["kind"] == "set" and snap["status"] == "done":
             _refresh_sets()
+        if snap["kind"] in NOTIFY_KINDS:
+            if snap["status"] == "done":
+                notify("Story Studio", s.notice or "Your story step is done.")
+            elif snap["status"] == "failed":
+                notify("Story Studio", "Something went wrong. Open the story to retry.")
 
 
 def on_dismiss_error(e: me.ClickEvent):

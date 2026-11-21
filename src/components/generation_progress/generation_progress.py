@@ -74,12 +74,18 @@ def progress_done(state: ProgressFields) -> None:
     """Mark every stage done; the card hides itself."""
     state.progress_stage = len(state.progress_stages)
     state.progress_status = "done"
+    from common.notify import generation_done
+
+    generation_done()
 
 
 def progress_fail(state: ProgressFields, message: str) -> None:
     """Stop at the current stage and show `message`."""
     state.progress_status = "error"
     state.progress_error = message
+    from common.notify import generation_failed
+
+    generation_failed()
 
 
 def progress_clear(state: ProgressFields) -> None:
