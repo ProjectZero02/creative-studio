@@ -421,6 +421,18 @@ def make_film(
     return timeline
 
 
+def _logo_args(story: Story) -> dict:
+    """The brand logo for a render, when the story uses a brand kit."""
+    if not story.brand_json:
+        return {}
+    from common import brand_kit
+
+    kit = brand_kit.from_json(story.brand_json)
+    if not kit["logo_uri"]:
+        return {}
+    return {"logo": kit["logo_uri"], "logo_corner": kit["corner"]}
+
+
 # ---------------------------------------------------------------------------
 # Mock backend
 # ---------------------------------------------------------------------------
@@ -1070,7 +1082,10 @@ class MockStoryBackend:
         self._sleep(0.5, 1.0)
         uri, path = self._new_uri(story, "film")
         render_timeline(
-            timeline, lambda u, dest: shutil.copyfile(local_path(u), dest), path + ".mp4"
+            timeline,
+            lambda u, dest: shutil.copyfile(local_path(u), dest),
+            path + ".mp4",
+            **_logo_args(story),
         )
         return uri + ".mp4"
 
@@ -1855,7 +1870,7 @@ class VertexStoryBackend:
 
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "film.mp4")
-            render_timeline(timeline, _gcs_fetch, out)
+            render_timeline(timeline, _gcs_fetch, out, **_logo_args(story))
             return self._store_film(story, out)
 
     def extend_clip(

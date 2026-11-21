@@ -595,11 +595,13 @@ def render_args(
     overlays: dict[str, str],
     out_path: str,
     preset: str = "veryfast",
+    logo_png: str = "",
 ) -> list[str]:
     """ffmpeg argv that renders `timeline` (already normalized).
 
     ``paths`` maps each clip src to a local file, ``has_audio`` says which
     files have sound, ``overlays`` maps text clip ids to full-frame RGBA PNGs.
+    ``logo_png`` is a full-frame PNG shown for the whole film (brand logo).
     """
     w, h, fps = timeline["width"], timeline["height"], timeline["fps"]
     total = max(0.1, duration(timeline))
@@ -667,6 +669,10 @@ def render_args(
             f"[{last}][{idx}:v]overlay=0:0:enable='between(t,{c['start']:.3f},{end:.3f})'[t{k}]"
         )
         last = f"t{k}"
+    if logo_png:
+        idx = add_input(logo_png, "-loop", "1", "-t", f"{total:.3f}")
+        filters.append(f"[{last}][{idx}:v]overlay=0:0[logo]")
+        last = "logo"
     filters.append(f"[{last}]format=yuv420p[vout]")
 
     for k, c in enumerate(track(timeline, "voice")["clips"]):
@@ -841,10 +847,16 @@ def text_overlay_png(clip: dict, width: int, height: int, out_path: str) -> str:
 
 
 def render_timeline(
-    timeline: dict, fetch, out_path: str, preset: str = "veryfast"
+    timeline: dict,
+    fetch,
+    out_path: str,
+    preset: str = "veryfast",
+    logo: str = "",
+    logo_corner: str = "br",
 ) -> str:
     """Render a timeline to MP4. ``fetch(uri, local_path)`` copies a source
-    file to disk (GCS download, or a local copy in demo mode)."""
+    file to disk (GCS download, or a local copy in demo mode). ``logo`` is an
+    image uri drawn small in ``logo_corner`` for the whole film."""
     from common.error_handling import GenerationError
 
     tl = normalize(timeline)
@@ -869,7 +881,23 @@ def render_timeline(
             )
             for c in track(tl, "text")["clips"]
         }
-        args = render_args(tl, paths, has_audio, overlays, out_path, preset)
+        logo_png = ""
+        if logo:
+            try:
+                from common.brand_kit import logo_overlay_png
+
+                ext = os.path.splitext(logo.split("?")[0])[1][:6] or ".png"
+                raw = os.path.join(tmp, f"logo_src{ext}")
+                fetch(logo, raw)
+                logo_png = logo_overlay_png(
+                    raw, tl["width"], tl["height"], os.path.join(tmp, "logo.png"), logo_corner
+                )
+            except Exception:  # a broken logo never stops the film
+                from common.analytics import get_logger
+
+                get_logger(__name__).warning("Brand logo skipped", exc_info=True)
+                logo_png = ""
+        args = render_args(tl, paths, has_audio, overlays, out_path, preset, logo_png)
         result = subprocess.run(args, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             from common.analytics import get_logger
