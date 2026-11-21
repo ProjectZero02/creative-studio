@@ -153,6 +153,7 @@ class StoryBackend(Protocol):
         self, story: Story, request: str, scene: int, seconds: float | None
     ) -> str: ...
     def translate(self, story: Story) -> str: ...
+    def translate_subtitles(self, story: Story, code: str) -> list[str]: ...
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str: ...
     def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str: ...
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str: ...
@@ -645,6 +646,10 @@ class MockStoryBackend:
                 "narration": random.choice([b[1] for b in _MOCK_BEATS]),
             }
         )
+
+    def translate_subtitles(self, story: Story, code: str) -> list[str]:
+        self._sleep(0.3, 0.6)
+        return [f"[{code}] {sc.narration}" if sc.narration else "" for sc in story.scenes]
 
     def translate(self, story: Story) -> str:
         self._sleep(0.8, 1.4)
@@ -1541,6 +1546,14 @@ class VertexStoryBackend:
         return self._json_text(
             translation_prompt(story), temperature=0.3, task="story_translate"
         )
+
+    def translate_subtitles(self, story: Story, code: str) -> list[str]:
+        from services import story_subtitles as subs
+
+        text = self._json_text(
+            subs.translation_prompt(story, code), temperature=0.3, task="story_subtitles"
+        )
+        return subs.parse_translation(text, len(story.scenes))
 
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str:
         from models.gemini import generate_image_from_prompt_and_images

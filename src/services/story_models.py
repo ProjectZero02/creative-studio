@@ -306,6 +306,13 @@ class Story:
     film_edited: bool = False
     # The story and its set before the last AI fix (JSON), for undo.
     fix_undo_json: str = ""
+    # Subtitled downloads (services/story_subtitles.py). The main film has no
+    # captions; each variant ("en", "ar", "en+ar") is rendered on request.
+    subtitle_style: str = "clean"
+    # {"en": {"key": source hash, "lines": [one per scene]}, "ar": {...}}
+    subtitle_lines_json: str = ""
+    # {"en": {"uri": film, "key": what it was made from}, ...}
+    film_variants_json: str = ""
     # Second-language version: same clips and music, narration translated
     # into alt_language and voiced again. Needs the voiceover on.
     second_on: bool = False

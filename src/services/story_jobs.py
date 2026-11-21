@@ -306,6 +306,8 @@ def job_snapshot(job_id: str, owner: str) -> dict | None:
         "tasks": tasks,
         # Set jobs: task id -> [kind, asset id, view], so cards show progress.
         "targets": dict(job.params.get("task_targets") or {}),
+        # Subtitle jobs: which download is being made.
+        "params": {"variant": job.params.get("variant", "")},
     }
 
 
@@ -1011,6 +1013,64 @@ def start_export(story_id: str, owner: str) -> Job:
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(story, film, owner))
+
+    return _spawn(job, work)
+
+
+def start_subtitled(story_id: str, owner: str, variant: str) -> Job:
+    """Make a download of the film with subtitles (`variant` is "en", "ar" or
+    "en+ar", see services/story_subtitles.py): translate the lines that are
+    not in the story yet (cached on the story), then render the current
+    timeline with captions. The main film is left as it is."""
+    from services import story_subtitles as subs
+
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    if variant not in subs.VARIANTS or variant == "none":
+        raise GenerationError("Unknown subtitle version.")
+    if not story.final_uri or not story.timeline_json:
+        raise GenerationError("Render the film first.")
+    job = _new_job(owner, story_id, "subtitles", {"variant": variant})
+    missing = [c for c in subs.variant_langs(variant) if subs.lines_for(story, c) is None]
+    words = {c: subs.LANGS[c] for c in missing}
+    translate_task = (
+        _add_task(job, "Subtitles · translating to " + " and ".join(words.values()), "translate")
+        if missing
+        else None
+    )
+    render_task = _add_task(job, f"Film · {subs.VARIANT_LABELS[variant].lower()}", "stitch")
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+
+        def translate() -> str:
+            for code in missing:
+                lines = backend.translate_subtitles(story, code)
+
+                def keep(s: Story, code=code, lines=lines) -> None:
+                    s.subtitle_lines_json = subs.with_cached_lines(s, code, lines)
+
+                mutate_story(story_id, owner, keep)
+            return ""
+
+        if translate_task and not _run_task(translate_task, translate):
+            render_task.status = SKIPPED
+            return
+        current = get_store().get(story_id, owner)
+        lines = {c: subs.lines_for(current, c) for c in subs.variant_langs(variant)}
+        timeline = subs.variant_timeline(current, current.timeline_json, variant, lines)
+        key = subs.variant_key(current, variant, lines)
+        if not _run_task(render_task, lambda: backend.render_timeline(current, timeline)):
+            return
+        film = render_task.result_uri
+
+        def apply(s: Story) -> None:
+            stored = subs.variants(s)
+            stored[variant] = {"uri": film, "key": key}
+            s.film_variants_json = json.dumps(stored)
+
+        mutate_story(story_id, owner, apply)
 
     return _spawn(job, work)
 
