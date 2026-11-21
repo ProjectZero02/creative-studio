@@ -66,6 +66,7 @@ _MENU_KEYS = (
     "menu.admin",
     "menu.user",
     "menu.dark_mode",
+    "menu.notify",
     "menu.users",
     "menu.settings",
     "menu.account_settings",
