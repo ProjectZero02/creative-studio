@@ -411,6 +411,20 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
 .ss-brief { display: flex; flex-direction: column; gap: 4px; }
 .ss-brief .mat-mdc-form-field-subscript-wrapper { display: none; }
 
+/* Edit step: downloads with or without subtitles. */
+.ss-dl { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+.ss-dl-head { display: flex; flex-direction: row; flex-wrap: wrap; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.ss-dl-title { display: flex; flex-direction: column; gap: 4px; flex: 1 1 320px; min-width: 0; }
+.ss-dl-row { display: flex; flex-direction: row; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-radius: var(--gm-radius-md, 12px); background: var(--mat-sys-surface-container, rgba(127, 127, 127, 0.08)); }
+.ss-dl-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ss-dl-actions { display: flex; flex-direction: row; gap: 14px; align-items: center; flex: none; }
+.ss-dl-actions .mat-mdc-button-base { height: 36px; }
+@media (max-width: 640px) {
+  .ss-dl { padding: 12px; }
+  .ss-dl-row { flex-wrap: wrap; }
+}
+
 /* Edit step: Fix with AI (request, scene and time, then Gemini's plan). */
 .ss-fix { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 .ss-fix-head { display: flex; flex-direction: row; gap: 10px; align-items: flex-start; }
@@ -434,3 +448,7 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
   .ss-fix-row .mat-mdc-button-base { width: 100%; }
   .ss-fix-change { grid-template-columns: 1fr; }
 }
+
+/* "Use my brand kit" on the Create step (common/brand_kit.py). */
+.ss-brand-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.ss-brand-row a { font-size: 14px; }

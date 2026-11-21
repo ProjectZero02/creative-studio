@@ -19,6 +19,30 @@ import typing
 import mesop as me
 
 
+@me.web_component(path="./film_compare.js")
+def film_compare(
+    *,
+    left_url: str,
+    right_url: str,
+    left_label: str = "Before",
+    right_label: str = "Now",
+    portrait: bool = False,
+    key: str | None = None,
+):
+    """Two films side by side, played and scrubbed together."""
+    return me.insert_web_component(
+        key=key,
+        name="gm-film-compare",
+        properties={
+            "leftUrl": left_url,
+            "rightUrl": right_url,
+            "leftLabel": left_label,
+            "rightLabel": right_label,
+            "portrait": portrait,
+        },
+    )
+
+
 @me.web_component(path="./story_stepper.js")
 def story_stepper(
     *,

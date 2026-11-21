@@ -15,10 +15,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System libraries for OpenCV (libGL) and GLib.
+# System libraries for OpenCV (libGL) and GLib, plus Noto fonts and FriBiDi so
+# film captions draw Arabic (and other scripts) right to left.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
+    fonts-noto-core \
+    libfribidi0 \
     && rm -rf /var/lib/apt/lists/*
 
 # uv from its official image (pinned), instead of pip-installing it.

@@ -29,6 +29,7 @@ import typing
 import mesop as me
 
 from common.i18n import t, tx
+from components.composer.prompt_history import history_panel, on_history_click
 
 ENTER = me.Shortcut(key="Enter")
 
@@ -153,6 +154,7 @@ def composer(
     clear_label: str | None = None,
     notice: str = "",
     on_notice_undo: typing.Callable[[me.ClickEvent], typing.Any] | None = None,
+    history: str = "",
 ):
     """Render the composer card. Children are rendered in the chip row.
 
@@ -168,6 +170,9 @@ def composer(
     `notice` is a one-line status under the prompt (for example the settings
     read from the typed prompt); `on_notice_undo` adds an Undo button to it.
     Both are off by default, so pages that don't pass them look the same.
+
+    `history` is the page's key in services/page_forms.py; it adds a button
+    that lists your recent prompts in this studio (common/prompt_history.py).
     """
     placeholder = (
         tx(placeholder) if placeholder is not None else t("composer.placeholder")
@@ -209,6 +214,14 @@ def composer(
             with me.box(classes="gm-composer-tools"):
                 me.slot()
             with me.box(classes="gm-composer-actions"):
+                if history:
+                    composer_icon_button(
+                        icon="history",
+                        label="Recent prompts",
+                        on_click=on_history_click,
+                        disabled=busy,
+                        key=history,
+                    )
                 if on_clear:
                     composer_icon_button(
                         icon="restart_alt",
@@ -253,6 +266,8 @@ def composer(
                         on_click=on_click_send,
                         primary=True,
                     )
+        if history:
+            history_panel(history)
         if notice:
             composer_notice(text=notice, on_undo=on_notice_undo)
         elif hint:

@@ -15,11 +15,13 @@
 
 import datetime
 import json
+import logging
 from collections.abc import Generator
 from dataclasses import asdict, dataclass, field, fields
 
 import mesop as me
 
+from common import library_marks as marks_store
 from common.analytics import log_ui_click
 from common.metadata import MediaItem, get_media_for_page, get_media_item_by_id
 from common.utils import (
@@ -62,6 +64,66 @@ class PageState:
     extend_dialog_state: VeoExtendDialogState = field(
         default_factory=VeoExtendDialogState,
     )
+    # Stars and collections (common/library_marks.py).
+    marks_json: str = ""
+    mark_view: str = ""  # "" (everything), "starred" or "c:<collection>"
+    new_collection: str = ""
+    new_collection_key: int = 0
+
+
+def _marks(pagestate: PageState) -> dict:
+    if not pagestate.marks_json:
+        return marks_store.empty()
+    try:
+        return marks_store.clean(json.loads(pagestate.marks_json))
+    except ValueError:
+        return marks_store.empty()
+
+
+def _ensure_marks(pagestate: PageState) -> dict:
+    if not pagestate.marks_json:
+        owner = me.state(AppState).user_email
+        pagestate.marks_json = json.dumps(marks_store.load(owner))
+    return _marks(pagestate)
+
+
+def _save_marks(pagestate: PageState, marks: dict) -> None:
+    pagestate.marks_json = json.dumps(marks)
+    try:
+        marks_store.save(me.state(AppState).user_email, marks)
+    except Exception:  # keep the change on screen; it is saved next time
+        logging.getLogger(__name__).exception("Library: could not save marks")
+
+
+def _passes(item: MediaItem, type_filters: list[str], error_filter: str) -> bool:
+    mime = item.mime_type or ""
+    if type_filters and "all" not in type_filters:
+        kinds = {"videos": "video/", "images": "image/", "audio": "audio/", "music": "audio/"}
+        if not any(mime.startswith(kinds.get(t, "?")) for t in type_filters):
+            return False
+    has_error = bool(item.error_message)
+    if error_filter == "no_errors" and has_error:
+        return False
+    return not (error_filter == "only_errors" and not has_error)
+
+
+def _marked_items(pagestate: PageState) -> list[MediaItem]:
+    """The items of a star or collection view, newest first. Read one by one
+    through get_media_item_by_id, so the usual read checks apply."""
+    ids = marks_store.ids_for(_marks(pagestate), pagestate.mark_view)[:150]
+    items = [it for it in (get_media_item_by_id(i) for i in ids) if it]
+    items = [it for it in items if _passes(it, pagestate.type_filters, pagestate.error_filter)]
+
+    def when(it):
+        ts = it.timestamp
+        if isinstance(ts, str):
+            try:
+                ts = datetime.datetime.fromisoformat(ts)
+            except ValueError:
+                return 0.0
+        return ts.timestamp() if isinstance(ts, datetime.datetime) else 0.0
+
+    return sorted(items, key=when, reverse=True)
 
 
 def on_load(e: me.LoadEvent):
@@ -78,6 +140,7 @@ def on_load(e: me.LoadEvent):
         # Otherwise, perform the initial load for the main library view.
         # This will also run every time the user navigates back to the page,
         # ensuring the view is fresh.
+        _ensure_marks(pagestate)
         yield from _load_media(pagestate, is_filter_change=True)
 
     yield
@@ -101,6 +164,15 @@ def _load_media(pagestate: PageState, is_filter_change: bool = False):
 
     pagestate.is_loading = True
     yield
+
+    if pagestate.mark_view:
+        # Stars and collections are small: load them in one go.
+        items = _marked_items(pagestate) if pagestate.current_page == 1 else []
+        pagestate.media_items_json = json.dumps([asdict(i) for i in items], default=str)
+        pagestate.all_items_loaded = True
+        pagestate.is_loading = False
+        yield
+        return
 
     new_items = get_media_for_page(
         page=pagestate.current_page,
@@ -171,6 +243,47 @@ def on_error_filter_change(e: me.ButtonToggleChangeEvent):
     yield from _load_media(pagestate, is_filter_change=True)
 
 
+def on_mark_view_change(e: me.SelectSelectionChangeEvent):
+    """Everything, Starred, or one collection."""
+    pagestate = me.state(PageState)
+    pagestate.mark_view = "" if e.value == "all" else e.value
+    _ensure_marks(pagestate)
+    yield from _load_media(pagestate, is_filter_change=True)
+
+
+def on_star_click(e: me.ClickEvent):
+    pagestate = me.state(PageState)
+    marks = marks_store.toggle_star(_ensure_marks(pagestate), e.key)
+    _save_marks(pagestate, marks)
+
+
+def on_collection_chip_click(e: me.ClickEvent):
+    pagestate = me.state(PageState)
+    item_id = pagestate.selected_media_item_id or ""
+    if not item_id:
+        return
+    marks = marks_store.toggle_in_collection(_ensure_marks(pagestate), e.key, item_id)
+    _save_marks(pagestate, marks)
+
+
+def on_new_collection_input(e: me.InputBlurEvent):
+    me.state(PageState).new_collection = e.value
+
+
+def on_add_collection_click(e: me.ClickEvent):
+    pagestate = me.state(PageState)
+    name = marks_store.clean_name(pagestate.new_collection)
+    item_id = pagestate.selected_media_item_id or ""
+    if not name or not item_id:
+        return
+    marks = _ensure_marks(pagestate)
+    if item_id not in marks["collections"].get(name, []):
+        marks = marks_store.toggle_in_collection(marks, name, item_id)
+        _save_marks(pagestate, marks)
+    pagestate.new_collection = ""
+    pagestate.new_collection_key += 1
+
+
 def on_empty_create_click(e: me.ClickEvent):
     """Empty library: go make something."""
     me.navigate("/nano-banana")
@@ -229,6 +342,23 @@ def library_content():
                 hide_selection_indicator=True,
                 on_change=on_error_filter_change,
             )
+            marks = _marks(pagestate)
+            options = [
+                me.SelectOption(label="Everything", value="all"),
+                me.SelectOption(label=f"Starred ({len(marks['starred'])})", value="starred"),
+            ] + [
+                me.SelectOption(label=f"{name} ({len(ids)})", value=f"c:{name}")
+                for name, ids in sorted(marks["collections"].items(), key=lambda kv: kv[0].lower())
+            ]
+            with me.box(classes="gm-lib-view"):
+                me.select(
+                    label="Show",
+                    options=options,
+                    value=pagestate.mark_view or "all",
+                    on_selection_change=on_mark_view_change,
+                    appearance="outline",
+                    key="library-mark-view",
+                )
 
         with me.box(
             style=me.Style(
@@ -256,7 +386,15 @@ def library_content():
                         pass
                 media_items.append(MediaItem(**clean_d))
 
-            if not media_items and not pagestate.is_loading:
+            if not media_items and not pagestate.is_loading and pagestate.mark_view:
+                with me.box(classes="gm-lib-empty-view"):
+                    me.icon("star" if pagestate.mark_view == "starred" else "folder")
+                    me.text(
+                        "Nothing starred yet. Open an item and tap the star."
+                        if pagestate.mark_view == "starred"
+                        else "This collection is empty. Open an item to add it.",
+                    )
+            elif not media_items and not pagestate.is_loading:
                 with me.box(
                     style=me.Style(
                         grid_column="1 / -1",
@@ -682,6 +820,9 @@ def render_default_detail_dialog(item: MediaItem):
         url=primary_urls[0] if primary_urls else "",
     )
 
+    if item.id:
+        _marks_bar(item.id)
+
     # The main detail viewer now only shows the primary asset and metadata
     media_detail_viewer(
         media_type=render_type,
@@ -748,6 +889,40 @@ def render_default_detail_dialog(item: MediaItem):
         generic_sources.extend(item.source_images_gcs)
     if generic_sources:
         _render_source_section("Source Assets", generic_sources)
+
+
+@me.component
+def _marks_bar(item_id: str):
+    """Star the item and put it in collections."""
+    pagestate = me.state(PageState)
+    marks = _marks(pagestate)
+    starred = marks_store.is_starred(marks, item_id)
+    inside = set(marks_store.collections_of(marks, item_id))
+    with me.box(classes="gm-lib-marks"):
+        with (
+            me.box(classes="gm-lib-chip gm-lib-star" + (" is-on" if starred else "")),
+            me.content_button(type="stroked", on_click=on_star_click, key=item_id),
+            me.box(classes="gm-lib-chip-inner"),
+        ):
+            me.icon("star" if starred else "star_outline")
+            me.text("Starred" if starred else "Star")
+        for name in sorted(marks["collections"], key=str.lower):
+            with (
+                me.box(classes="gm-lib-chip" + (" is-on" if name in inside else "")),
+                me.content_button(type="stroked", on_click=on_collection_chip_click, key=name),
+                me.box(classes="gm-lib-chip-inner"),
+            ):
+                me.icon("check" if name in inside else "add")
+                me.text(name)
+        with me.box(classes="gm-lib-new"):
+            me.input(
+                label="New collection",
+                value=pagestate.new_collection,
+                on_blur=on_new_collection_input,
+                appearance="outline",
+                key=f"lib-newcol-{pagestate.new_collection_key}",
+            )
+            me.button("Add", type="flat", on_click=on_add_collection_click)
 
 
 @me.component

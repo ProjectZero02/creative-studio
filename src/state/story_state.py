@@ -37,6 +37,7 @@ class StoryState:
     character: str = ""
     language: str = "English"
     speech_mode: str = "auto"
+    use_brand: bool = False  # copy the brand kit onto the story at Create
     scene_count: int = 4
     duration: int = 6
     aspect_ratio: str = "16:9"
@@ -65,6 +66,8 @@ class StoryState:
     fix_request: str = ""
     fix_scene: int = -1
     fix_time: str = ""
+    # Edit step: the film version shown next to the current one.
+    compare_uri: str = ""
     fix_plan_json: str = ""
     fix_planning: bool = False
 

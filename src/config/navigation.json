@@ -194,6 +194,22 @@
       "description": "Browse your generated media."
     },
     {
+      "id": 96,
+      "display": "My brand",
+      "icon": "palette",
+      "route": "/brand",
+      "group": "studio",
+      "description": "Your logo, colours and tone, applied to films and images."
+    },
+    {
+      "id": 97,
+      "display": "Usage",
+      "icon": "monitoring",
+      "route": "/usage",
+      "group": "studio",
+      "description": "What you generated and an estimate of what it cost."
+    },
+    {
       "id": 80,
       "display": "Pixie Compositor",
       "icon": "auto_fix_high",

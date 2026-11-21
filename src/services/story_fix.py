@@ -49,7 +49,7 @@ import copy
 import json
 from dataclasses import asdict, dataclass, field
 
-from services import story_jobs
+from services import story_jobs, story_versions
 from services import story_timeline as tlm
 from services.story_models import (
     CAMERA_IDS,
@@ -856,7 +856,10 @@ def plan_fix(
 
 
 # Story fields an undo never puts back.
-_KEEP_ON_UNDO = ("id", "owner", "created_at", "updated_at", "fix_undo_json")
+# film_versions_json: the films made by the fix stay listed after an undo.
+_KEEP_ON_UNDO = (
+    "id", "owner", "created_at", "updated_at", "fix_undo_json", "film_versions_json"
+)
 _KEEP_SET_ON_UNDO = ("id", "owner", "created_at", "updated_at", "version")
 
 
@@ -1010,9 +1013,23 @@ def start_fix(story_id: str, owner: str, plan: FixPlan):
         job, plan.summary or "Applying the change", "fix", first
     )
 
+    def keep_current(s: Story) -> None:
+        # Stories made before versions existed: keep the film being fixed.
+        story_versions.remember(s, "before_fix")
+
     def work(job) -> None:
+        before = story.final_uri
+        story_jobs.mutate_story(story_id, owner, keep_current)
         if story_jobs._run_task(edit, lambda: _apply_edits(story_id, owner, plan)):
             _run_chain(job, story_id, owner, steps)
+
+            def label(s: Story) -> None:
+                if s.final_uri and s.final_uri != before:
+                    story_versions.relabel_latest(
+                        s, s.final_uri, f"After fix: {plan.summary or 'AI fix'}"
+                    )
+
+            story_jobs.mutate_story(story_id, owner, label)
 
     return story_jobs._spawn(job, work)
 
