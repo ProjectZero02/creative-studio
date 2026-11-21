@@ -29,14 +29,20 @@ second language but had no captions at all.
   story: each scene's narration is timed to its voice clip, an on-camera line
   to its video clip. Long lines are cut into short cues (two lines of about 42
   characters) whose length follows the word count.
-- Output: `.srt` and `.vtt` text, and caption clips for the timeline's
-  existing text track. Caption clips carry `"sub": true`, so turning
-  subtitles off or rebuilding them never touches the user's own titles.
+- The main film stays clean. At the end of the Edit step a **Downloads** card
+  offers four versions: **No subtitles**, **English**, **Arabic** and
+  **English + Arabic** (Arabic on top, English below, same timing). Each
+  subtitled version is rendered on request as a job and kept on the story
+  (`Story.film_variants_json`); it is made again only when the film, the
+  timeline, the style or the lines change.
+- Lines in the story's language come from the story; the other language
+  reuses the second-language narration when there is one, and is otherwise
+  translated once with Gemini and cached on the story
+  (`Story.subtitle_lines_json`, keyed by a hash of the source text).
+- `.srt` and `.vtt` files for each language: `GET
+  /api/story/{id}/subtitles/{variant}.{srt|vtt}`, owner only.
 - Styles: **Clean** (white with a soft shadow, the current title look),
   **Boxed** (white on a dark rounded box) and **Bold** (larger, outlined).
-- Edit step: a "Subtitles" switch, a style choice and "Download .srt". The
-  switch rebuilds the caption clips and marks the film as edited, so Export
-  renders them.
 - Arabic and other scripts: captions are drawn with a font that has the
   script (Noto in the container, Arial Unicode or Segoe UI on Windows) and
   laid out right to left with Pillow's shaping. The Dockerfile adds
@@ -61,8 +67,8 @@ second language but had no captions at all.
 
 **How.**
 - `common/usage.py` stores every model call (owner, model, page, status,
-  units) in a Firestore `usage_events` collection, best effort and off the
-  request thread. `log_model_call` already runs for every generation, so it
+  estimated cost) in a Firestore `usage_events` collection, best effort and
+  off the request thread. `log_model_call` already runs for every generation, so it
   writes there too.
 - Background jobs (Story Studio, Live) run in threads where the page state is
   not available; they now set the owner in a context variable so their calls
@@ -79,8 +85,11 @@ second language but had no captions at all.
 **How.**
 - `common/library_marks.py`: one Firestore document per user with starred
   ids and named collections (ids per collection).
-- Library: a star and an "Add to collection" control in the item dialog,
-  and a filter row with **Starred** and a collection picker.
+- Library: a **Star** button and a chip per collection in the item dialog
+  (plus a field to make a new collection), and a **Show** picker next to the
+  filters: Everything, Starred, or one collection.
+- Marks only point at items; opening one still goes through
+  `get_media_item_by_id`, so a mark never widens who can read an item.
 
 ## 5. Prompt history
 
@@ -103,9 +112,12 @@ second language but had no captions at all.
   the tab is in the background and the user turned notifications on.
 - A switch in the user menu asks the browser for permission and remembers
   the choice in this browser.
-- Hooked into the end of image, video, music, voice and Story Studio jobs.
+- Hooked into the shared progress helper (`progress_done` and
+  `progress_fail`), which covers Image, Video, Music, Voice and the other
+  pages with a progress card, and into Story Studio's job poll for the long
+  jobs (scenario, frames, film, export, music, subtitles, fix).
 
-## 7. Brand kit
+## 7. Brand kit ("My brand")
 
 **Why.** Brand adherence could be checked, but a brand could not be saved
 and applied.
@@ -113,12 +125,14 @@ and applied.
 **How.**
 - `common/brand_kit.py`: one Firestore document per user with a name, up to
   five colours, a tone of voice and a logo.
-- `/brand` page to edit it.
-- Story Studio: "Use my brand kit" on the Create step adds the colours and
-  tone to the scenario and picture prompts, and puts the logo in a corner of
-  the exported film.
-- Image Studio: an "Apply brand" switch adds the colours and tone to the
-  prompt.
+- `/brand` page to edit it, called **My brand** in the menu because the
+  Starter pack page is already named "Brand kit".
+- Story Studio: "Use my brand" on the Create step copies the kit onto the
+  story (`Story.brand_json`), adds the colours and tone to the scenario and
+  frame prompts, and puts the logo in the chosen corner of exported films
+  and subtitled downloads.
+- Image Studio: a **Brand** chip in the composer adds the colours and tone to
+  the prompt sent to the model.
 
 ---
 
