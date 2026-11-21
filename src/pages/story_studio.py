@@ -46,7 +46,7 @@ from components.story_studio.widgets import (
     story_timeline,
 )
 from config.default import Default
-from services import story_autoset, story_fix, story_jobs
+from services import story_autoset, story_fix, story_jobs, story_subtitles
 from services.story_models import (
     ASPECT_RATIOS,
     CAMERA_IDS,
@@ -518,6 +518,8 @@ def on_tick(e: me.WebEvent):
             s.notice = "Export finished. The new video is saved to your library."
         elif snap["kind"] == "music" and snap["status"] == "done":
             s.notice = "New music is on the timeline."
+        elif snap["kind"] == "subtitles" and snap["status"] == "done":
+            s.notice = "The subtitled film is ready. Download it below."
         elif snap["kind"] == "fix" and snap["status"] == "done":
             s.notice = "The fix is in the film. Play it back, or describe another fix."
         elif snap["kind"] == "set" and snap["status"] == "done":
@@ -2849,6 +2851,116 @@ def edit_view(story: Story) -> None:
         if story.final_alt_uri:
             with me.box(classes="ss-card ss-player"):
                 _alt_film(story)
+        if job_open:
+            progress_panel("Adding subtitles", ("subtitles",))
+        downloads_panel(story, busy)
+
+
+# ---------------------------------------------------------------------------
+# Edit step: downloads (without subtitles, English, Arabic, both)
+# ---------------------------------------------------------------------------
+
+
+def downloads_panel(story: Story, busy: bool) -> None:
+    """The film to download, with or without subtitles. Subtitled versions
+    are made on request from the current edit (free, apart from a short
+    translation when the story is not in that language)."""
+    if not story.final_uri:
+        return
+    making = _job_active_for("subtitles")
+    making_variant = ((_job() or {}).get("params") or {}).get("variant") if making else ""
+    with me.box(classes="ss-card ss-dl"):
+        with me.box(classes="ss-dl-head"):
+            with me.box(classes="ss-dl-title"):
+                me.text("Downloads", style=me.Style(font_size=16, font_weight=600))
+                me.text(
+                    "The film with or without subtitles. A subtitled version is made "
+                    "from your current edit; change the edit or the style and it is "
+                    "made again.",
+                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+                )
+            me.button_toggle(
+                value=story.subtitle_style
+                if story.subtitle_style in story_subtitles.STYLES
+                else "clean",
+                buttons=[
+                    me.ButtonToggleButton(label=story_subtitles.STYLE_LABELS[k], value=k)
+                    for k in story_subtitles.STYLES
+                ],
+                disabled=busy,
+                on_change=on_subtitle_style,
+                key="ss-dl-style",
+            )
+        for variant in story_subtitles.VARIANTS:
+            ready = story_subtitles.ready_variant(story, variant)
+            stale = (
+                not ready
+                and variant != "none"
+                and variant in story_subtitles.variants(story)
+            )
+            with me.box(classes="ss-dl-row"):
+                with me.box(classes="ss-dl-name"):
+                    me.text(story_subtitles.VARIANT_LABELS[variant])
+                    if stale:
+                        me.text(
+                            "Out of date: the edit or style changed",
+                            style=me.Style(font_size=12, color=me.theme_var("primary")),
+                        )
+                with me.box(classes="ss-dl-actions"):
+                    if variant != "none" and _subtitle_file_ready(story, variant):
+                        me.link(
+                            text=".srt",
+                            url=f"/api/story/{story.id}/subtitles/{variant}.srt",
+                            open_in_new_tab=True,
+                        )
+                    if ready and not (story.film_edited and variant == "none"):
+                        me.link(
+                            text="Download",
+                            url=display_url(ready),
+                            open_in_new_tab=True,
+                        )
+                    elif variant == "none":
+                        me.text(
+                            "Export your edit first",
+                            style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+                        )
+                    else:
+                        me.button(
+                            "Making…" if making_variant == variant else ("Make again" if stale else "Make"),
+                            type="stroked",
+                            disabled=busy or story.film_edited,
+                            on_click=on_make_subtitled,
+                            key=f"ss-dl-{variant}",
+                        )
+        if story.film_edited:
+            me.text(
+                "Export your edit first, so every download matches it.",
+                style=me.Style(font_size=13, color=me.theme_var("primary")),
+            )
+
+
+def _subtitle_file_ready(story: Story, variant: str) -> bool:
+    return all(
+        story_subtitles.lines_for(story, c) is not None
+        for c in story_subtitles.variant_langs(variant)
+    )
+
+
+def on_subtitle_style(e: me.ButtonToggleChangeEvent):
+    if e.value in story_subtitles.STYLES:
+        _set_story_field("subtitle_style", e.value)
+
+
+def on_make_subtitled(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    variant = (e.key or "").removeprefix("ss-dl-")
+    try:
+        job = story_jobs.start_subtitled(s.story_id, _owner(), variant)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
 
 
 # ---------------------------------------------------------------------------
