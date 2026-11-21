@@ -306,6 +306,8 @@ class Story:
     film_edited: bool = False
     # The story and its set before the last AI fix (JSON), for undo.
     fix_undo_json: str = ""
+    # The last films with their timelines, newest first (services/story_versions.py).
+    film_versions_json: str = ""
     # Subtitled downloads (services/story_subtitles.py). The main film has no
     # captions; each variant ("en", "ar", "en+ar") is rendered on request.
     subtitle_style: str = "clean"

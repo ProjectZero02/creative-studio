@@ -37,6 +37,7 @@ from dataclasses import asdict, dataclass, field, replace
 
 from common.analytics import get_logger
 from common.error_handling import GenerationError, classify_error
+from services import story_versions
 from config.default import Default
 from services.story_models import (
     ScenarioError,
@@ -911,6 +912,7 @@ def start_video(story_id: str, owner: str) -> Job:
             s.step = "video"
             if made.get("timeline"):
                 s.timeline_json = json.dumps(made["timeline"])
+            story_versions.remember(s, "render")
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(final, film, owner))
@@ -1010,6 +1012,7 @@ def start_export(story_id: str, owner: str) -> Job:
             # Same clips as the render, so set_version stays as it was.
             s.final_uri = film
             s.film_edited = False
+            story_versions.remember(s, "export")
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(story, film, owner))
