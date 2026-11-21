@@ -651,6 +651,7 @@ def gemini_image_gen_page_content():
 
         with me.box(classes="gm-studio"):
             with composer(
+                history="gemini_image_generation",
                 value=state.prompt,
                 placeholder="Describe the image you want to generate…",
                 on_blur=on_prompt_blur,

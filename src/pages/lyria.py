@@ -143,6 +143,7 @@ def lyria_content(app_state: me.state):
         )
         with me.box(classes="gm-studio gm-music"):
             with composer(
+                history="lyria",
                 value=pagestate.music_prompt_placeholder,
                 placeholder="Describe the music: genre, mood, instruments, tempo…",
                 on_blur=on_blur_lyria_prompt,

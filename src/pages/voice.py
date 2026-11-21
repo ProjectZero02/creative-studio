@@ -122,6 +122,7 @@ def voice_content():
         )
         with me.box(classes="gm-studio gm-voice"):
             with composer(
+                history="voice",
                 value=state.text,
                 placeholder=(
                     "Write one line per speaker, like “Host: Hello there”…"
