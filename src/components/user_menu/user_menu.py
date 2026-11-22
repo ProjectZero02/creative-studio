@@ -67,6 +67,9 @@ _MENU_KEYS = (
     "menu.user",
     "menu.dark_mode",
     "menu.notify",
+    "menu.brand",
+    "menu.theme_to_dark",
+    "menu.theme_to_light",
     "menu.users",
     "menu.settings",
     "menu.account_settings",
@@ -128,10 +131,10 @@ def user_menu_bar():
             dark=me.theme_brightness() == "dark",
             show_sign_out=session_mode,
             show_users=session_mode and s.user_role == "admin",
-            show_settings=(not session_mode) or s.user_role == "admin",
-            # Regular users change their own password there; admins use the
-            # Users page, which can reset anyone's password.
-            show_account=session_mode and bool(email) and s.user_role != "admin",
+            # Everyone has a Settings page (/settings); the system details in
+            # it are admin-only. Account (password) lives there too.
+            show_settings=True,
+            show_account=False,
             lang=s.lang,
             labels=menu_labels(s.lang),
             on_theme=on_theme,

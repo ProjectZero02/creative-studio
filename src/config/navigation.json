@@ -198,6 +198,7 @@
       "display": "My brand",
       "icon": "palette",
       "route": "/brand",
+      "align": "menu",
       "group": "studio",
       "description": "Your logo, colours and tone, applied to films and images."
     },
@@ -206,6 +207,7 @@
       "display": "Usage",
       "icon": "monitoring",
       "route": "/usage",
+      "align": "menu",
       "group": "studio",
       "description": "What you generated and an estimate of what it cost."
     },

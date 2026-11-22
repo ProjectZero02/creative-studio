@@ -108,7 +108,12 @@ def sidenav(current_page: Optional[str]):
     current = current_page or app_state.current_page
     opened = app_state.sidenav_open
 
-    pages = [p for p in get_welcome_page_config() if p.get("route")]
+    # align "menu" pages (My brand, Usage) live in the avatar menu and Settings.
+    pages = [
+        p
+        for p in get_welcome_page_config()
+        if p.get("route") and p.get("align") != "menu"
+    ]
     top_items = [p for p in pages if p.get("align") != "bottom"]
     bottom_items = [p for p in pages if p.get("align") == "bottom"]
 
@@ -206,7 +211,10 @@ def sidenav(current_page: Optional[str]):
                 for page in items:
                     _nav_item(page, current, minimized=not opened)
 
-            # Bottom: settings, about, theme.
+            # Bottom: pages with align "bottom". The light/dark switch is in the
+            # top bar (components/user_menu), so the rail fits a laptop screen.
+            if not bottom_items:
+                return
             with me.box(
                 style=me.Style(
                     margin=me.Margin(top="auto"),
@@ -219,7 +227,6 @@ def sidenav(current_page: Optional[str]):
             ):
                 for page in bottom_items:
                     _nav_item(page, current, minimized=not opened)
-                theme_toggle_icon(9, "light_mode", "Theme", not opened)
 
 
 def _nav_item(page: dict, current: Optional[str], minimized: bool):

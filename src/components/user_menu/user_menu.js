@@ -31,6 +31,9 @@ import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit
 
 const GLOBE = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4a14 14 0 0 1 1.9 4h-3.8A14 14 0 0 1 12 4zM4.3 14a8.2 8.2 0 0 1 0-4h3.4a16.5 16.5 0 0 0 0 4zm.8 2h2.9a15.7 15.7 0 0 0 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6A15.7 15.7 0 0 0 8 8zm4 12a14 14 0 0 1-1.9-4h3.8A14 14 0 0 1 12 20zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6a15.7 15.7 0 0 0 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.7-5.6a16.5 16.5 0 0 0 0-4h3.4a8.2 8.2 0 0 1 0 4z"/></svg>`;
 
+const MOON = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>`;
+const SUN = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5zm0-5a1 1 0 0 0-1 1v2a1 1 0 0 0 2 0V3a1 1 0 0 0-1-1zm0 17a1 1 0 0 0-1 1v2a1 1 0 0 0 2 0v-2a1 1 0 0 0-1-1zM4.2 5.6a1 1 0 0 0-1.4 1.4l1.4 1.4a1 1 0 0 0 1.4-1.4zm15.6 12.8a1 1 0 0 0-1.4 0 1 1 0 0 0 0 1.4l1.4 1.4a1 1 0 0 0 1.4-1.4zM3 11H1a1 1 0 0 0 0 2h2a1 1 0 0 0 0-2zm20 0h-2a1 1 0 0 0 0 2h2a1 1 0 0 0 0-2zM5.6 18.4a1 1 0 0 0-1.4 0l-1.4 1.4a1 1 0 0 0 1.4 1.4l1.4-1.4a1 1 0 0 0 0-1.4zM21.2 4.2a1 1 0 0 0-1.4 0l-1.4 1.4a1 1 0 0 0 1.4 1.4l1.4-1.4a1 1 0 0 0 0-1.4z"/></svg>`;
+
 class UserMenu extends LitElement {
   static properties = {
     name: { type: String },
@@ -128,17 +131,31 @@ class UserMenu extends LitElement {
       height: 40px;
       min-width: 44px;
       padding: 0 14px;
-      border: 1px solid var(--sys-outline-variant, #d6dae1);
+      border: 0;
       border-radius: 999px;
-      background: transparent;
+      background: var(--gm-tonal, rgba(21, 23, 28, 0.06));
       color: inherit;
       font: inherit;
       font-size: 14px;
       font-weight: 500;
       cursor: pointer;
     }
-    .lang-btn:hover { background: var(--sys-surface-container-high, #e6e9ee); }
-    .lang-btn svg { width: 18px; height: 18px; flex: none; fill: currentColor; opacity: 0.85; }
+    .lang-btn:hover, .theme-btn:hover { background: var(--gm-tonal-hover, rgba(21, 23, 28, 0.10)); }
+    .lang-btn svg, .theme-btn svg { width: 18px; height: 18px; flex: none; fill: currentColor; opacity: 0.85; }
+    /* Light/dark switch: a round button the same height as the language one. */
+    .theme-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: var(--gm-tonal, rgba(21, 23, 28, 0.06));
+      color: inherit;
+      cursor: pointer;
+    }
     @media (max-width: 420px) {
       .lang-btn { padding: 0 10px; }
     }
@@ -327,7 +344,15 @@ class UserMenu extends LitElement {
     const thisName = L[`name.${this.lang}`] || (this.lang === 'ar' ? 'العربية' : 'English');
     const switchLabel = L.switch || 'Switch to Arabic (العربية)';
     const accountLabel = (L.account_of || 'Account: {name}').replace('{name}', label);
+    const themeLabel = this.dark
+      ? (L.theme_to_light || 'Switch to light mode')
+      : (L.theme_to_dark || 'Switch to dark mode');
     return html`
+      ${this.themeEvent ? html`
+        <button class="theme-btn" type="button" @click=${this._theme}
+          aria-label=${themeLabel} title=${themeLabel}>
+          ${this.dark ? SUN : MOON}
+        </button>` : nothing}
       ${html`
         <button class="lang-btn" type="button" @click=${this._lang}
           aria-label=${switchLabel} title=${switchLabel}>
@@ -349,12 +374,6 @@ class UserMenu extends LitElement {
             </div>
           </div>
           <hr>
-          <button class="item" type="button" role="switch"
-            aria-checked=${this.dark ? 'true' : 'false'} @click=${this._theme}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
-            <span class="grow">${L.dark_mode || 'Dark mode'}</span>
-            <span class="switch ${this.dark ? 'on' : ''}" aria-hidden="true"></span>
-          </button>
           ${this._canNotify ? html`
             <button class="item" type="button" role="switch"
               aria-checked=${this._notifyOn() ? 'true' : 'false'} @click=${this._toggleNotify}>
@@ -362,13 +381,10 @@ class UserMenu extends LitElement {
               <span class="grow">${L.notify || 'Notify me when done'}</span>
               <span class="switch ${this._notifyOn() ? 'on' : ''}" aria-hidden="true"></span>
             </button>` : nothing}
-          ${this.langEvent ? html`
-            <button class="item" type="button" @click=${this._lang}
-              aria-label=${`${L.label || 'Language'}: ${thisName}. ${switchLabel}`}>
-              ${GLOBE}
-              <span class="grow">${L.label || 'Language'}</span>
-              <span class="value"><span lang="en">English</span> / <span lang="ar">العربية</span></span>
-            </button>` : nothing}
+          <a class="item" href="/brand">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0 0 18 1.5 1.5 0 0 0 1.1-2.5 1.5 1.5 0 0 1 1.1-2.5H16a5 5 0 0 0 5-5c0-4.4-4-8-9-8zm-5.5 9A1.5 1.5 0 1 1 8 10.5 1.5 1.5 0 0 1 6.5 12zm3-4A1.5 1.5 0 1 1 11 6.5 1.5 1.5 0 0 1 9.5 8zm5 0A1.5 1.5 0 1 1 16 6.5 1.5 1.5 0 0 1 14.5 8zm3 4a1.5 1.5 0 1 1 1.5-1.5 1.5 1.5 0 0 1-1.5 1.5z"/></svg>
+            <span class="grow">${L.brand || 'My brand'}</span>
+          </a>
           ${this.showAccount ? html`
             <a class="item" href="/account">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9zm3 11a2 2 0 1 1 2-2 2 2 0 0 1-2 2z"/></svg>
@@ -380,7 +396,7 @@ class UserMenu extends LitElement {
               <span class="grow">${L.users || 'Users'}</span>
             </a>` : nothing}
           ${this.showSettings ? html`
-            <a class="item" href="/config">
+            <a class="item" href="/settings">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.9a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 3.5-3.5 3.5 3.5 0 0 1-3.5 3.5z"/></svg>
               <span class="grow">${L.settings || 'Settings'}</span>
             </a>` : nothing}
