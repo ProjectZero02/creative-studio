@@ -392,7 +392,7 @@ class GmLive {
   }
 
   _heroVisible() {
-    return !!document.querySelector('live-call-button, home-prompt[live]');
+    return !!document.querySelector('live-call-button, home-prompt[live], gm-home-chat[live]');
   }
 
   refreshLauncher() { this._renderState(); }
@@ -1059,7 +1059,11 @@ class LiveAgentBridge extends LitElement {
 }
 
 class LiveCallButton extends LitElement {
-  static properties = { stringsJson: { type: String }, compact: { type: Boolean, reflect: true } };
+  static properties = {
+    stringsJson: { type: String },
+    compact: { type: Boolean, reflect: true },
+    pill: { type: Boolean, reflect: true }, // tonal 44px pill (Home prompt box)
+  };
 
   static styles = css`
     :host { display: block; }
@@ -1077,6 +1081,14 @@ class LiveCallButton extends LitElement {
     :host([compact]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(21, 23, 28, 0.10)); }
     :host([compact]) button.on { background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); }
     :host([compact]) svg { width: 22px; height: 22px; }
+    :host([pill]) button { height: 44px; padding: 0 18px 0 14px; gap: 8px; font-size: 14.5px; box-shadow: none;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); color: var(--sys-on-surface, #15171c); }
+    :host([pill]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.18)); }
+    :host([pill]) svg { width: 20px; height: 20px; }
+    @media (max-width: 600px) {
+      :host([pill]) button { width: 44px; padding: 0; justify-content: center; gap: 0; }
+      :host([pill]) .lbl { display: none; }
+    }
   `;
 
   connectedCallback() {
@@ -1092,12 +1104,14 @@ class LiveCallButton extends LitElement {
   render() {
     let s = DEFAULT_STRINGS;
     try { if (this.stringsJson) s = { ...s, ...JSON.parse(this.stringsJson) }; } catch (e) { /* defaults */ }
-    if (this.compact) {
-      // A live "voice wave" icon, so it reads differently from Dictate's mic.
-      return html`
-        <button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z"/></svg>
-        </button>`;
+    if (this.compact || this.pill) {
+      // Compact (studios) and pill (Home) use a sound-wave icon, so Live never
+      // looks like the Dictate mic next to it.
+      const wave = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z"/></svg>`;
+      if (this.pill) {
+        return html`<button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>${wave}<span class="lbl">${s.talk}</span></button>`;
+      }
+      return html`<button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>${wave}</button>`;
     }
     return html`
       <button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk}>

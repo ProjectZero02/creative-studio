@@ -11,57 +11,53 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Home page: the hero prompt box and preview posters."""
+"""Home page: the one-box chat, its headline words and starters."""
 
-from types import SimpleNamespace
+import os
 
-import pytest
+from common import i18n
+from components.home_chat import home_chat as hc
+from config.default import get_welcome_page_config
 
-import pages.home as home
-
-
-@pytest.fixture
-def navigations(monkeypatch):
-    calls = []
-    monkeypatch.setattr(home.me, "navigate", lambda url, query_params=None: calls.append((url, query_params)))
-    return calls
+ASSETS = os.path.join(os.path.dirname(__file__), "..", "src", "assets", "ui")
 
 
-def test_every_mode_points_at_a_create_studio():
-    routes = {m["route"] for m in home.PROMPT_MODES}
-    assert routes == {"/nano-banana", "/veo", "/story", "/voice", "/lyria"}
-    for m in home.PROMPT_MODES:
-        assert m["label"] and m["placeholder"] and m["examples"]
+def test_lede_words_open_real_studios():
+    routes = {p.get("route") for p in get_welcome_page_config()}
+    words = [s for s in hc.lede_segments() if s.get("kind")]
+    assert [w["kind"] for w in words] == ["image", "video", "voice", "music", "film"]
+    for w in words:
+        assert w["href"] in routes, w
+        assert w["tip"]
 
 
-def test_submit_opens_studio_with_prompt(navigations):
-    home.on_prompt_submit(SimpleNamespace(value={"mode": "video", "prompt": "  A drone shot  "}))
-    assert navigations == [("/veo", {"prompt": "A drone shot"})]
+def test_lede_reads_as_one_sentence_in_both_languages(monkeypatch):
+    joined = "".join(s["text"] for s in hc.lede_segments())
+    assert joined == "Turn one idea into images, video, voice and music, or a finished short film."
+    monkeypatch.setattr(i18n, "current_lang", lambda: "ar")
+    ar = hc.lede_segments()
+    assert len([s for s in ar if s.get("kind")]) == 5
+    assert "{" not in "".join(s["text"] for s in ar)
 
 
-def test_submit_without_prompt_just_opens_studio(navigations):
-    home.on_prompt_submit(SimpleNamespace(value={"mode": "music", "prompt": ""}))
-    assert navigations == [("/lyria", None)]
+def test_word_media_files_exist():
+    for rel in (
+        "posters/gemini-image__page-cover.webp",
+        "posters/gemini-omni__page-cover__hero.webp",
+        "home/word-video.webp",
+        "home/word-film.webp",
+    ):
+        assert os.path.exists(os.path.join(ASSETS, rel)), rel
 
 
-def test_submit_caps_prompt_length(navigations):
-    home.on_prompt_submit(SimpleNamespace(value={"mode": "image", "prompt": "x" * 5000}))
-    assert len(navigations[0][1]["prompt"]) == home.MAX_PROMPT_LEN
+def test_examples_cover_different_kinds():
+    ex = hc.examples()
+    assert len(ex) >= 3
+    assert any("film" in e.lower() for e in ex)
+    assert len(set(ex)) == len(ex)
 
 
-def test_unknown_mode_does_nothing(navigations):
-    home.on_prompt_submit(SimpleNamespace(value={"mode": "hologram", "prompt": "hi"}))
-    assert navigations == []
-
-
-def test_posters_exist_for_every_create_video():
-    from config.default import get_welcome_page_config
-
-    for page in get_welcome_page_config():
-        if page.get("route") in home.CARD_BADGES and page.get("video_url"):
-            assert home.poster_for(page["video_url"]).startswith("/ui/posters/"), page["route"]
-
-
-def test_poster_for_unknown_video_is_empty():
-    assert home.poster_for("https://example.com/nothing-here.mp4") == ""
-    assert home.poster_for("") == ""
+def test_strings_have_every_label():
+    s = hc.strings()
+    for key in ("placeholder", "send", "new_chat", "making", "ready", "failed", "download"):
+        assert s[key], key
