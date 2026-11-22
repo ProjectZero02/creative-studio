@@ -108,6 +108,9 @@ class Default:
     # presenter turns on "Avatar" in the call dock. A preset avatar name, or
     # empty to hide the switch. Video costs far more tokens than audio.
     LIVE_AVATAR: str = os.environ.get("LIVE_AVATAR", "Kira")
+    # The avatar's voice. Without one the avatar speaks with a male default
+    # voice, which does not match Kira, so it gets a female voice.
+    LIVE_AVATAR_VOICE: str = os.environ.get("LIVE_AVATAR_VOICE", "Aoede")
     # NON_BLOCKING job tools with WHEN_IDLE results. Set false for Live models
     # that only support blocking tools; results then arrive as text updates.
     LIVE_ASYNC_TOOLS: bool = (

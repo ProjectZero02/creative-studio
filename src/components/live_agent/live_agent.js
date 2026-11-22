@@ -67,6 +67,8 @@ const CAPTION_FADE_MS = 8000;
 // Baseline 704x1280 with the AAC voice inside), played through MediaSource.
 const AVATAR_KEY = 'gm-live-avatar';
 const AVATAR_MIME = 'video/mp4; codecs="avc1.42C01F, mp4a.40.2"';
+// Seconds the avatar may fall behind before it jumps ahead (a background tab).
+const AVATAR_MAX_LAG = 20;
 function savedAvatar() {
   try { return localStorage.getItem(AVATAR_KEY) === '1'; } catch (e) { return false; }
 }
@@ -75,7 +77,7 @@ function avatarSupported() {
 }
 // The avatar's MediaSource, run in a dedicated worker (see _openAvatar).
 const AVATAR_WORKER = `
-let ms = null, sb = null;
+let ms = null, sb = null, played = 0;
 const queue = [];
 function feed() {
   if (!sb || sb.updating) return;
@@ -83,7 +85,8 @@ function feed() {
   if (b.length) {
     const end = b.end(b.length - 1);
     postMessage({ end });
-    if (end - b.start(0) > 40) { sb.remove(b.start(0), end - 20); return; }
+    // Drop only what was played long ago, never what is still to come.
+    if (played - b.start(0) > 30) { sb.remove(b.start(0), played - 10); return; }
   }
   const next = queue.shift();
   if (next) {
@@ -103,6 +106,8 @@ onmessage = (e) => {
   } else if (e.data.bytes) {
     queue.push(e.data.bytes);
     feed();
+  } else if (e.data.played !== undefined) {
+    played = e.data.played;
   }
 };
 `;
@@ -780,12 +785,26 @@ class GmLive {
     else { av.queue.push(bytes); this._feedAvatar(); }
   }
 
-  /** Stay at the live edge: a late or resumed stream must not lag behind. */
+  /** Keep playing as speech arrives. The model sends a reply faster than
+   * real time, so the buffer runs ahead while the avatar talks: that is
+   * speech still to play, not lag, and is never skipped (skipping it cut
+   * most replies short). Only a far-behind player (a tab in the background)
+   * jumps forward; a barge-in skips the rest of the reply (_avatarSkip). */
   _avatarEdge(end) {
-    const video = this.av && this.av.video;
+    const av = this.av;
+    const video = av && av.video;
     if (!video) return;
-    if (end - video.currentTime > 0.8) video.currentTime = Math.max(0, end - 0.2);
+    av.end = end;
+    if (end - video.currentTime > AVATAR_MAX_LAG) video.currentTime = Math.max(0, end - 0.2);
     if (video.paused) video.play().catch(() => {});
+    if (av.worker) av.worker.postMessage({ played: video.currentTime });
+  }
+
+  /** The presenter talked over the avatar: drop the rest of its reply. */
+  _avatarSkip() {
+    const av = this.av;
+    if (!av || !av.end) return;
+    if (av.end > av.video.currentTime) av.video.currentTime = Math.max(0, av.end - 0.05);
   }
 
   _feedAvatar() {
@@ -979,7 +998,7 @@ class GmLive {
         break;
       case 'audio': this._play(m.data); break;
       case 'video': this._video(m.data); break;
-      case 'interrupted': this._stopPlayback(); this._renderState(false); break;
+      case 'interrupted': this._stopPlayback(); this._avatarSkip(); this._renderState(false); break;
       case 'transcript':
         if (m.who === 'user' && !m.final && this._lastWho !== 'user') this.userLine = '';
         if (m.who === 'agent' && !m.final && this._lastWho !== 'agent') this.agentLine = '';
