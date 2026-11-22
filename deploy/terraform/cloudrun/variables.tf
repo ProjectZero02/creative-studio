@@ -188,15 +188,15 @@ variable "gemini_tts_location" {
 }
 
 variable "cloud_run_cpu" {
-  description = "CPU limit for the Creative Studio Cloud Run service container."
+  description = "CPU limit for the Creative Studio Cloud Run service container. Raised from 2000m when the 4-request cap ran full most of the week at up to 79% CPU (p99)."
   type        = string
-  default     = "2000m"
+  default     = "4000m"
 }
 
 variable "cloud_run_memory" {
-  description = "Memory limit for the Creative Studio Cloud Run service container. Raised above the previous 1024Mi to give headroom for in-process video thumbnail decode, which was observed peaking ~1133 MiB and OOM-killing the instance."
+  description = "Memory limit for the Creative Studio Cloud Run service container. Raised from 1024Mi for in-process video thumbnail decode (peaked ~1133 MiB, OOM), then to 8Gi with 4 vCPU and more requests per instance."
   type        = string
-  default     = "4Gi"
+  default     = "8Gi"
 }
 
 variable "cloud_run_timeout" {
@@ -206,9 +206,27 @@ variable "cloud_run_timeout" {
 }
 
 variable "cloud_run_max_concurrency" {
-  description = "Maximum number of concurrent requests handled by a single Cloud Run instance. Kept low because media generation is CPU/memory intensive per request."
+  description = "Maximum number of concurrent requests handled by a single Cloud Run instance. Every open page and Live call holds a slot while generation runs remotely, so 4 kept the cap full and queued users; 20 fits 4 vCPU / 8Gi."
   type        = number
-  default     = 4
+  default     = 20
+}
+
+variable "cloud_run_cpu_always_on" {
+  description = "Keep CPU allocated between requests (instance-based billing). Story Studio and Live jobs run in background threads that throttled CPU starves."
+  type        = bool
+  default     = true
+}
+
+variable "cloud_run_startup_cpu_boost" {
+  description = "Extra CPU while an instance starts, for faster cold starts."
+  type        = bool
+  default     = true
+}
+
+variable "cloud_run_session_affinity" {
+  description = "Keep a browser on the same instance, so its page state and Live call stay together."
+  type        = bool
+  default     = true
 }
 
 variable "max_instance_count" {

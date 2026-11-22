@@ -261,6 +261,9 @@ module "cloud-run-service" {
   timeout            = var.cloud_run_timeout
   concurrency        = var.cloud_run_max_concurrency
   max_instance_count = var.max_instance_count
+  cpu_always_on      = var.cloud_run_cpu_always_on
+  startup_cpu_boost  = var.cloud_run_startup_cpu_boost
+  session_affinity   = var.cloud_run_session_affinity
 
   # use_lb decomposed into explicit ingress + auth fields (exact prior values).
   ingress_mode         = var.ingress_mode

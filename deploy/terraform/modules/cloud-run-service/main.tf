@@ -61,6 +61,7 @@ resource "google_cloud_run_v2_service" "creative_studio" {
   template {
     timeout                          = var.timeout
     max_instance_request_concurrency = var.concurrency
+    session_affinity                 = var.session_affinity
     containers {
       name  = "creative-studio"
       image = var.image
@@ -69,6 +70,8 @@ resource "google_cloud_run_v2_service" "creative_studio" {
           cpu    = var.cpu
           memory = var.memory
         }
+        cpu_idle          = !var.cpu_always_on
+        startup_cpu_boost = var.startup_cpu_boost
       }
       dynamic "env" {
         for_each = var.env_vars
