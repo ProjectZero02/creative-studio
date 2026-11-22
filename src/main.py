@@ -154,7 +154,14 @@ from pages.test_uploader import test_uploader_page
 from pages.test_vto_prompt_generator import page as test_vto_prompt_generator_page
 from pages import account as account_page
 from pages import admin_users as admin_users_page
-from routers import auth_router, live_router, prompt_router, story_router, veo_router
+from routers import (
+    auth_router,
+    chat_router,
+    live_router,
+    prompt_router,
+    story_router,
+    veo_router,
+)
 from routers.auth_router import session_gate
 from services import story_service
 from state.state import AppState
@@ -725,6 +732,8 @@ app.include_router(live_router.router)
 app.include_router(story_router.router)
 # Recent prompts for the Up/Down keys in the prompt box (owner-scoped).
 app.include_router(prompt_router.router)
+# The Home chat (one prompt box that does everything; owner-scoped).
+app.include_router(chat_router.router)
 
 
 # Old speech pages now live on /voice. Full page loads (bookmarks, shared links)
