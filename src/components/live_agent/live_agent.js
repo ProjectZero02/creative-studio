@@ -26,9 +26,10 @@
  * <live-agent-bridge> (one per page) turns "go to page" and "fill these
  * fields" into Mesop events, and carries the page's fillable fields.
  *
- * A call is "Fill only" (the agent only fills the page; the presenter presses
- * Generate) or "Do it for me" (the agent also runs jobs). The dock's switch
- * picks it; the choice is remembered in this browser.
+ * The agent always does the work (it runs the jobs itself). The call window
+ * works like a video call: it starts on the right, can be dragged anywhere
+ * and minimised to a small pill while the call goes on. Jobs sit in a list
+ * inside it; results open in a small viewer window.
  * <live-call-button> is the big call button on the home page.
  */
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
@@ -49,11 +50,15 @@ const DEFAULT_STRINGS = {
   close: 'Close',
   nomic: 'No microphone access. You can still type.',
   avatarNoSupport: 'This browser cannot play the avatar, so the call is voice only.',
-  fill: 'Fill only',
-  act: 'Do it for me',
-  modeHint: 'Fill only: the agent fills the page and you press Generate. Do it for me: it also runs the jobs.',
+  minimize: 'Minimize',
+  expand: 'Expand',
+  restore: 'Restore',
+  keyboard: 'Type instead',
+  noJobs: 'Things you ask for show up here.',
+  avatarOn: 'Turn the avatar off',
+  avatarOff: 'Turn the avatar on',
 };
-const MODE_KEY = 'gm-live-mode';
+const CALL_POS_KEY = 'gm-live-pos';
 // What the dock says while the agent runs a tool (instead of "Listening").
 const TOOL_ACTIVITY = {
   read_page: 'Reading the page',
@@ -111,8 +116,11 @@ onmessage = (e) => {
   }
 };
 `;
-function savedMode() {
-  try { return localStorage.getItem(MODE_KEY) === 'act' ? 'act' : 'fill'; } catch (e) { return 'fill'; }
+/** A short line for the viewer: the first clause of the prompt. */
+function shortText(prompt) {
+  const first = String(prompt || '').split(/[.,;:\n]/)[0].trim();
+  if (first.length <= 64) return first;
+  return first.slice(0, 64).replace(/\s+\S*$/, '') + '…';
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -148,92 +156,140 @@ const STYLE = `
   font-family: "Google Sans", "Google Sans Text", Roboto, Arial, sans-serif;
   color: var(--sys-on-surface, #1b1c1f); }
 .gml-root * { box-sizing: border-box; }
-.gml-glass { background: var(--gm-glass-fill, rgba(255,255,255,.82));
+.gml-glass { background: var(--gm-glass-solid, rgba(255,255,255,.94));
   backdrop-filter: blur(var(--gm-glass-blur, 18px)); -webkit-backdrop-filter: blur(var(--gm-glass-blur, 18px));
   border: 1px solid var(--gm-glass-border, rgba(0,0,0,.08));
-  box-shadow: var(--gm-glass-shadow, 0 8px 30px rgba(0,0,0,.12)); }
-.gml-btn { pointer-events: auto; border: 0; cursor: pointer; font: inherit; border-radius: 999px;
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+  box-shadow: 0 18px 50px rgba(0,0,0,.28); }
+.gml-btn { pointer-events: auto; border: 0; cursor: pointer; font: inherit; border-radius: 999px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: inherit; }
 .gml-btn:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 2px; }
-.gml-launch { position: fixed; inset-inline-end: 20px; bottom: 20px; height: 48px; padding: 0 18px 0 14px;
+.gml-btn svg { width: 20px; height: 20px; fill: currentColor; flex: none; }
+.gml-launch { position: fixed; inset-inline-end: 20px; bottom: 20px; height: 48px; min-width: 48px; padding: 0 14px;
   background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); font-weight: 500;
   box-shadow: 0 6px 20px rgba(26,95,216,.35); }
-.gml-launch svg, .gml-dock svg { width: 20px; height: 20px; fill: currentColor; }
-/* A round mic that shows its label on hover or keyboard focus: the wide pill
-   sat on top of the bottom-right primary action (Fashion "Try it on", Brand
-   kit "Create brand kit") on a 1440 x 900 screen. */
-.gml-launch { min-width: 48px; padding: 0 14px; }
 .gml-launch span { display: none; }
 .gml-launch:hover span, .gml-launch:focus-visible span { display: inline; }
 .gml-launch:hover, .gml-launch:focus-visible { padding: 0 18px 0 14px; }
-.gml-dock { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
-  width: min(640px, calc(100vw - 32px)); border-radius: 24px; padding: 10px 10px 10px 16px;
-  display: flex; align-items: center; gap: 10px; pointer-events: auto; }
-.gml-state { display: flex; align-items: center; gap: 8px; min-width: 112px; font-size: 13px;
-  color: var(--sys-on-surface-variant, #44474e); white-space: nowrap; }
-.gml-dot { width: 10px; height: 10px; border-radius: 50%; background: #9aa0a6; flex: none; }
-.gml-dot[data-s="live"] { background: #1e8e3e; box-shadow: 0 0 0 0 rgba(30,142,62,.5); animation: gml-pulse 1.6s infinite; }
-.gml-dot[data-s="speaking"] { background: var(--sys-primary, #1a5fd8); }
-.gml-dot[data-s="offline"] { background: #f29900; }
-.gml-dot[data-s="working"] { background: var(--sys-primary, #1a5fd8); animation: gml-pulse 1s infinite; }
-.gml-cap.faded { opacity: 0; }
-.gml-avatar { position: fixed; bottom: 84px; inset-inline-start: 16px; width: min(200px, 34vw); aspect-ratio: 704 / 1280;
-  border-radius: 18px; overflow: hidden; pointer-events: auto; animation: gml-in .35s ease-out; }
-.gml-avatar video { width: 100%; height: 100%; object-fit: cover; display: block; background: #0b0d12; }
+@keyframes gml-pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
 @keyframes gml-pulse { 0% { box-shadow: 0 0 0 0 rgba(30,142,62,.45); } 70% { box-shadow: 0 0 0 8px rgba(30,142,62,0); } 100% { box-shadow: 0 0 0 0 rgba(30,142,62,0); } }
-.gml-level { width: 46px; height: 6px; border-radius: 3px; background: var(--sys-surface-container-high, #e6e8ec); overflow: hidden; flex: none; }
-.gml-level i { display: block; height: 100%; width: 0; background: #1e8e3e; transition: width .08s; }
-.gml-input { flex: 1; min-width: 0; height: 40px; border-radius: 20px; padding: 0 14px; font: inherit; font-size: 14px;
-  border: 1px solid var(--sys-outline-variant, #c4c6cf); background: var(--sys-surface-container-lowest, #fff);
-  color: inherit; pointer-events: auto; }
-.gml-mode { height: 32px; padding: 0 12px; flex: none; font-size: 13px; font-weight: 500;
-  background: var(--sys-surface-container-high, #e6e8ec); color: inherit; white-space: nowrap; }
-.gml-mode[data-mode="act"] { background: var(--sys-primary-container, #d8e2ff); color: var(--sys-on-primary-container, #001a41); }
-.gml-icon { width: 40px; height: 40px; flex: none; background: var(--sys-surface-container-high, #e6e8ec); color: inherit; }
-.gml-icon[aria-pressed="true"] { background: #fce8e6; color: #c5221f; }
-.gml-hang { width: 40px; height: 40px; flex: none; background: #d93025; color: #fff; }
-.gml-captions { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%);
-  width: min(640px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 6px; align-items: center; }
-.gml-cap { max-width: 100%; padding: 8px 14px; border-radius: 16px; font-size: 15px; line-height: 1.35;
-  text-align: center; transition: opacity .3s; }
-.gml-cap.user { font-size: 13px; color: var(--sys-on-surface-variant, #44474e); }
-.gml-cap:empty { display: none; }
+@keyframes gml-breathe { 50% { transform: scale(1.08); } }
+@keyframes gml-rot { to { transform: rotate(360deg); } }
+@keyframes gml-ping { 0% { box-shadow: 0 0 0 0 rgba(26,95,216,.6); } 100% { box-shadow: 0 0 0 12px rgba(26,95,216,0); } }
+
+/* ---- Call window: one card, like a video call. Drag it anywhere; it starts on the right. */
+.gml-call { position: fixed; top: 84px; right: 20px; width: 280px; border-radius: 24px; overflow: hidden;
+  pointer-events: auto; display: flex; flex-direction: column; touch-action: none;
+  animation: gml-pop .25s ease-out; transition: width .2s ease, border-radius .2s ease; }
+.gml-call.dragging { transition: none; cursor: grabbing; }
+.gml-stage { position: relative; height: 156px; display: grid; place-items: center; cursor: grab; overflow: hidden;
+  background: radial-gradient(circle at 50% 45%, rgba(79,124,247,.28), transparent 68%), var(--sys-surface-container-high, #262a36); }
+.gml-call.has-avatar .gml-stage { height: auto; aspect-ratio: 704 / 1280; max-height: min(440px, 52vh); }
+.gml-stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #0b0d12; }
+.gml-orb { width: 76px; height: 76px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #a8c7fa, #4f7cf7 55%, #7b3fe4);
+  box-shadow: 0 0 0 calc(var(--lvl, 0) * 26px) rgba(79,124,247,.22); transition: box-shadow .1s; }
+.gml-call[data-s="speaking"] .gml-orb, .gml-call[data-s="working"] .gml-orb { animation: gml-breathe 1.3s ease-in-out infinite; }
+.gml-call.has-avatar .gml-orb { display: none; }
+.gml-top { position: absolute; top: 10px; inset-inline: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; z-index: 1; }
+.gml-state { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 999px;
+  font-size: 12px; font-weight: 500; white-space: nowrap; color: #fff; background: rgba(0,0,0,.42);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.gml-dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; flex: none; }
+.gml-dot[data-s="live"] { background: #34a853; animation: gml-pulse 1.6s infinite; }
+.gml-dot[data-s="speaking"], .gml-dot[data-s="working"] { background: #8ab4f8; }
+.gml-dot[data-s="offline"] { background: #fbbc04; }
+.gml-chip { width: 28px; height: 28px; color: #fff; background: rgba(0,0,0,.42); backdrop-filter: blur(8px); }
+.gml-chip svg { width: 18px; height: 18px; }
+.gml-chip:hover { background: rgba(0,0,0,.6); }
+.gml-caps { padding: 10px 16px 0; display: flex; flex-direction: column; gap: 4px; }
+.gml-caps:not(:has(.gml-cap:not(:empty):not(.faded))) { display: none; }
+.gml-cap { font-size: 13.5px; line-height: 1.4; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.gml-cap.user { font-size: 12px; color: var(--sys-on-surface-variant, #5f6368); -webkit-line-clamp: 2; }
+.gml-cap:empty, .gml-cap.faded { display: none; }
 .gml-notice { font-size: 12px; color: #b06000; }
-.gml-tray { position: fixed; top: 76px; inset-inline-end: 16px; width: 248px; max-height: calc(100vh - 200px);
-  overflow-y: auto; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; border-radius: 18px; padding: 10px; }
-.gml-tray h2 { margin: 2px 4px 2px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--sys-on-surface-variant, #44474e); }
-.gml-job { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 6px; border-radius: 12px; cursor: pointer;
-  background: var(--sys-surface-container-lowest, #fff); border: 1px solid var(--sys-outline-variant, #dfe1e6);
-  text-align: left; width: 100%; color: inherit; font: inherit; animation: gml-in .35s ease-out; }
+.gml-controls { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; }
+.gml-ctl { position: relative; width: 40px; height: 40px; flex: none; background: var(--gm-tonal, rgba(127,127,127,.14)); }
+.gml-ctl:hover { background: var(--gm-tonal-hover, rgba(127,127,127,.22)); }
+.gml-ctl.on { background: var(--sys-primary-container, #d3e3fd); color: var(--sys-on-primary-container, #041e49); }
+.gml-ctl.off { background: #fce8e6; color: #c5221f; }
+.gml-ctl.mic:not(.off) { box-shadow: 0 0 0 calc(var(--lvl, 0) * 5px) rgba(52,168,83,.35); }
+.gml-ctl.ping { animation: gml-ping 1s ease-out 2; }
+.gml-badge { position: absolute; top: -3px; inset-inline-end: -3px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--sys-primary, #1a5fd8); color: #fff; font-size: 11px; font-weight: 600; display: grid; place-items: center; }
+.gml-badge:empty { display: none; }
+.gml-hang { width: 40px; height: 40px; flex: none; background: #d93025; color: #fff; }
+.gml-hang:hover { background: #c5221f; }
+.gml-restore, .gml-mstate { display: none; }
+.gml-typed { padding: 0 12px 12px; }
+.gml-input { width: 100%; height: 40px; border-radius: 20px; padding: 0 14px; font: inherit; font-size: 14px; border: 0;
+  background: var(--gm-tonal, rgba(127,127,127,.14)); color: inherit; pointer-events: auto; outline: none; }
+.gml-input:focus { background: var(--gm-tonal-hover, rgba(127,127,127,.22)); }
+.gml-jobs { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; max-height: min(280px, 34vh); overflow-y: auto; }
+.gml-jobs h2 { margin: 0 6px 2px; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--sys-on-surface-variant, #5f6368); }
+.gml-empty { margin: 0 6px 4px; font-size: 13px; color: var(--sys-on-surface-variant, #5f6368); }
+.gml-job { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 6px; border-radius: 14px; cursor: pointer;
+  background: var(--gm-tonal, rgba(127,127,127,.1)); border: 0; text-align: start; width: 100%; color: inherit; font: inherit; }
+.gml-job:hover { background: var(--gm-tonal-hover, rgba(127,127,127,.18)); }
 .gml-job audio { width: 100%; height: 32px; display: block; }
-.gml-job:hover { border-color: var(--sys-primary, #1a5fd8); }
-.gml-job.flash { box-shadow: 0 0 0 3px rgba(26,95,216,.35); }
-@keyframes gml-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
-.gml-thumb { width: 52px; height: 52px; border-radius: 9px; flex: none; overflow: hidden; display: grid; place-items: center;
+.gml-job.flash { box-shadow: 0 0 0 2px rgba(26,95,216,.45); }
+.gml-thumb { width: 44px; height: 44px; border-radius: 10px; flex: none; overflow: hidden; display: grid; place-items: center;
   background: var(--sys-surface-container-high, #e6e8ec); }
 .gml-thumb img, .gml-thumb video { width: 100%; height: 100%; object-fit: cover; }
-.gml-thumb svg { width: 24px; height: 24px; fill: var(--sys-primary, #1a5fd8); }
-.gml-spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(26,95,216,.2);
+.gml-thumb svg { width: 22px; height: 22px; fill: var(--sys-primary, #1a5fd8); }
+.gml-spin { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid rgba(26,95,216,.2);
   border-top-color: var(--sys-primary, #1a5fd8); animation: gml-rot .9s linear infinite; }
-@keyframes gml-rot { to { transform: rotate(360deg); } }
 .gml-meta { min-width: 0; flex: 1; }
 .gml-meta b { display: block; font-size: 13px; font-weight: 600; text-transform: capitalize; }
-.gml-meta span { display: block; font-size: 12px; color: var(--sys-on-surface-variant, #44474e);
+.gml-meta span { display: block; font-size: 12px; color: var(--sys-on-surface-variant, #5f6368);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gml-meta em { font-style: normal; font-size: 11px; color: var(--sys-on-surface-variant, #44474e); }
+.gml-meta em { font-style: normal; font-size: 11px; color: var(--sys-on-surface-variant, #5f6368); }
 .gml-meta em.failed { color: #c5221f; }
-.gml-viewer { position: fixed; top: 76px; inset-inline-end: 280px; width: min(560px, calc(100vw - 320px));
-  border-radius: 20px; padding: 14px; pointer-events: auto; animation: gml-pop .3s ease-out; }
-@keyframes gml-pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
-.gml-viewer img, .gml-viewer video { width: 100%; max-height: 62vh; object-fit: contain; border-radius: 12px; display: block;
-  background: var(--sys-surface-container-high, #e6e8ec); }
-.gml-viewer audio { width: 100%; display: block; margin: 12px 0 4px; }
-.gml-vhead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.gml-vhead b { flex: 1; text-transform: capitalize; font-size: 15px; }
-.gml-vprompt { margin: 10px 2px 2px; font-size: 13px; color: var(--sys-on-surface-variant, #44474e); }
-.gml-small { height: 34px; padding: 0 14px; font-size: 13px; background: var(--sys-surface-container-high, #e6e8ec); color: inherit; }
-.gml-small.primary { background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); }
+
+/* Minimised: a small pill that keeps the call going. */
+.gml-call.min { width: auto; flex-direction: row; align-items: center; border-radius: 999px; padding: 6px; gap: 4px; }
+.gml-call.min .gml-stage { width: 44px; height: 44px; aspect-ratio: auto; max-height: none; border-radius: 50%; flex: none; }
+.gml-call.min .gml-orb { width: 26px; height: 26px; }
+.gml-call.min .gml-top, .gml-call.min .gml-caps, .gml-call.min .gml-typed, .gml-call.min .gml-jobs,
+.gml-call.min .gml-ctl.opt { display: none !important; }
+.gml-call.min .gml-mstate { display: inline-block; padding: 0 8px 0 6px; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: grab; }
+.gml-call.min .gml-restore { display: inline-flex; }
+.gml-call.min .gml-controls { padding: 0; gap: 6px; }
+
+/* ---- Result viewer: the picture edge to edge, small window buttons, one line under it. */
+.gml-viewer { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column;
+  border-radius: 20px; overflow: hidden; pointer-events: auto; max-width: calc(100vw - 32px); touch-action: none;
+  animation: gml-pop .22s ease-out; }
+.gml-viewer.placed { transform: none; animation: none; }
+.gml-vmedia { position: relative; line-height: 0; background: #000; cursor: grab; }
+.gml-vmedia img, .gml-vmedia video { display: block; width: auto; height: auto;
+  max-width: min(880px, max(min(360px, calc(100vw - 32px)), calc(100vw - 680px))); max-height: 68vh; }
+.gml-viewer.big .gml-vmedia img, .gml-viewer.big .gml-vmedia video { max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); }
+.gml-vmedia.audio { background: transparent; line-height: normal; padding: 48px 14px 6px; width: min(380px, calc(100vw - 32px)); }
+.gml-vmedia.audio audio { width: 100%; display: block; }
+.gml-vwait { width: min(420px, calc(100vw - 32px)); height: 260px; display: grid; place-items: center; line-height: normal;
+  padding: 24px; text-align: center; font-size: 14px; color: #e8eaed; background: var(--sys-surface-container-high, #262a36); }
+.gml-vwait svg { width: 40px; height: 40px; fill: var(--sys-primary, #8ab4f8); }
+.gml-vtools { position: absolute; top: 10px; inset-inline-end: 10px; display: flex; gap: 2px; padding: 3px; border-radius: 999px;
+  background: rgba(0,0,0,.45); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); line-height: normal; z-index: 1; }
+.gml-vt { width: 28px; height: 28px; color: #fff; background: transparent; }
+.gml-vt svg { width: 16px; height: 16px; }
+.gml-vt:hover { background: rgba(255,255,255,.18); }
+.gml-vfoot { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; min-width: 0; cursor: grab; }
+.gml-vdesc { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--sys-on-surface-variant, #5f6368); }
+.gml-vdesc b { color: var(--sys-on-surface, #1b1c1f); font-weight: 600; text-transform: capitalize; }
+.gml-vdl { width: 34px; height: 34px; flex: none; background: var(--gm-tonal, rgba(127,127,127,.14)); }
+.gml-vdl:hover { background: var(--gm-tonal-hover, rgba(127,127,127,.22)); }
+.gml-vdl svg { width: 18px; height: 18px; }
+.gml-vchip { position: fixed; left: 20px; bottom: 20px; display: inline-flex; align-items: center; gap: 4px; padding: 5px;
+  border-radius: 999px; pointer-events: auto; animation: gml-pop .2s ease-out; }
+.gml-vchip .gml-thumb { width: 36px; height: 36px; border-radius: 50%; }
+.gml-vchip-open { height: 36px; padding: 0 10px 0 4px; gap: 8px; background: transparent; font-size: 13px; font-weight: 500; text-transform: capitalize; }
+.gml-vchip .gml-vt { color: inherit; }
+.gml-vchip .gml-vt:hover { background: var(--gm-tonal-hover, rgba(127,127,127,.22)); }
+
 .gml-cursor { position: fixed; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
   background: radial-gradient(circle, rgba(66,133,244,.95) 0 30%, rgba(66,133,244,.35) 31% 100%);
   box-shadow: 0 0 18px rgba(66,133,244,.8); opacity: 0;
@@ -243,25 +299,32 @@ const STYLE = `
   pointer-events: none; animation: gml-ring 1.2s ease-out forwards; }
 @keyframes gml-ring { 0% { opacity: 0; transform: scale(1.06); } 20% { opacity: 1; transform: scale(1); } 100% { opacity: 0; } }
 .gml-hidden { display: none !important; }
-@media (max-width: 760px) {
-  .gml-tray { top: auto; bottom: 150px; inset-inline-end: 8px; width: 180px; max-height: 40vh; }
-  .gml-viewer { inset-inline: 8px; width: auto; top: 64px; }
-  .gml-state { min-width: 0; } .gml-state span { display: none; }
-}
-/* Phones: a round mic button instead of the wide pill, so it covers less of
-   the page (the label stays as aria-label). */
 @media (max-width: 600px) {
   .gml-launch { width: 52px; height: 52px; padding: 0; inset-inline-end: 16px; bottom: 16px; }
   .gml-launch span { display: none; }
   .gml-launch svg { width: 22px; height: 22px; }
+  .gml-call { width: 232px; }
+  .gml-call.has-avatar .gml-stage { max-height: 40vh; }
+  .gml-controls { gap: 6px; padding: 10px; }
+  .gml-ctl, .gml-hang { width: 36px; height: 36px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .gml-cursor, .gml-job, .gml-viewer { transition: none; animation: none; }
+  .gml-cursor, .gml-job, .gml-viewer, .gml-call, .gml-orb { transition: none; animation: none !important; }
 }
 `;
 
 const ICON_MIC = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>';
 const ICON_MIC_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11h-2c0 .74-.16 1.43-.43 2.05l1.47 1.47A6.9 6.9 0 0 0 19 11zM15 11V5a3 3 0 0 0-5.94-.6L15 10.34zM4.27 3 3 4.27l6 6V11a3 3 0 0 0 4.38 2.65l1.55 1.55A5 5 0 0 1 7 11H5a7 7 0 0 0 6 6.92V21h2v-3.08a6.9 6.9 0 0 0 2.98-1.06L19.73 21 21 19.73z"/></svg>';
+const icon = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+const ICON_MINUS = icon('M5 11h14v2H5z');
+const ICON_EXPAND = icon('M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z');
+const ICON_SHRINK = icon('M8 4h2v6H4V8h4zm6 0h2v4h4v2h-6zM4 14h6v6H8v-4H4zm10 0h6v2h-4v4h-2z');
+const ICON_CLOSE = icon('M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z');
+const ICON_DOWNLOAD = icon('M5 20h14v-2H5zM12 16l5-5-1.4-1.4-2.6 2.6V4h-2v8.2L8.4 9.6 7 11z');
+const ICON_CAM = icon('M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z');
+const ICON_CAM_OFF = icon('M21 6.5l-4 4V7a1 1 0 0 0-1-1H9.8L21 17.2zM3.3 2 2 3.3 4.7 6H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12c.2 0 .4-.1.5-.2l3.2 3.2 1.3-1.3z');
+const ICON_KEYS = icon('M20 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm-9 3h2v2h-2zm0 3h2v2h-2zM8 8h2v2H8zm0 3h2v2H8zm-1 2H5v-2h2zm0-3H5V8h2zm9 7H8v-2h8zm0-4h-2v-2h2zm0-3h-2V8h2zm3 3h-2v-2h2zm0-3h-2V8h2z');
+const ICON_JOBS = icon('M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z');
 const ICON_HANG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a1 1 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 0 0-2.67-1.85.99.99 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>';
 
 class GmLive {
@@ -300,18 +363,52 @@ class GmLive {
     this.launch = this._el('button', 'gml-btn gml-launch', root, ICON_MIC + '<span></span>');
     this.launch.addEventListener('click', () => this.start());
 
-    this.captions = this._el('div', 'gml-captions gml-hidden', root);
-    this.capUser = this._el('div', 'gml-cap user gml-glass', this.captions);
-    this.capAgent = this._el('div', 'gml-cap gml-glass', this.captions);
-    this.capAgent.setAttribute('aria-live', 'polite');
-
-    this.dock = this._el('div', 'gml-dock gml-glass gml-hidden', root);
-    this.dock.setAttribute('role', 'region');
-    const st = this._el('div', 'gml-state', this.dock);
+    // The call window: stage (avatar or voice orb), captions, controls, typed
+    // input and the jobs list. Dragged by anything that is not a control.
+    const call = this._el('div', 'gml-call gml-glass gml-hidden', root);
+    call.setAttribute('role', 'region');
+    this.call = call;
+    this.dock = call; // older code and tests name it the dock
+    this.stage = this._el('div', 'gml-stage', call);
+    this._el('div', 'gml-orb', this.stage);
+    const top = this._el('div', 'gml-top', this.stage);
+    const st = this._el('div', 'gml-state', top);
     this.dot = this._el('i', 'gml-dot', st);
     this.stateText = this._el('span', '', st);
-    this.level = this._el('div', 'gml-level', this.dock, '<i></i>');
-    this.input = this._el('input', 'gml-input', this.dock);
+    this.minBtn = this._el('button', 'gml-btn gml-chip', top, ICON_MINUS);
+    this.minBtn.type = 'button';
+    this.minBtn.addEventListener('click', () => this.setMinimized(true));
+
+    this.captions = this._el('div', 'gml-caps', call);
+    this.capUser = this._el('div', 'gml-cap user', this.captions);
+    this.capAgent = this._el('div', 'gml-cap', this.captions);
+    this.capAgent.setAttribute('aria-live', 'polite');
+
+    const controls = this._el('div', 'gml-controls', call);
+    this.mstate = this._el('span', 'gml-mstate', controls);
+    this.restoreBtn = this._el('button', 'gml-btn gml-ctl gml-restore', controls, ICON_EXPAND);
+    this.restoreBtn.type = 'button';
+    this.restoreBtn.addEventListener('click', () => this.setMinimized(false));
+    this.muteBtn = this._el('button', 'gml-btn gml-ctl mic', controls, ICON_MIC);
+    this.muteBtn.type = 'button';
+    this.muteBtn.addEventListener('click', () => this.toggleMute());
+    this.avatar = savedAvatar();
+    this.avatarBtn = this._el('button', 'gml-btn gml-ctl opt', controls, ICON_CAM);
+    this.avatarBtn.type = 'button';
+    this.avatarBtn.addEventListener('click', () => this.setAvatar(!this.avatar));
+    this.typeBtn = this._el('button', 'gml-btn gml-ctl opt', controls, ICON_KEYS);
+    this.typeBtn.type = 'button';
+    this.typeBtn.addEventListener('click', () => this.setTyping(!this.typing));
+    this.jobsBtn = this._el('button', 'gml-btn gml-ctl opt', controls, ICON_JOBS + '<span class="gml-badge"></span>');
+    this.jobsBtn.type = 'button';
+    this.jobsBtn.addEventListener('click', () => this.setJobsOpen(!this.jobsOpen));
+    this.hangBtn = this._el('button', 'gml-btn gml-hang', controls, ICON_HANG);
+    this.hangBtn.type = 'button';
+    this.hangBtn.addEventListener('click', () => this.stop());
+
+    const typed = this._el('div', 'gml-typed gml-hidden', call);
+    this.typedRow = typed;
+    this.input = this._el('input', 'gml-input', typed);
     this.input.type = 'text';
     this.input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && this.input.value.trim()) {
@@ -319,23 +416,20 @@ class GmLive {
         this.input.value = '';
       }
     });
-    this.mode = savedMode();
-    this.modeBtn = this._el('button', 'gml-btn gml-mode', this.dock);
-    this.modeBtn.type = 'button';
-    this.modeBtn.addEventListener('click', () => this.setMode(this.mode === 'fill' ? 'act' : 'fill'));
-    this.avatar = savedAvatar();
-    this.avatarBtn = this._el('button', 'gml-btn gml-mode', this.dock);
-    this.avatarBtn.type = 'button';
-    this.avatarBtn.addEventListener('click', () => this.setAvatar(!this.avatar));
-    this.muteBtn = this._el('button', 'gml-btn gml-icon', this.dock, ICON_MIC);
-    this.muteBtn.addEventListener('click', () => this.toggleMute());
-    this.hangBtn = this._el('button', 'gml-btn gml-hang', this.dock, ICON_HANG);
-    this.hangBtn.addEventListener('click', () => this.stop());
 
-    this.tray = this._el('div', 'gml-tray gml-glass gml-hidden', root);
-    this.trayTitle = this._el('h2', '', this.tray);
+    this.jobsPanel = this._el('div', 'gml-jobs gml-hidden', call);
+    this.trayTitle = this._el('h2', '', this.jobsPanel);
+    this.jobsEmpty = this._el('p', 'gml-empty', this.jobsPanel);
+    this.tray = this.jobsPanel; // job cards live here
+
+    this._draggable(call, call, () => this._saveCallPos());
+    window.addEventListener('resize', () => { if (!this.call.classList.contains('gml-hidden')) this._applyCallPos(); });
 
     this.viewer = this._el('div', 'gml-viewer gml-glass gml-hidden', root);
+    this._draggable(this.viewer, this.viewer);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !this.viewer.classList.contains('gml-hidden')) this.closeViewer();
+    });
     this.cursor = this._el('div', 'gml-cursor', root);
     this._applyStrings();
   }
@@ -346,18 +440,26 @@ class GmLive {
     this._applyStrings();
   }
 
+  _label(el, text) {
+    el.setAttribute('aria-label', text);
+    el.title = text;
+  }
+
   _applyStrings() {
     const s = this.strings;
     this.launch.querySelector('span').textContent = s.talk;
     this.launch.setAttribute('aria-label', s.talk);
-    this._renderMode();
     this._renderAvatar();
     this.input.placeholder = s.type;
     this.input.setAttribute('aria-label', s.type);
-    this.hangBtn.setAttribute('aria-label', s.hangup);
-    this.hangBtn.title = s.hangup;
-    this.dock.setAttribute('aria-label', s.talk);
+    this._label(this.hangBtn, s.hangup);
+    this._label(this.minBtn, s.minimize || DEFAULT_STRINGS.minimize);
+    this._label(this.restoreBtn, s.restore || DEFAULT_STRINGS.restore);
+    this._label(this.typeBtn, s.keyboard || DEFAULT_STRINGS.keyboard);
+    this._label(this.jobsBtn, s.jobs);
+    this.call.setAttribute('aria-label', s.talk);
     this.trayTitle.textContent = s.jobs;
+    this.jobsEmpty.textContent = s.noJobs || DEFAULT_STRINGS.noJobs;
     this._renderMute();
     this._renderState();
   }
@@ -365,16 +467,17 @@ class GmLive {
   _renderMute() {
     const label = this.muted ? this.strings.unmute : this.strings.mute;
     this.muteBtn.innerHTML = this.muted ? ICON_MIC_OFF : ICON_MIC;
+    this.muteBtn.classList.toggle('off', this.muted);
     this.muteBtn.setAttribute('aria-pressed', String(this.muted));
-    this.muteBtn.setAttribute('aria-label', label);
-    this.muteBtn.title = label;
+    this._label(this.muteBtn, label);
   }
 
   _renderState(speaking) {
     const active = this.state !== 'idle';
     this.launch.classList.toggle('gml-hidden', active || this._heroVisible());
-    this.dock.classList.toggle('gml-hidden', !active);
-    this.captions.classList.toggle('gml-hidden', !active);
+    const wasHidden = this.call.classList.contains('gml-hidden');
+    this.call.classList.toggle('gml-hidden', !active);
+    if (active && wasHidden) this._applyCallPos();
     const s = this.strings;
     let label = '';
     let key = this.state;
@@ -386,9 +489,10 @@ class GmLive {
       else if (this.activity) { label = `${this.activity}…`; key = 'working'; }
     }
     this.dot.dataset.s = key;
+    this.call.dataset.s = key;
     this.stateText.textContent = label;
+    this.mstate.textContent = label;
     this.muteBtn.classList.toggle('gml-hidden', !this.micStream);
-    this.level.classList.toggle('gml-hidden', !this.micStream);
   }
 
   _heroVisible() {
@@ -397,7 +501,7 @@ class GmLive {
 
   refreshLauncher() { this._renderState(); }
 
-  /** Show what the agent is doing in the dock; clears itself. */
+  /** Show what the agent is doing in the call window; clears itself. */
   _setActivity(label) {
     this.activity = label;
     clearTimeout(this._activityTimer);
@@ -411,10 +515,96 @@ class GmLive {
     if (final) this[key] = text;
     else this[key] = (this[key] + text).slice(-280);
     el.textContent = this[key];
-    // Captions fade after a quiet spell so they do not sit over the page.
+    // Captions clear after a quiet spell so the window stays small.
     el.classList.remove('faded');
     clearTimeout(el._fade);
-    el._fade = setTimeout(() => el.classList.add('faded'), CAPTION_FADE_MS);
+    el._fade = setTimeout(() => { el.classList.add('faded'); this._applyCallPos(); }, CAPTION_FADE_MS);
+    this._applyCallPos();
+  }
+
+  // ------------------------------------------------------ call window ----
+
+  setMinimized(on) {
+    this.minimized = !!on;
+    this.call.classList.toggle('min', this.minimized);
+    this._applyCallPos();
+  }
+
+  setTyping(on) {
+    this.typing = !!on;
+    this.typedRow.classList.toggle('gml-hidden', !this.typing);
+    this.typeBtn.classList.toggle('on', this.typing);
+    this.typeBtn.setAttribute('aria-pressed', String(this.typing));
+    this._applyCallPos();
+    if (this.typing) this.input.focus();
+  }
+
+  setJobsOpen(on) {
+    this.jobsOpen = !!on;
+    this.jobsPanel.classList.toggle('gml-hidden', !this.jobsOpen);
+    this.jobsBtn.classList.toggle('on', this.jobsOpen);
+    this.jobsBtn.setAttribute('aria-pressed', String(this.jobsOpen));
+    this.jobsBtn.classList.remove('ping');
+    this._applyCallPos();
+  }
+
+  /** Drag `el` by `handle`; controls, inputs and media controls still work. */
+  _draggable(el, handle, onDone) {
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target.closest('button, input, a, video[controls], audio, .gml-jobs')) return;
+      const r = el.getBoundingClientRect();
+      const dx = e.clientX - r.left;
+      const dy = e.clientY - r.top;
+      // Pin the current spot first, so nothing jumps when centring stops.
+      el.style.left = `${r.left}px`;
+      el.style.top = `${r.top}px`;
+      el.style.right = 'auto';
+      el.classList.add('placed', 'dragging');
+      try { handle.setPointerCapture(e.pointerId); } catch (_) { /* old browser */ }
+      const move = (ev) => this._moveTo(el, ev.clientX - dx, ev.clientY - dy);
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        el.classList.remove('dragging');
+        if (onDone) onDone();
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up, { once: true });
+      handle.addEventListener('pointercancel', up, { once: true });
+      e.preventDefault();
+    });
+  }
+
+  _moveTo(el, x, y) {
+    const r = el.getBoundingClientRect();
+    const nx = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
+    const ny = Math.max(8, Math.min(y, window.innerHeight - r.height - 8));
+    el.style.left = `${nx}px`;
+    el.style.top = `${ny}px`;
+  }
+
+  /** Remember where the call window sits, anchored to the nearer side so it
+   * stays put when it grows or shrinks (avatar, captions, minimise). */
+  _saveCallPos() {
+    const r = this.call.getBoundingClientRect();
+    const right = r.left + r.width / 2 > window.innerWidth / 2;
+    this.callPos = { side: right ? 'right' : 'left', inset: right ? window.innerWidth - r.right : r.left, top: r.top };
+    try { localStorage.setItem(CALL_POS_KEY, JSON.stringify(this.callPos)); } catch (_) { /* not kept */ }
+    this._applyCallPos();
+  }
+
+  _applyCallPos() {
+    const el = this.call;
+    if (!el) return;
+    if (!this.callPos) {
+      try { this.callPos = JSON.parse(localStorage.getItem(CALL_POS_KEY) || 'null'); } catch (_) { this.callPos = null; }
+    }
+    const p = this.callPos || { side: 'right', inset: 20, top: 84 };
+    const r = el.getBoundingClientRect();
+    const inset = Math.max(8, Math.min(p.inset, window.innerWidth - r.width - 8));
+    const topMax = Math.max(8, window.innerHeight - r.height - 8);
+    el.style.top = `${Math.max(8, Math.min(p.top, topMax))}px`;
+    el.style.left = p.side === 'left' ? `${inset}px` : 'auto';
+    el.style.right = p.side === 'right' ? `${inset}px` : 'auto';
   }
 
   // ------------------------------------------------------------ jobs -----
@@ -422,30 +612,29 @@ class GmLive {
   _job(job) {
     const known = this.jobs.get(job.id);
     this.jobs.set(job.id, job);
-    this.tray.classList.remove('gml-hidden');
-    let card = this.tray.querySelector(`[data-job="${job.id}"]`);
+    this.jobsEmpty.classList.add('gml-hidden');
+    let card = this.jobsPanel.querySelector(`[data-job="${job.id}"]`);
     if (!card) {
       card = this._el('button', 'gml-job');
+      card.type = 'button';
       card.dataset.job = job.id;
       card.addEventListener('click', () => this.openViewer(this.jobs.get(job.id)));
-      this.tray.insertBefore(card, this.trayTitle.nextSibling);
+      this.jobsPanel.insertBefore(card, this.jobsEmpty.nextSibling);
     }
     let thumb = '<i class="gml-spin"></i>';
     if (job.status === 'failed') {
       thumb = '!';
     } else if (job.status === 'done') {
       if (isAudioJob(job)) thumb = ICON_AUDIO;
-      else if (isVideoJob(job) && job.display_url) {
-        thumb = `<video src="${job.display_url}" muted playsinline preload="metadata"></video>`;
-      } else if (job.display_url) {
-        thumb = `<img src="${job.display_url}" alt="">`;
-      } else {
-        thumb = ICON_STORY;
-      }
+      else if (isVideoJob(job) && job.display_url) thumb = '<video muted playsinline preload="metadata"></video>';
+      else if (job.display_url) thumb = '<img alt="">';
+      else thumb = ICON_STORY;
     }
     const label = job.is_edit ? `edit of ${job.source_job}` : job.prompt;
     const status = job.status === 'failed' ? (job.error || 'failed') : job.status;
     card.innerHTML = `<span class="gml-thumb">${thumb}</span><span class="gml-meta"><b></b><span></span><em></em></span>`;
+    const media = card.querySelector('.gml-thumb img, .gml-thumb video');
+    if (media) media.src = job.display_url;
     card.querySelector('b').textContent = job.handle;
     card.querySelector('.gml-meta span').textContent = label;
     const em = card.querySelector('em');
@@ -462,53 +651,114 @@ class GmLive {
     if (known && known.status !== job.status && job.status === 'done') {
       card.classList.add('flash');
       setTimeout(() => card.classList.remove('flash'), 1600);
+      if (!this.jobsOpen) {
+        this.jobsBtn.classList.remove('ping');
+        void this.jobsBtn.offsetWidth; // restart the animation
+        this.jobsBtn.classList.add('ping');
+      }
     }
-    if (this.viewerJob === job.id) this.openViewer(job);
+    const running = [...this.jobs.values()].filter((j) => j.status !== 'done' && j.status !== 'failed').length;
+    this.jobsBtn.querySelector('.gml-badge').textContent = running ? String(running) : '';
+    if (this.viewerJob === job.id && !this.viewer.classList.contains('gml-hidden')) this.openViewer(job);
+    if (this.jobsOpen) this._applyCallPos();
+  }
+
+  /** Where the pointer goes for a job: its card when the list is open, else
+   * the jobs button. */
+  _jobAnchor(id) {
+    const card = this.jobsPanel.querySelector(`[data-job="${id}"]`);
+    if (card && card.getBoundingClientRect().width > 0) return card;
+    if (this.state !== 'idle' && !this.minimized) return this.jobsBtn;
+    return null;
+  }
+
+  _vtool(parent, icon, label, onClick, cls = 'gml-vt') {
+    const b = this._el('button', `gml-btn ${cls}`, parent, icon);
+    b.type = 'button';
+    this._label(b, label);
+    b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+    return b;
   }
 
   openViewer(job) {
     if (!job) return;
-    this.viewerJob = job.id;
     const v = this.viewer;
+    const same = this.viewerJob === job.id && !v.classList.contains('gml-hidden');
+    this.viewerJob = job.id;
+    this._removeChip();
+    const s = this.strings;
+    if (!same) {
+      v.classList.remove('placed', 'big');
+      v.style.left = ''; v.style.top = ''; v.style.right = '';
+    }
     v.classList.remove('gml-hidden');
     v.innerHTML = '';
-    const head = this._el('div', 'gml-vhead', v);
-    this._el('b', '', head).textContent = job.handle;
-    if (job.status === 'done' && (job.display_url || job.gcs_uri)) {
-      const dl = this._el('button', 'gml-btn gml-small primary', head);
-      dl.textContent = this.strings.download;
-      dl.addEventListener('click', () => this.download(job));
-    }
-    const close = this._el('button', 'gml-btn gml-small', head);
-    close.textContent = this.strings.close;
-    close.addEventListener('click', () => this.closeViewer());
-    if (job.status === 'done') {
-      if (isAudioJob(job) && job.display_url) {
-        const audio = this._el('audio', '', v);
-        audio.src = job.display_url; audio.controls = true; audio.autoplay = true;
-      } else if (isVideoJob(job) && job.display_url) {
-        const video = this._el('video', '', v);
-        video.src = job.display_url; video.controls = true; video.autoplay = true; video.muted = true; video.loop = true;
-        video.playsInline = true;
-      } else if (job.display_url) {
-        const img = this._el('img', '', v);
-        img.src = job.display_url; img.alt = job.prompt;
-      } else {
-        const info = this._el('div', 'gml-thumb', v);
-        info.style.cssText = 'width:100%;height:120px;border-radius:12px';
-        info.innerHTML = ICON_STORY;
-      }
+    const media = this._el('div', 'gml-vmedia', v);
+    const done = job.status === 'done';
+    if (done && isAudioJob(job) && job.display_url) {
+      media.classList.add('audio');
+      const audio = this._el('audio', '', media);
+      audio.src = job.display_url; audio.controls = true; audio.autoplay = !same;
+    } else if (done && isVideoJob(job) && job.display_url) {
+      const video = this._el('video', '', media);
+      video.src = job.display_url; video.controls = true; video.autoplay = true; video.muted = true; video.loop = true;
+      video.playsInline = true;
+    } else if (done && job.display_url) {
+      const img = this._el('img', '', media);
+      img.src = job.display_url; img.alt = job.prompt || job.handle;
+      img.draggable = false;
     } else {
-      const wait = this._el('div', 'gml-thumb', v);
-      wait.style.cssText = 'width:100%;height:240px;border-radius:12px';
-      wait.innerHTML = job.status === 'failed' ? (job.error || 'Failed') : '<i class="gml-spin"></i>';
+      const wait = this._el('div', 'gml-vwait', media);
+      if (job.status === 'failed') wait.textContent = job.error || 'Failed';
+      else wait.innerHTML = done ? ICON_STORY : '<i class="gml-spin"></i>';
     }
-    this._el('p', 'gml-vprompt', v).textContent = job.prompt;
+    const tools = this._el('div', 'gml-vtools', media);
+    this._vtool(tools, ICON_MINUS, s.minimize || DEFAULT_STRINGS.minimize, () => this.minimizeViewer());
+    this._vtool(tools, v.classList.contains('big') ? ICON_SHRINK : ICON_EXPAND,
+      v.classList.contains('big') ? (s.restore || DEFAULT_STRINGS.restore) : (s.expand || DEFAULT_STRINGS.expand),
+      () => { v.classList.toggle('big'); this.openViewer(this.jobs.get(job.id) || job); });
+    this._vtool(tools, ICON_CLOSE, s.close, () => this.closeViewer());
+    const foot = this._el('div', 'gml-vfoot', v);
+    const desc = this._el('div', 'gml-vdesc', foot);
+    this._el('b', '', desc).textContent = job.handle;
+    const short = shortText(job.prompt);
+    if (short) desc.appendChild(document.createTextNode(` · ${short}`));
+    desc.title = job.prompt || '';
+    if (done && (job.display_url || job.gcs_uri)) {
+      this._vtool(foot, ICON_DOWNLOAD, s.download, () => this.download(job), 'gml-vdl');
+    }
+    if (v.classList.contains('placed')) requestAnimationFrame(() => { const r = v.getBoundingClientRect(); this._moveTo(v, r.left, r.top); });
+  }
+
+  /** Tuck the viewer into a small chip at the bottom; the chip brings it back. */
+  minimizeViewer() {
+    const job = this.jobs.get(this.viewerJob);
+    this.viewer.classList.add('gml-hidden');
+    this._removeChip();
+    if (!job) return;
+    const chip = this._el('div', 'gml-vchip gml-glass', this.root);
+    this.chip = chip;
+    const open = this._el('button', 'gml-btn gml-vchip-open', chip);
+    open.type = 'button';
+    const thumb = this._el('span', 'gml-thumb', open);
+    if (job.display_url && !isAudioJob(job) && !isVideoJob(job)) {
+      const img = this._el('img', '', thumb); img.src = job.display_url; img.alt = '';
+    } else thumb.innerHTML = isAudioJob(job) ? ICON_AUDIO : ICON_STORY;
+    this._el('span', '', open).textContent = job.handle;
+    this._label(open, `${this.strings.restore || DEFAULT_STRINGS.restore}: ${job.handle}`);
+    open.addEventListener('click', () => this.openViewer(this.jobs.get(job.id) || job));
+    this._vtool(chip, ICON_CLOSE, this.strings.close, () => this.closeViewer());
+  }
+
+  _removeChip() {
+    if (this.chip) { this.chip.remove(); this.chip = null; }
   }
 
   closeViewer() {
     this.viewerJob = null;
     this.viewer.classList.add('gml-hidden');
+    this.viewer.innerHTML = '';
+    this._removeChip();
   }
 
   // ---------------------------------------------------------- screen -----
@@ -577,7 +827,7 @@ class GmLive {
       const go = buttons.find((b) => /generate|create|make/i.test(b.textContent || b.getAttribute('aria-label') || ''));
       if (go) await this.pointAt(go);
     }
-    const card = this.tray.querySelector(`[data-job="${args.job && args.job.id}"]`);
+    const card = this._jobAnchor(args.job && args.job.id);
     if (card) await this.pointAt(card);
   }
 
@@ -631,7 +881,7 @@ class GmLive {
   async showJob(args) {
     await this.navigate(args.page, args.params);
     const job = this.jobs.get(args.job.id) || args.job;
-    const card = this.tray.querySelector(`[data-job="${job.id}"]`);
+    const card = this._jobAnchor(job.id);
     if (card) await this.pointAt(card);
     this.openViewer(job);
     return { ok: true };
@@ -678,7 +928,7 @@ class GmLive {
       else if (msg.action === 'fill') result = await this.fill(a);
       else if (msg.action === 'download') {
         const job = this.jobs.get(a.job.id) || a.job;
-        const card = this.tray.querySelector(`[data-job="${job.id}"]`);
+        const card = this._jobAnchor(job.id);
         if (card) await this.pointAt(card);
         result = await this.download(job);
       } else if (msg.action === 'end_call') {
@@ -694,15 +944,6 @@ class GmLive {
   // ------------------------------------------------------------ call -----
 
   toggle() { return this.state === 'idle' ? this.start() : this.stop(); }
-
-  /** Switch Fill only / Do it for me. A call in progress reconnects, since
-   * the agent's tools are set when it connects. */
-  async setMode(mode) {
-    this.mode = mode === 'act' ? 'act' : 'fill';
-    try { localStorage.setItem(MODE_KEY, this.mode); } catch (e) { /* not kept */ }
-    this._renderMode();
-    await this._reconnect();
-  }
 
   /** Turn the Live Avatar on or off (remembered in this browser). */
   async setAvatar(on) {
@@ -724,11 +965,13 @@ class GmLive {
     if (!this.avatarBtn) return;
     const s = this.strings || DEFAULT_STRINGS;
     this.avatarBtn.classList.toggle('gml-hidden', !s.avatarName);
-    this.avatarBtn.textContent = s.avatar || 'Avatar';
-    this.avatarBtn.title = s.avatarHint || '';
     const on = this.avatar && !this.avatarBlocked;
+    this.avatarBtn.innerHTML = on ? ICON_CAM : ICON_CAM_OFF;
+    this.avatarBtn.classList.toggle('on', on);
     this.avatarBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    this.avatarBtn.dataset.mode = on ? 'act' : 'fill';
+    const label = on ? (s.avatarOn || DEFAULT_STRINGS.avatarOn) : (s.avatarOff || DEFAULT_STRINGS.avatarOff);
+    this.avatarBtn.setAttribute('aria-label', label);
+    this.avatarBtn.title = s.avatarHint ? `${label}. ${s.avatarHint}` : label;
   }
 
   /** The avatar card and its player. Made inside the click so the video may
@@ -737,8 +980,11 @@ class GmLive {
    * else on the page behind a blob URL. */
   _openAvatar() {
     this._closeAvatar();
-    const card = this._el('div', 'gml-avatar gml-glass', this.root);
+    // The avatar fills the call window's stage, like the other side of a video call.
+    const card = this.stage;
     const video = this._el('video', '', card);
+    this.call.classList.add('has-avatar');
+    this._applyCallPos();
     video.playsInline = true;
     video.autoplay = true;
     const av = { card, video, queue: [], worker: null, ms: null, sb: null, url: '' };
@@ -846,17 +1092,9 @@ class GmLive {
     if (av.url) URL.revokeObjectURL(av.url);
     av.video.removeAttribute('src');
     av.video.srcObject = null;
-    av.card.remove();
-  }
-
-  _renderMode() {
-    if (!this.modeBtn) return;
-    const s = this.strings || DEFAULT_STRINGS;
-    const fill = this.mode !== 'act';
-    this.modeBtn.textContent = fill ? (s.fill || DEFAULT_STRINGS.fill) : (s.act || DEFAULT_STRINGS.act);
-    this.modeBtn.setAttribute('aria-pressed', fill ? 'false' : 'true');
-    this.modeBtn.title = s.modeHint || DEFAULT_STRINGS.modeHint;
-    this.modeBtn.dataset.mode = this.mode;
+    av.video.remove();
+    this.call.classList.remove('has-avatar');
+    this._applyCallPos();
   }
 
   async start() {
@@ -880,7 +1118,7 @@ class GmLive {
       this._caption('user', this.strings.nomic, true);
     }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const params = new URLSearchParams({ agent: this.mode === 'act' ? 'act' : 'fill' });
+    const params = new URLSearchParams({ agent: 'act' });
     if (new URLSearchParams(location.search).get('live') === 'offline') params.set('mode', 'offline');
     if (this.avatar && this.strings.avatarName && !this.avatarBlocked) {
       if (avatarSupported()) { params.set('avatar', '1'); this._openAvatar(); }
@@ -917,6 +1155,8 @@ class GmLive {
     if (this.outCtx) { this.outCtx.close().catch(() => {}); this.outCtx = null; }
     this.state = 'idle';
     this.cursor.classList.remove('on');
+    if (this.minimized) this.setMinimized(false);
+    if (this.call) this.call.style.setProperty('--lvl', '0');
     this._renderState();
   }
 
@@ -944,7 +1184,7 @@ class GmLive {
     const proc = ctx.createScriptProcessor(2048, 1, 1);
     const sink = ctx.createGain();
     sink.gain.value = 0;
-    const bar = this.level.querySelector('i');
+    const call = this.call;
     proc.onaudioprocess = (e) => {
       const input = e.inputBuffer.getChannelData(0);
       let peak = 0;
@@ -954,7 +1194,7 @@ class GmLive {
         pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         peak = Math.max(peak, Math.abs(s));
       }
-      bar.style.width = `${this.muted ? 0 : Math.min(100, peak * 160)}%`;
+      call.style.setProperty('--lvl', this.muted ? '0' : Math.min(1, peak * 1.6).toFixed(2));
       if (!this.muted && this.state === 'live') this._send({ type: 'audio', data: b64FromInt16(pcm) });
     };
     src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
