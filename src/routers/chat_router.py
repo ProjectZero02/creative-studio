@@ -69,6 +69,27 @@ async def chat(request: Request) -> dict:
     return await run_in_threadpool(studio_chat.send, owner, message)
 
 
+@router.post("/upload")
+async def upload(request: Request) -> dict:
+    """Attach a picture: ``{"data": "data:image/png;base64,...", "name": "..."}``."""
+    owner = _caller(request)
+    _same_site(request)
+    if "application/json" not in (request.headers.get("content-type") or ""):
+        raise HTTPException(status_code=415, detail="Send JSON")
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Bad JSON") from exc
+    body = body or {}
+    try:
+        job = await run_in_threadpool(
+            studio_chat.attach, owner, str(body.get("data") or ""), str(body.get("name") or "")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"job": job}
+
+
 @router.get("/jobs")
 def jobs(request: Request) -> dict:
     return {"jobs": studio_chat.chat_jobs(_caller(request))}

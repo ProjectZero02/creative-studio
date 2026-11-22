@@ -75,6 +75,7 @@ How you work:
 - generate_voice speaks the script exactly as given: pass their words unchanged.
 - Jobs run in the background and appear in this chat when they are ready. Do not wait for them and do not invent results or links.
 - "The image" or "it" means the latest one; jobs have names like "image 1" and "video 2".
+- A message may start with "[Attached: image 3]": the person added that picture. Use it as the image to edit (edit_image) or animate (generate_video with from_image), or as the subject they describe.
 - Films: create_story only writes the scenario (cheap). Before each costly step (continue_story builds the set and paints the storyboard; render_film renders the videos), say what it will do and ask for a yes, unless they already said to go all the way.
 - If they ask a question, want ideas, copy or a script, answer in text without a tool.
 
@@ -206,6 +207,57 @@ def _default_client() -> tuple[Any, str] | None:
     from models.gemini import client
 
     return client, Default.MODEL_ID
+
+
+UPLOAD_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def attach(owner: str, data_url: str, name: str = "", *, store: Any = None) -> dict:
+    """Keep a picture the person attached to the chat; returns its job.
+
+    The picture becomes "image N", so the next message can say "edit image N"
+    or "make a video from image N". It is stored in Cloud Storage (or kept as
+    a data URL in mock mode). ``store`` replaces the upload, for tests.
+    """
+    import base64
+    import re
+
+    match = re.match(r"^data:(image/[a-z]+);base64,(.+)$", data_url or "", re.S)
+    if not match or match.group(1) not in UPLOAD_TYPES:
+        raise ValueError("Attach a PNG, JPEG or WebP picture.")
+    mime = match.group(1)
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except ValueError as exc:
+        raise ValueError("That picture could not be read.") from exc
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise ValueError("Pictures can be up to 10 MB.")
+    clean_name = re.sub(r"[^\w.\- ]", "", name or "")[:60]
+    if store is None:
+        store = _store_upload
+    uri, display_url = store(owner, raw, mime, data_url)
+    jobs = session_for(owner).call.jobs
+    job = jobs.add_upload(owner, uri=uri, display_url=display_url, mime_type=mime, name=clean_name)
+    return job.public()
+
+
+def _store_upload(owner: str, raw: bytes, mime: str, data_url: str) -> tuple[str, str]:
+    """(uri, display_url) for an attached picture."""
+    import uuid
+
+    from common.mock_generation import mock_enabled
+
+    if mock_enabled():
+        return data_url, data_url
+    from common.storage import store_to_gcs
+    from common.utils import create_display_url
+
+    del owner
+    uri = store_to_gcs(
+        "chat_uploads", f"{uuid.uuid4().hex}.{UPLOAD_TYPES[mime]}", mime, raw
+    )
+    return uri, create_display_url(uri)
 
 
 def send(owner: str, message: str, client_and_model: tuple[Any, str] | None | bool = True) -> dict:

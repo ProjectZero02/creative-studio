@@ -36,6 +36,7 @@ import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit
 const STORE = 'gm-home-chat';
 const HISTORY = 'gm-prompts:home';
 const POLL_MS = 2000;
+const MAX_FILES = 3;
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const reduceMotion = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -44,6 +45,8 @@ const ICON = {
   mic: 'M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z',
   stop: 'M7 7h10v10H7z',
   plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z',
+  close: 'M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z',
+  newchat: 'M3 17.2V21h3.8l11-11-3.8-3.8zM20.7 7a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0l-1.8 1.8 3.8 3.8z',
   spark: 'M12 2l2.2 6.8L21 11l-6.8 2.2L12 20l-2.2-6.8L3 11l6.8-2.2z',
   download: 'M5 20h14v-2H5zM12 16l5-5-1.4-1.4-2.6 2.6V4h-2v8.2L8.4 9.6 7 11z',
   open: 'M14 3v2h3.6l-9.8 9.8 1.4 1.4L19 6.4V10h2V3zM19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2z',
@@ -85,6 +88,7 @@ class GmHomeChat extends LitElement {
     _jobs: { state: true },
     _busy: { state: true },
     _listening: { state: true },
+    _files: { state: true },
   };
 
   constructor() {
@@ -102,6 +106,7 @@ class GmHomeChat extends LitElement {
     this._draft = '';
     this._timer = null;
     this._rec = null;
+    this._files = []; // [{ id, name, preview, handle, url, busy, error }]
   }
 
   get _s() {
@@ -113,7 +118,10 @@ class GmHomeChat extends LitElement {
     if (this._pending().length) this._poll();
     // Fetch the hover clips once the page is idle, so the first hover plays.
     const warm = () => ['/ui/home/word-video.webp', '/ui/home/word-film.webp'].forEach((src) => { const i = new Image(); i.src = src; });
-    if (!reduceMotion()) (window.requestIdleCallback || setTimeout)(warm, 1500);
+    if (!reduceMotion()) {
+      if (window.requestIdleCallback) window.requestIdleCallback(warm, { timeout: 3000 });
+      else setTimeout(warm, 1500);
+    }
     setTimeout(() => window.gmLive && window.gmLive.refreshLauncher && window.gmLive.refreshLauncher(), 60);
   }
 
@@ -138,12 +146,16 @@ class GmHomeChat extends LitElement {
   // ---------------------------------------------------------------- sending
 
   async _send(text) {
-    const message = (text ?? this._ta?.value ?? '').trim();
-    if (!message || this._busy) return;
-    remember(message);
+    const typed = (text ?? this._ta?.value ?? '').trim();
+    const files = this._files.filter((f) => f.handle);
+    if ((!typed && !files.length) || this._busy || this._files.some((f) => f.busy)) return;
+    if (typed) remember(typed);
     this._hist = -1;
     if (this._ta) { this._ta.value = ''; this._fit(); }
-    this._msgs = [...this._msgs, { role: 'user', text: message }];
+    const said = typed || this._s.attach_default || 'What can you make from this?';
+    const message = files.length ? `[Attached: ${files.map((f) => f.handle).join(', ')}] ${said}` : said;
+    this._files = [];
+    this._msgs = [...this._msgs, { role: 'user', text: said, images: files.map((f) => f.url) }];
     this._busy = true;
     let reply = '';
     let jobs = [];
@@ -214,6 +226,61 @@ class GmHomeChat extends LitElement {
     this._fit();
     ta.focus();
     ta.setSelectionRange(text.length, text.length);
+  }
+
+  // ---------------------------------------------------------------- attach
+
+  _pick() { this.renderRoot.querySelector('input[type=file]')?.click(); }
+
+  _onFiles(e) {
+    this._addFiles([...(e.target.files || [])]);
+    e.target.value = '';
+  }
+
+  _onPaste(e) {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); this._addFiles(files); }
+  }
+
+  _addFiles(list) {
+    const room = MAX_FILES - this._files.length;
+    list.filter((f) => /^image\/(png|jpeg|webp)$/.test(f.type)).slice(0, Math.max(0, room)).forEach((file) => {
+      const id = Math.random().toString(36).slice(2, 9);
+      const item = { id, name: file.name, preview: URL.createObjectURL(file), busy: true };
+      this._files = [...this._files, item];
+      const reader = new FileReader();
+      reader.onload = async () => {
+        let patch = { busy: false, error: this._s.attach_failed || 'Could not attach' };
+        try {
+          const r = await fetch('/api/chat/upload', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: reader.result, name: file.name }),
+          });
+          const body = await r.json();
+          if (r.ok && body.job) patch = { busy: false, handle: body.job.handle, url: body.job.display_url };
+          else if (body.detail) patch.error = body.detail;
+        } catch (_) { /* keeps the error */ }
+        this._files = this._files.map((f) => (f.id === id ? { ...f, ...patch } : f));
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  _unattach(id) {
+    const gone = this._files.find((f) => f.id === id);
+    if (gone) URL.revokeObjectURL(gone.preview);
+    this._files = this._files.filter((f) => f.id !== id);
+  }
+
+  _attachments() {
+    if (!this._files.length) return nothing;
+    return html`<div class="files">${this._files.map((f) => html`
+      <div class="file ${f.error ? 'bad' : ''}" title=${f.error || f.name}>
+        <img src=${f.preview} alt=${f.name}>
+        ${f.busy ? html`<span class="file-spin" aria-hidden="true"></span>` : nothing}
+        <button type="button" class="file-x" @click=${() => this._unattach(f.id)} aria-label=${(this._s.remove || 'Remove') + ' ' + f.name}>${svg(ICON.close, 14)}</button>
+      </div>`)}</div>`;
   }
 
   // ---------------------------------------------------------------- keys
@@ -292,12 +359,16 @@ class GmHomeChat extends LitElement {
     const chatting = this._msgs.length > 0;
     return html`
       <div class="box ${this._busy ? 'busy' : ''}">
-        <textarea rows="1" .placeholder=${S.placeholder || 'Describe what you want to make'}
+        ${this._attachments()}
+        <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change=${this._onFiles}>
+        <textarea rows="1" @paste=${this._onPaste} .placeholder=${S.placeholder || 'Describe what you want to make'}
           aria-label=${S.placeholder || 'Describe what you want to make'}
           @keydown=${this._onKey} @input=${this._fit}></textarea>
         <div class="bar">
+          <button class="icon" type="button" @click=${this._pick} ?disabled=${this._files.length >= MAX_FILES}
+            aria-label=${S.attach || 'Add a picture'} title=${S.attach_tip || 'Add a picture to edit or animate'}>${svg(ICON.plus, 24)}</button>
           ${chatting ? html`<button class="ghost" type="button" @click=${this._newChat} title=${S.new_chat_tip || 'Start over with an empty chat'}>
-              ${svg(ICON.plus, 18)}<span>${S.new_chat || 'New chat'}</span></button>` : nothing}
+              ${svg(ICON.newchat, 18)}<span>${S.new_chat || 'New chat'}</span></button>` : nothing}
           <span class="grow"></span>
           ${this.live ? html`<live-call-button pill .stringsJson=${talk}></live-call-button>` : nothing}
           ${Recognition ? html`<button class="icon ${this._listening ? 'on' : ''}" type="button" @click=${this._toggleMic}
@@ -379,7 +450,9 @@ class GmHomeChat extends LitElement {
   _thread() {
     return html`<div class="thread" role="log" aria-label=${this._s.thread || 'Conversation'}>
       ${this._msgs.map((m) => m.role === 'user'
-        ? html`<div class="msg user"><div class="bubble">${m.text}</div></div>`
+        ? html`<div class="msg user"><div class="user-col">
+            ${(m.images || []).length ? html`<div class="sent">${m.images.map((u) => html`<img src=${u} alt="">`)}</div>` : nothing}
+            <div class="bubble">${m.text}</div></div></div>`
         : html`<div class="msg bot"><span class="avatar" aria-hidden="true">${svg(ICON.spark, 18)}</span>
             <div class="bot-body"><div class="text">${m.text}</div>${(m.jobs || []).map((id) => this._job(id))}</div></div>`)}
       ${this._busy ? html`<div class="msg bot"><span class="avatar" aria-hidden="true">${svg(ICON.spark, 18)}</span>
@@ -490,6 +563,22 @@ class GmHomeChat extends LitElement {
       background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface-variant, #4b515d); cursor: pointer; font-size: 14px; font-weight: 500;
     }
     .ghost:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
+    .icon:disabled { opacity: 0.4; cursor: default; }
+    /* Attached pictures: small previews above the text. */
+    .files { display: flex; gap: 8px; padding: 4px 0 2px; }
+    .file { position: relative; width: 64px; height: 64px; border-radius: 14px; overflow: hidden; flex: none;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); }
+    .file img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .file.bad img { opacity: 0.35; }
+    .file-spin { position: absolute; inset: 0; margin: auto; width: 22px; height: 22px; border-radius: 50%;
+      border: 2.5px solid rgba(255, 255, 255, 0.45); border-top-color: #fff; animation: rot 800ms linear infinite; }
+    .file-x { position: absolute; top: 4px; inset-inline-end: 4px; width: 22px; height: 22px; border: 0; border-radius: 50%; padding: 0;
+      display: grid; place-items: center; cursor: pointer; background: rgba(0, 0, 0, 0.6); color: #fff; }
+    .file-x svg { fill: currentColor; }
+    .user-col { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 78%; }
+    .user-col .bubble { max-width: 100%; }
+    .sent { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .sent img { width: 120px; height: 120px; object-fit: cover; border-radius: 16px; display: block; }
     .spin { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid rgba(255, 255, 255, 0.4); border-top-color: #fff; animation: rot 800ms linear infinite; }
     @keyframes rot { to { transform: rotate(360deg); } }
     button:focus-visible, a:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 2px; }
@@ -542,7 +631,11 @@ class GmHomeChat extends LitElement {
     .shimmer.story { aspect-ratio: auto; height: 72px; }
     @keyframes shim { from { background-position: 100% 0; } to { background-position: -150% 0; } }
     @media (prefers-reduced-motion: reduce) { .shimmer, .typing i, .spin { animation: none; } }
-    .media { display: block; width: 100%; max-height: 480px; object-fit: contain; border-radius: 12px; background: rgba(0, 0, 0, 0.25); }
+    /* The picture at its own shape: no letterbox bars around it. */
+    .media { display: block; width: auto; height: auto; max-width: 100%; max-height: 480px; border-radius: 12px; }
+    .job > a { align-self: flex-start; line-height: 0; max-width: 100%; }
+    .job > .media { align-self: flex-start; }
+    .job:has(> a > img.media, > video.media) { width: fit-content; min-width: 300px; }
     .audio { width: 100%; }
     .job-note, .job-error { margin: 0 4px; font-size: 14px; line-height: 1.5; color: var(--sys-on-surface-variant, #6b7280); }
     .job-error { color: #d93025; }

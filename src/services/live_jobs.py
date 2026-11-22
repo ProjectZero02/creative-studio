@@ -219,6 +219,40 @@ class LiveJobs:
             self._run(job)
         return job
 
+    def add_upload(
+        self,
+        owner: str,
+        *,
+        uri: str,
+        display_url: str,
+        mime_type: str,
+        name: str = "",
+    ) -> LiveJob:
+        """Register a picture the person attached as a finished image job.
+
+        It gets the next "image N" handle, so the agent can edit or animate it
+        like any image it made ("edit image 3", "make a video from image 3").
+        """
+        with self._lock:
+            number = self._counters.get((owner, "image"), 0) + 1
+            self._counters[(owner, "image")] = number
+            job = LiveJob(
+                id=uuid.uuid4().hex[:12],
+                owner=owner,
+                kind="image",
+                handle=f"image {number}",
+                prompt=f"Picture you attached{f' ({name})' if name else ''}",
+                status=DONE,
+                finished_at=time.time(),
+                gcs_uri=uri if uri.startswith("gs://") else "",
+                display_url=display_url,
+                mime_type=mime_type,
+                params={"uploaded": True},
+            )
+            self._jobs[job.id] = job
+        self._emit(job)
+        return job
+
     def _run(self, job: LiveJob) -> None:
         job.status = RUNNING
         self._emit(job)

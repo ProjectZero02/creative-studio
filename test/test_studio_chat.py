@@ -163,3 +163,56 @@ def test_api_routes(monkeypatch, fresh):
     assert client.post("/api/chat", content="message=x", headers={"content-type": "text/plain"}).status_code == 415
     assert client.post("/api/chat/reset").json() == {"ok": True}
     assert client.get("/api/chat/jobs").json() == {"jobs": []}
+
+
+PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+
+def fake_store(owner, raw, mime, data_url):
+    return "gs://b/upload.png", "https://example.test/upload.png"
+
+
+def test_attached_picture_becomes_the_next_image(fresh):
+    job = studio_chat.attach(OWNER, PNG, "cat.png", store=fake_store)
+    assert job["handle"] == "image 1"
+    assert job["status"] == DONE
+    assert job["gcs_uri"] == "gs://b/upload.png"
+    # The agent can now edit it by its handle.
+    edited = fresh.submit(OWNER, "image", "make it blue", source=fresh.resolve(OWNER, "image 1"), run_async=False)
+    assert edited.source_job == "image 1"
+    assert edited.source_uri == "gs://b/upload.png"
+    assert edited.handle == "image 2"
+
+
+@pytest.mark.parametrize(
+    "data",
+    ["", "hello", "data:text/plain;base64,aGk=", "data:image/gif;base64,R0lGOD", "data:image/png;base64,***"],
+)
+def test_attach_refuses_what_is_not_a_picture(data):
+    with pytest.raises(ValueError):
+        studio_chat.attach(OWNER, data, store=fake_store)
+
+
+def test_attach_refuses_big_files(monkeypatch):
+    monkeypatch.setattr(studio_chat, "MAX_UPLOAD_BYTES", 10)
+    with pytest.raises(ValueError):
+        studio_chat.attach(OWNER, PNG, store=fake_store)
+
+
+def test_upload_route(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from routers import chat_router
+
+    monkeypatch.setattr(studio_chat, "_store_upload", fake_store)
+    app = FastAPI()
+    app.include_router(chat_router.router)
+    client = TestClient(app)
+    ok = client.post("/api/chat/upload", json={"data": PNG, "name": "a.png"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["job"]["kind"] == "image"
+    bad = client.post("/api/chat/upload", json={"data": "nope"})
+    assert bad.status_code == 400
+    wrong_type = client.post("/api/chat/upload", content="x", headers={"content-type": "text/plain"})
+    assert wrong_type.status_code == 415
