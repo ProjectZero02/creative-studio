@@ -55,12 +55,15 @@ def lede_segments() -> list[dict]:
     return out
 
 
-def examples() -> list[str]:
-    """Three starters of different kinds, so people see it does anything."""
+def examples() -> list[dict]:
+    """Three starters of different kinds, so people see it does anything.
+
+    Each is {"text", "kind"}; the kind picks the icon shown beside it.
+    """
     return [
-        tr("home.mode.image.ex1", "A perfume bottle on wet black stone, studio light"),
-        tr("home.mode.video.ex2", "Drone shot over a desert road at sunrise"),
-        tr("home.chat.ex_film", "A 30-second film about a lighthouse keeper"),
+        {"kind": "image", "text": tr("home.mode.image.ex1", "A perfume bottle on wet black stone, studio light")},
+        {"kind": "video", "text": tr("home.mode.video.ex2", "Drone shot over a desert road at sunrise")},
+        {"kind": "film", "text": tr("home.chat.ex_film", "A 30-second film about a lighthouse keeper")},
     ]
 
 

@@ -49,6 +49,11 @@ const ICON = {
   open: 'M14 3v2h3.6l-9.8 9.8 1.4 1.4L19 6.4V10h2V3zM19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2z',
   edit: 'M3 17.2V21h3.8l11-11-3.8-3.8zM20.7 7a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0l-1.8 1.8 3.8 3.8z',
   retry: 'M17.6 6.4A8 8 0 1 0 19.7 14h-2.1a6 6 0 1 1-1.4-6.2L13 11h7V4z',
+  image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V5h14zm-5.1-6.7-2.7 3.5-1.9-2.3L6.5 17h11z',
+  video: 'M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11zM15 16H5V8h10z',
+  film: 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4zm2 14H4V10h16z',
+  music: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3z',
+  voice: 'M9 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 8c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4zm-6 4c.2-.7 3.3-2 6-2s5.8 1.3 6 2zM16 5.1a6 6 0 0 1 0 7.8l1.4 1.4a8 8 0 0 0 0-10.6z',
 };
 const svg = (d, size = 20) => html`<svg viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true"><path d=${d}></path></svg>`;
 
@@ -311,8 +316,13 @@ class GmHomeChat extends LitElement {
     let ex = [];
     try { ex = JSON.parse(this.examplesJson || '[]'); } catch (_) { ex = []; }
     if (!ex.length) return nothing;
-    return html`<div class="try"><span class="try-label">${this._s.try || 'Try:'}</span>
-      ${ex.map((e) => html`<button type="button" class="chip" @click=${() => this._send(e)}>${e}</button>`)}</div>`;
+    return html`<ul class="try" aria-label=${this._s.try || 'Try'}>
+      ${ex.map((e) => {
+        const text = typeof e === 'string' ? e : e.text;
+        const kind = (typeof e === 'string' ? '' : e.kind) || 'spark';
+        return html`<li><button type="button" class="starter" @click=${() => this._send(text)}>
+          ${svg(ICON[kind] || ICON.spark, 20)}<span>${text}</span></button></li>`;
+      })}</ul>`;
   }
 
   _media(j) {
@@ -400,33 +410,36 @@ class GmHomeChat extends LitElement {
     * { box-sizing: border-box; }
     .wrap { display: flex; flex-direction: column; align-items: center; width: 100%; margin: 0 auto; }
     /* Empty: everything centred on the screen (topbar 60px, frame padding). */
-    .wrap.empty { min-height: calc(100dvh - 160px); justify-content: center; gap: 28px; padding-bottom: 6vh; }
-    .wrap.chat { min-height: calc(100dvh - 150px); justify-content: flex-end; max-width: 860px; }
+    .wrap.empty { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: center; gap: clamp(18px, 3.2vh, 32px); padding-bottom: 4vh; }
+    .wrap.chat { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: flex-end; max-width: 860px; }
 
-    .hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 18px; }
+    .hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: clamp(8px, 1.6vh, 14px); }
     .title {
-      margin: 0; max-width: 14em; font-size: clamp(2.4rem, 1.3rem + 3.2vw, 4.6rem); line-height: 1.04;
+      margin: 0; max-width: 16em; font-size: clamp(2rem, 1rem + 2.2vw, 3.25rem); line-height: 1.08;
       font-weight: 600; letter-spacing: -0.035em; text-wrap: balance;
       background: var(--gm-home-title-grad, linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 38%, #1a5fd8 72%, #7b3fe4 100%));
       -webkit-background-clip: text; background-clip: text; color: transparent;
     }
     .lede {
-      margin: 0; max-width: 30em; font-size: clamp(19px, 0.9rem + 0.8vw, 28px); line-height: 1.45; font-weight: 500;
+      margin: 0; max-width: 36em; font-size: clamp(16px, 0.85rem + 0.35vw, 19px); line-height: 1.5; font-weight: 400;
       color: var(--sys-on-surface-variant, #4b515d); text-wrap: balance;
     }
 
     /* Media words: the word is a window onto what it makes. */
     .w {
-      display: inline-block; font-weight: 800; letter-spacing: -0.01em; text-decoration: none;
+      display: inline-block; font-weight: 700; letter-spacing: 0; text-decoration: none;
       background-size: cover; background-position: center; -webkit-background-clip: text; background-clip: text;
       color: transparent; padding: 0 0.04em; cursor: pointer; transition: transform 160ms ease, filter 160ms ease;
       -webkit-text-stroke: 0.4px rgba(255, 255, 255, 0.08);
     }
-    .w:hover, .w:focus-visible { transform: translateY(-1px) scale(1.04); filter: saturate(1.25) brightness(1.08); }
+    .w:hover, .w:focus-visible { transform: translateY(-1px) scale(1.06); filter: saturate(1.25) brightness(1.08); }
     .w:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 3px; border-radius: 6px; }
     /* Images: the red roses corner of the Nano Banana cover, readable on light and dark. */
-    .w-image { background-image: url('/ui/posters/gemini-image__page-cover.webp'); background-size: 420%; background-position: 96% 4%; filter: saturate(1.25); }
-    .w-image:hover, .w-image:focus-visible { background-position: 80% 30%; transition: transform 160ms ease, filter 160ms ease, background-position 1.4s ease; }
+    .w-image {
+      background-image: linear-gradient(rgba(255, 170, 150, 0.35), rgba(255, 120, 160, 0.35)), url('/ui/posters/gemini-image__page-cover.webp');
+      background-size: 100% 100%, 900%; background-position: 0 0, 96% 4%; filter: saturate(1.3) brightness(1.25);
+    }
+    .w-image:hover, .w-image:focus-visible { background-position: 0 0, 80% 30%; transition: transform 160ms ease, filter 160ms ease, background-position 1.4s ease; }
     .w-video, .w-film { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); background-size: 220%; }
     .w-video:hover, .w-video:focus-visible { background-image: url('/ui/home/word-video.webp'); }
     .w-film:hover, .w-film:focus-visible { background-image: url('/ui/home/word-film.webp'); }
@@ -482,13 +495,14 @@ class GmHomeChat extends LitElement {
     button:focus-visible, a:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 2px; }
     textarea:focus, textarea:focus-visible { outline: none; }
 
-    .try { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; max-width: 860px; }
-    .try-label { font-size: 14px; color: var(--sys-on-surface-variant, #6b7280); }
-    .chip {
-      height: 40px; padding: 0 16px; border: 0; border-radius: 999px; cursor: pointer; font-size: 14px;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #15171c);
+    /* Starters: icon + text, left-aligned under the box (like Gemini's home). */
+    .try { list-style: none; margin: 4px 0 0; padding: 0 8px; width: 100%; display: flex; flex-direction: column; gap: 2px; }
+    .starter {
+      display: inline-flex; align-items: center; gap: 14px; min-height: 44px; padding: 8px 14px; border: 0; border-radius: 999px;
+      background: transparent; color: var(--sys-on-surface, #15171c); cursor: pointer; font: inherit; font-size: 15px; text-align: start;
     }
-    .chip:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
+    .starter svg { flex: none; fill: var(--sys-on-surface-variant, #6b7280); }
+    .starter:hover, .starter:focus-visible { background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); outline: 0; }
 
     /* Conversation */
     .thread { width: 100%; display: flex; flex-direction: column; gap: 18px; padding: 12px 0 8px; }
@@ -540,11 +554,11 @@ class GmHomeChat extends LitElement {
     .act:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
 
     @media (max-width: 600px) {
-      .wrap.empty { min-height: calc(100dvh - 120px); gap: 22px; }
+      .wrap.empty { gap: 18px; padding-bottom: 0; }
+      .starter { font-size: 14px; min-height: 40px; }
       .box { padding: 10px 10px 8px 14px; border-radius: 22px; }
       textarea { min-height: 58px; font-size: 16px; }
       .bubble { max-width: 88%; }
-      .try .chip:nth-of-type(n + 3) { display: none; }
     }
   `;
 }

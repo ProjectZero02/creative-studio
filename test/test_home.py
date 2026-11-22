@@ -53,8 +53,11 @@ def test_word_media_files_exist():
 def test_examples_cover_different_kinds():
     ex = hc.examples()
     assert len(ex) >= 3
-    assert any("film" in e.lower() for e in ex)
-    assert len(set(ex)) == len(ex)
+    kinds = [e["kind"] for e in ex]
+    assert len(set(kinds)) == len(kinds)
+    assert "film" in kinds
+    assert all(e["text"] for e in ex)
+    assert len({e["text"] for e in ex}) == len(ex)
 
 
 def test_strings_have_every_label():

@@ -48,6 +48,14 @@ _PAGE_ALIASES = {
 # Icons drawn by the svg_icon component instead of the Material icon font.
 CUSTOM_ICONS = ["spark", "style", "scene"]
 
+ICON_SIZE = 20
+ITEM_SIZE = 40
+
+# System items pinned to the bottom of the rail, below the pages.
+SYSTEM_ITEMS = [
+    {"id": "settings", "display": "Settings", "icon": "settings", "route": "/settings", "label_key": "menu.settings"},
+]
+
 
 def _norm(value: str) -> str:
     return value.strip("/").replace("-", "_").lower()
@@ -90,20 +98,25 @@ def sr_only(text: str):
 
 
 def _render_icon(icon_name: str, active: bool = False):
-    color = me.theme_var("primary") if active else me.theme_var("on-surface-variant")
+    color = me.theme_var("on-surface") if active else me.theme_var("on-surface-variant")
     if icon_name in CUSTOM_ICONS:
-        with me.box(style=me.Style(width=22, height=22, color=color, flex_shrink=0)):
+        with me.box(style=me.Style(width=ICON_SIZE, height=ICON_SIZE, color=color, flex_shrink=0)):
             svg_icon(icon_name=icon_name)
     else:
         me.icon(
             icon=icon_name,
-            style=me.Style(color=color, font_size=22, width=22, height=22, flex_shrink=0),
+            style=me.Style(color=color, font_size=ICON_SIZE, width=ICON_SIZE, height=ICON_SIZE, flex_shrink=0),
         )
 
 
 @me.component
 def sidenav(current_page: Optional[str]):
-    """Render side navigation."""
+    """Render side navigation.
+
+    Like Gemini's rail: pages from the top (they scroll on short screens, with
+    no visible bar), system items such as Settings pinned to the bottom. Closed,
+    the rail sits on the page background; open, it becomes a panel.
+    """
     app_state = me.state(AppState)
     current = current_page or app_state.current_page
     opened = app_state.sidenav_open
@@ -129,8 +142,8 @@ def sidenav(current_page: Optional[str]):
         opened=True,
         style=me.Style(
             width=SIDENAV_MAX_WIDTH if opened else SIDENAV_MIN_WIDTH,
-            background=me.theme_var("surface-container-low"),
-            border=me.Border(right=me.BorderSide(width=1, style="solid", color="var(--gm-border)")),
+            background=me.theme_var("surface-container-low") if opened else "transparent",
+            border=me.Border(right=me.BorderSide(width=0, style="none")),
             transition="width 200ms cubic-bezier(0.2, 0, 0, 1)",
             box_shadow="none",
             z_index=20,
@@ -142,10 +155,9 @@ def sidenav(current_page: Optional[str]):
                 display="flex",
                 flex_direction="column",
                 height="100%",
-                padding=me.Padding(top=12, bottom=12, left=12, right=12),
+                padding=me.Padding.all(12),
                 box_sizing="border-box",
-                overflow_x="hidden",
-                overflow_y="auto",
+                overflow="hidden",
             ),
         ):
             # Brand row: menu toggle + wordmark.
@@ -154,14 +166,15 @@ def sidenav(current_page: Optional[str]):
                     display="flex",
                     align_items="center",
                     gap=8,
-                    height=48,
-                    margin=me.Margin(bottom=8),
+                    height=ITEM_SIZE,
+                    margin=me.Margin(bottom=12),
+                    flex_shrink=0,
                 ),
             ):
                 with me.content_button(
                     type="icon",
                     on_click=on_sidenav_menu_click,
-                    style=me.Style(width=48, height=48, padding=me.Padding.all(12)),
+                    style=me.Style(width=ITEM_SIZE, height=ITEM_SIZE, padding=me.Padding.all(8)),
                 ):
                     me.icon(icon="menu_open" if opened else "menu")
                     sr_only(t("nav.close_menu") if opened else t("nav.open_menu"))
@@ -180,14 +193,18 @@ def sidenav(current_page: Optional[str]):
                                 style=me.Style(font_size=11, color=me.theme_var("on-surface-variant"), white_space="nowrap"),
                             )
 
-            for group, items in sections:
-                label = (
-                    tr(f"nav.group.{group}", GROUP_LABELS[group])
-                    if group in GROUP_LABELS
-                    else ""
-                )
-                if label:
-                    if opened:
+            # Pages, from the top.
+            with me.box(
+                classes="gm-nav-pages",
+                style=me.Style(flex_grow=1, min_height=0, overflow_y="auto", overflow_x="hidden"),
+            ):
+                for group, items in sections:
+                    label = (
+                        tr(f"nav.group.{group}", GROUP_LABELS[group])
+                        if group in GROUP_LABELS
+                        else ""
+                    )
+                    if label and opened:
                         me.text(
                             label,
                             style=me.Style(
@@ -196,37 +213,35 @@ def sidenav(current_page: Optional[str]):
                                 letter_spacing="0.06em",
                                 text_transform="uppercase",
                                 color=me.theme_var("on-surface-variant"),
-                                padding=me.Padding(left=12, right=12, top=14, bottom=6),
+                                padding=me.Padding(left=10, right=10, top=14, bottom=6),
                                 white_space="nowrap",
                             ),
                         )
-                    else:
-                        me.box(
-                            style=me.Style(
-                                height=1,
-                                background="var(--gm-border)",
-                                margin=me.Margin(top=10, bottom=10, left=8, right=8),
-                            )
-                        )
-                for page in items:
-                    _nav_item(page, current, minimized=not opened)
+                    elif label:
+                        me.box(style=me.Style(height=12))
+                    for page in items:
+                        _nav_item(page, current, minimized=not opened)
 
-            # Bottom: pages with align "bottom". The light/dark switch is in the
-            # top bar (components/user_menu), so the rail fits a laptop screen.
-            if not bottom_items:
-                return
+            # System items (align "bottom" pages, then Settings) at the bottom.
             with me.box(
                 style=me.Style(
-                    margin=me.Margin(top="auto"),
-                    padding=me.Padding(top=12),
+                    padding=me.Padding(top=8),
                     display="flex",
                     flex_direction="column",
-                    gap=2,
-                    border=me.Border(top=me.BorderSide(width=1, style="solid", color="var(--gm-border)")),
+                    flex_shrink=0,
                 ),
             ):
                 for page in bottom_items:
                     _nav_item(page, current, minimized=not opened)
+                for item in SYSTEM_ITEMS:
+                    menu_item(
+                        item_id=item["id"],
+                        icon=item["icon"],
+                        text=t(item["label_key"], item["display"]),
+                        route=item["route"],
+                        minimized=not opened,
+                        active=is_active(item["route"], current),
+                    )
 
 
 def _nav_item(page: dict, current: Optional[str], minimized: bool):
@@ -242,15 +257,15 @@ def _nav_item(page: dict, current: Optional[str], minimized: bool):
 
 def _item_style(active: bool, minimized: bool) -> me.Style:
     return me.Style(
-        width="100%" if not minimized else 48,
+        width="100%" if not minimized else ITEM_SIZE,
         min_width=0,
-        height=44,
-        padding=me.Padding.symmetric(horizontal=12 if not minimized else 0),
-        border_radius=10,
+        height=ITEM_SIZE,
+        padding=me.Padding.symmetric(horizontal=10 if not minimized else 0),
+        border_radius=ITEM_SIZE // 2,
         justify_content="flex-start" if not minimized else "center",
         background=("var(--gm-active-nav)" if active else "transparent"),
-        color=me.theme_var("primary") if active else me.theme_var("on-surface"),
-        font_weight=600 if active else 500,
+        color=me.theme_var("on-surface"),
+        font_weight=600 if active else 400,
         margin=me.Margin(bottom=2),
     )
 

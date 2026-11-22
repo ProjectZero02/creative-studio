@@ -323,6 +323,9 @@ html body img, html body video { border-radius: inherit; }
 
 /* ---------- Shell helpers (used by side_nav / page_scaffold) ---------- */
 html body .gm-nav-item:hover { background: var(--gm-hover); }
+/* Rail: pages scroll on short screens with no visible bar; Settings stays at the bottom. */
+html body .gm-nav-pages { scrollbar-width: none; }
+html body .gm-nav-pages::-webkit-scrollbar { display: none; }
 
 /* ---------- Motion: gentle by default, off when asked ---------- */
 @keyframes gm-fade-up {
@@ -351,7 +354,7 @@ html body .gm-sr-only {
 
 /* ---------- Page frame: content sits next to the nav rail ---------- */
 html body {
-  --gm-rail: 72px;      /* components/styles.py SIDENAV_MIN_WIDTH */
+  --gm-rail: 64px;      /* components/styles.py SIDENAV_MIN_WIDTH */
   --gm-nav-open: 248px; /* components/styles.py SIDENAV_MAX_WIDTH */
 }
 html body .gm-content {
@@ -1236,3 +1239,10 @@ html body.dark-theme {
 }
 /* The chat sizes itself to the screen, so the frame adds no bottom gap. */
 html body .gm-home-chat { gap: 0; }
+/* Home fits the window with no scroll bar: drop the page's bottom padding and
+   tell <gm-home-chat> how much height is left under the top bar. */
+html body .gm-page:has(.gm-home-chat),
+html body .gm-frame:has(.gm-home-chat),
+html body .gm-home.gm-home-chat { padding-bottom: 0 !important; }
+html body gm-home-chat { --gm-home-fit: calc(100dvh - 84px); }
+@media (max-width: 760px) { html body gm-home-chat { --gm-home-fit: calc(100dvh - 72px); } }
