@@ -67,6 +67,8 @@ The "Talk to the studio" call: a Gemini Live session (held by the server at `/ap
 | **`LIVE_MODEL`** | `gemini-3.8-live` | Gemini Live model on Vertex AI. |
 | **`LIVE_LOCATION`** | `us-central1` | Region for the Live model. |
 | **`LIVE_VOICE`** | `Aoede` | The agent's voice (a Gemini Live prebuilt voice name). |
+| **`LIVE_AVATAR`** | `Kira` | The Live Avatar preset shown when "Avatar" is on in the call dock. Empty hides the switch. |
+| **`LIVE_AVATAR_VOICE`** | `Aoede` | The Live Avatar's voice (a prebuilt voice name). Pick one that matches the avatar. |
 | **`LIVE_ASYNC_TOOLS`** | `true` | Job tools are `NON_BLOCKING` and their results arrive at the next pause (`WHEN_IDLE`). Set `false` for Live models that only support blocking tools; results then arrive as text updates. |
 | **`LIVE_AGENT_OFFLINE`** | `false` | Use the typed offline agent (no model) instead of Gemini Live. Add `?live=offline` to a page URL to try it for one call. |
 
