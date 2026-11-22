@@ -19,8 +19,6 @@ import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from common import metadata, studio_history
 
 
@@ -77,8 +75,9 @@ class _FakeQuery:
                 out.append(doc)
         if self._ordered_by:
             field = self._ordered_by[0]
+            epoch = datetime.datetime.min.replace(tzinfo=datetime.UTC)
             out.sort(
-                key=lambda d: d.to_dict().get(field) or datetime.datetime.min.replace(tzinfo=datetime.UTC),
+                key=lambda d: d.to_dict().get(field) or epoch,
                 reverse=True,
             )
         if self._limit is not None:
@@ -152,7 +151,9 @@ def test_get_media_for_page_optimized_preserves_mime_type_and_metadata(monkeypat
     assert last_doc is not None
 
 
-def test_get_media_for_page_optimized_falls_back_when_composite_index_missing(monkeypatch):
+def test_get_media_for_page_optimized_falls_back_when_composite_index_missing(
+    monkeypatch,
+):
     monkeypatch.setattr(metadata, "db", _FakeDB(_sample_docs(), fail_composite=True))
 
     items, last_doc = metadata.get_media_for_page_optimized(
@@ -293,7 +294,11 @@ def test_extract_recent_assets_deduplicates_and_respects_limit():
     t = datetime.datetime(2026, 11, 20, 12, 0, tzinfo=datetime.UTC)
     rows = [
         {"mime_type": "image/png", "gcs_uris": ["gs://b/1.png"], "timestamp": t},
-        {"mime_type": "image/png", "gcs_uris": ["gs://b/1.png", "gs://b/2.png"], "timestamp": t},
+        {
+            "mime_type": "image/png",
+            "gcs_uris": ["gs://b/1.png", "gs://b/2.png"],
+            "timestamp": t,
+        },
         {"mime_type": "image/png", "gcs_uris": ["gs://b/3.png"], "timestamp": t},
     ]
     assets = studio_history.extract_recent_assets(
@@ -381,7 +386,16 @@ def test_image_studio_on_load_pulls_recent_library_assets(monkeypatch):
             "/media/b/img1.png", "A fox", "Nano Banana 2.1 · 1:1", "1:1"
         )
     ]
-    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "gemini_image_generation") else [])
+    def _stub_loader(expected_studio: str, items: list[studio_history.RecentAsset]):
+        return lambda owner, studio: (
+            items if owner == "alice@example.com" and studio == expected_studio else []
+        )
+
+    monkeypatch.setattr(
+        studio_history,
+        "load_recent_assets",
+        _stub_loader("gemini_image_generation", sample),
+    )
 
     _run_page_load(img_page.on_load, page_state, app_state)
 
@@ -408,7 +422,13 @@ def test_video_studio_on_load_pulls_recent_library_assets(monkeypatch):
             "/media/b/vid1.mp4", "Waves", "Veo 3.1 · 720p · 8s", "16:9"
         )
     ]
-    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "veo") else [])
+    monkeypatch.setattr(
+        studio_history,
+        "load_recent_assets",
+        lambda owner, studio: (
+            sample if owner == "alice@example.com" and studio == "veo" else []
+        ),
+    )
 
     _run_page_load(veo_page.on_veo_load, page_state, app_state)
 
@@ -435,7 +455,13 @@ def test_music_studio_on_load_pulls_recent_library_assets(monkeypatch):
             "/media/b/music1.wav", "Warm lo-fi", "lyria-3-pro-preview", ""
         )
     ]
-    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "lyria") else [])
+    monkeypatch.setattr(
+        studio_history,
+        "load_recent_assets",
+        lambda owner, studio: (
+            sample if owner == "alice@example.com" and studio == "lyria" else []
+        ),
+    )
 
     _run_page_load(lyria_page.on_lyria_load, page_state, app_state)
 
@@ -462,7 +488,13 @@ def test_voice_studio_on_load_pulls_recent_library_assets(monkeypatch):
             "/media/b/voice1.wav", "Hello world", "Gemini 3.8 TTS · Kore", ""
         )
     ]
-    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "voice") else [])
+    monkeypatch.setattr(
+        studio_history,
+        "load_recent_assets",
+        lambda owner, studio: (
+            sample if owner == "alice@example.com" and studio == "voice" else []
+        ),
+    )
 
     _run_page_load(voice_page.on_voice_load, page_state, app_state)
 
