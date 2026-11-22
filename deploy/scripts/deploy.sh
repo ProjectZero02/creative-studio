@@ -51,6 +51,12 @@ readonly TF_APIS_VARFILE="${SCRIPT_DIR}/../terraform/modules/project-services/va
 readonly CLOUDBUILD_CONFIG="${REPO_ROOT}/deploy/cloudbuild.yaml"
 readonly HEALTH_TIMEOUT_DEFAULT=300   # seconds for post-deploy health poll
 readonly HEALTH_INTERVAL=10           # seconds between polls
+# Cloud Run instance size (match terraform/cloudrun cloud_run_* defaults).
+# Every open page and Live call holds a request slot, and Story Studio and
+# Live jobs run in background threads, so CPU stays allocated between requests.
+readonly CLOUD_RUN_CPU="${CLOUD_RUN_CPU:-4}"
+readonly CLOUD_RUN_MEMORY="${CLOUD_RUN_MEMORY:-8Gi}"
+readonly CLOUD_RUN_CONCURRENCY="${CLOUD_RUN_CONCURRENCY:-20}"
 
 # --------------------------------------------------------------------------- #
 # Exit codes (documented in deploy.md).
@@ -178,7 +184,8 @@ ENVIRONMENT (optional overrides; sensible defaults are derived):
   PROJECT_ID, REGION, GOOGLE_CLOUD_REGION (region fallback, ranked after REGION),
   SERVICE_ACCOUNT_EMAIL, GCS_ASSETS_BUCKET, BUILD_SA_EMAIL,
   HEALTH_TIMEOUT, LB_HOST (poll health through this host instead of the run.app
-  URL), IAP_ID_TOKEN (OIDC token for the positive auth smoke), APP_ENV
+  URL), CLOUD_RUN_CPU / CLOUD_RUN_MEMORY / CLOUD_RUN_CONCURRENCY (instance size,
+  default 4 / 8Gi / 20), IAP_ID_TOKEN (OIDC token for the positive auth smoke), APP_ENV
   (drives pre-check #22), TF_STATE_BUCKET (enables pre-check #18), SECRET_ENV
   (comma-separated secret ids -> enables pre-check #19).
 
@@ -913,7 +920,7 @@ precheck_20_vertex_agent() {
 
 # #21 Quota headroom (WARN — cannot be reliably pre-checked, §1.4)
 precheck_21_quota() {
-  warn "#21" "quota headroom" "not reliably pre-checkable (cpu=2000m,mem=4Gi) — a real shortfall surfaces at deploy"
+  warn "#21" "quota headroom" "not reliably pre-checkable (cpu=${CLOUD_RUN_CPU},mem=${CLOUD_RUN_MEMORY}) — a real shortfall surfaces at deploy"
 }
 
 # #22 REQUIRE_AUTHENTICATED_USER resolves enforced for a prod target (WARN, §4.3)
@@ -1021,6 +1028,12 @@ do_deploy() {
     --port=8080 \
     --no-allow-unauthenticated \
     --timeout=3600 \
+    --cpu="${CLOUD_RUN_CPU}" \
+    --memory="${CLOUD_RUN_MEMORY}" \
+    --concurrency="${CLOUD_RUN_CONCURRENCY}" \
+    --no-cpu-throttling \
+    --cpu-boost \
+    --session-affinity \
     --quiet
 }
 
