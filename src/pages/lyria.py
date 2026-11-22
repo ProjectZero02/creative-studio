@@ -23,6 +23,7 @@ from common.metadata import MediaItem, add_media_item_to_firestore  # Updated im
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common import prompt_settings
 from common.i18n import t, tr
+from common.auto_enhance import enhance_on_send
 from common.prompt_prefill import prefill_prompt
 from common.prompt_settings import SettingLimits
 from common.utils import create_display_url
@@ -674,6 +675,11 @@ def on_click_lyria(e: me.ClickEvent):
         return
     # "2 tracks" or "instrumental" typed in the prompt move the chips.
     send_prompt, instrumental = _apply_typed_settings(state)
+    # Short prompts go out richer; the typed words are kept for the Library.
+    enhanced = enhance_on_send(send_prompt, MUSIC_REWRITER)
+    if enhanced != send_prompt:
+        state.original_user_prompt = state.original_user_prompt or send_prompt
+        send_prompt = enhanced
 
     state.is_loading = True
     state.loading_operation_message = (

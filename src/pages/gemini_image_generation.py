@@ -21,6 +21,7 @@ import mesop as me
 
 from common import brand_kit, prompt_settings
 from common.analytics import analytics_logger, log_ui_click
+from common.auto_enhance import enhance_on_send
 from common.i18n import t, tr
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, placeholder_image
@@ -1479,6 +1480,16 @@ def generate_images(e: me.ClickEvent):
     """Event handler for the main 'Generate Images' button."""
     state = me.state(PageState)
     prompt = _apply_typed_settings(state)
+    # Short prompts go out richer (the box keeps the person's own words).
+    prompt = enhance_on_send(
+        prompt,
+        REWRITER_PROMPT,
+        images=[
+            (uri, _guess_mime(uri))
+            for uri in state.uploaded_image_gcs_uris
+            if _guess_mime(uri).startswith("image/")
+        ],
+    )
     yield from _generate_and_save(
         base_prompt=prompt,
         input_gcs_uris=state.uploaded_image_gcs_uris,

@@ -589,7 +589,8 @@ html body .gm-composer-tools {
 html body .gm-composer-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 html body .gm-composer-attach { display: flex; align-items: center; gap: 2px; }
 html body .gm-composer-add { flex: none; display: flex; align-items: center; align-self: flex-end; }
-html body .gm-composer-mic { display: flex; align-items: center; }
+html body .gm-composer-mic,
+html body .gm-composer-live { display: flex; align-items: center; }
 /* "+" add menu: opens while focus is inside it (no page state needed). The
    popover hides with visibility, not display, so the library dialog that
    lives inside it can still show. */

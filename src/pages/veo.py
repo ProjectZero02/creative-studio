@@ -23,6 +23,7 @@ import uuid
 import mesop as me
 
 from common.analytics import log_ui_click, track_click
+from common.auto_enhance import enhance_on_send, setting_on, wanted
 from common.error_handling import AsyncVeoPollingFailedError, GenerationError
 from common import prompt_settings
 from common.i18n import t, tr
@@ -1117,10 +1118,16 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
     state.last_action = "generate"
 
     if omni:
+        # Short prompts go out richer (the box keeps the person's own words).
+        if send_prompt and state.veo_mode != "upscale":
+            send_prompt = enhance_on_send(send_prompt, VIDEO_REWRITER)
         yield from _generate_with_omni(state, app_state, send_prompt)
         return
 
     model_config = get_veo_model_config(state.veo_model)
+    # Veo improves the prompt itself when asked (Settings > Improve my prompts).
+    if setting_on() and wanted(send_prompt or state.veo_prompt_input):
+        state.auto_enhance_prompt = True
     enhancing = state.auto_enhance_prompt or bool(
         model_config and model_config.requires_prompt_enhancement
     )

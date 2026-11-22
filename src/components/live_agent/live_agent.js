@@ -1059,7 +1059,7 @@ class LiveAgentBridge extends LitElement {
 }
 
 class LiveCallButton extends LitElement {
-  static properties = { stringsJson: { type: String } };
+  static properties = { stringsJson: { type: String }, compact: { type: Boolean, reflect: true } };
 
   static styles = css`
     :host { display: block; }
@@ -1071,6 +1071,12 @@ class LiveCallButton extends LitElement {
     button:focus-visible { outline: 3px solid var(--sys-primary, #1a5fd8); outline-offset: 3px; }
     svg { width: 22px; height: 22px; fill: currentColor; }
     p { margin: 10px 0 0; font: 13px "Google Sans Text", Roboto, Arial, sans-serif; color: var(--sys-on-surface-variant, #44474e); }
+    /* compact: a 40px round icon button, like the composer's mic. */
+    :host([compact]) button { width: 40px; height: 40px; padding: 0; gap: 0; justify-content: center;
+      background: transparent; color: var(--sys-on-surface-variant, #44474e); box-shadow: none; }
+    :host([compact]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(21, 23, 28, 0.10)); }
+    :host([compact]) button.on { background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); }
+    :host([compact]) svg { width: 22px; height: 22px; }
   `;
 
   connectedCallback() {
@@ -1086,6 +1092,13 @@ class LiveCallButton extends LitElement {
   render() {
     let s = DEFAULT_STRINGS;
     try { if (this.stringsJson) s = { ...s, ...JSON.parse(this.stringsJson) }; } catch (e) { /* defaults */ }
+    if (this.compact) {
+      // A live "voice wave" icon, so it reads differently from Dictate's mic.
+      return html`
+        <button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z"/></svg>
+        </button>`;
+    }
     return html`
       <button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>

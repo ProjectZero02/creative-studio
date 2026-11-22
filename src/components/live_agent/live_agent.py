@@ -152,10 +152,10 @@ def live_agent_bridge(
 
 
 @me.web_component(path="./live_agent.js")
-def live_call_button(*, key: str | None = "live-call-button"):
-    """Large call button for the home page hero."""
+def live_call_button(*, key: str | None = "live-call-button", compact: bool = False):
+    """Call button: labelled on Home, a round icon in the studios' prompt box."""
     return me.insert_web_component(
         key=key,
         name="live-call-button",
-        properties={"stringsJson": json.dumps(_strings())},
+        properties={"stringsJson": json.dumps(_strings()), "compact": compact},
     )

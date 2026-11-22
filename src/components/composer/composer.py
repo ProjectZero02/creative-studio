@@ -16,8 +16,13 @@
 Layout (like ChatGPT, Gemini and Claude): optional reference tiles on top, the
 prompt textarea, then one row: a single "+" add menu at the bottom left
 (`render_add`, usually `composer_add_menu`), the page's chips (passed as
-children), and on the right clear, enhance, the dictation mic and a round send
+children), and on the right Live, the dictation mic and a round send
 button. See docs/COMPOSER_FORMAT_PLAN.md.
+
+The right side holds only Live (voice), Dictate and Send. Enhance happens on
+send (common/auto_enhance.py) and Up/Down recall recent prompts
+(prompt_keys.js), so pages may still pass `on_enhance`, `on_clear` and
+`history` without a button being drawn for them.
 
 Enter generates, Shift+Enter adds a new line. Every icon button has a
 screen-reader name and a tooltip; buttons are 44px tall on phones (CSS in
@@ -29,9 +34,18 @@ import typing
 import mesop as me
 
 from common.i18n import t, tx
-from components.composer.prompt_history import history_panel, on_history_click
+from components.live_agent.live_agent import live_call_button
+from config.default import Default
 
 ENTER = me.Shortcut(key="Enter")
+
+
+@me.web_component(path="./prompt_keys.js")
+def composer_prompt_keys(*, page: str, key: str | None = None):
+    """Up/Down arrows in the prompt box step through your recent prompts."""
+    return me.insert_web_component(
+        key=key, name="gm-prompt-keys", properties={"page": page}
+    )
 
 
 @me.web_component(path="./dictation.js")
@@ -171,18 +185,17 @@ def composer(
     read from the typed prompt); `on_notice_undo` adds an Undo button to it.
     Both are off by default, so pages that don't pass them look the same.
 
-    `history` is the page's key in services/page_forms.py; it adds a button
-    that lists your recent prompts in this studio (common/prompt_history.py).
+    `history` is the page's key in services/page_forms.py; Up/Down in the box
+    then step through your recent prompts in this studio (prompt_keys.js).
     """
     placeholder = (
         tx(placeholder) if placeholder is not None else t("composer.placeholder")
     )
-    enhance_label = (
-        tx(enhance_label) if enhance_label is not None else t("composer.enhance")
-    )
+    # on_enhance, enhancing, on_clear and their labels are accepted for older
+    # callers; Enhance now runs on send and Clear is gone (see module doc).
+    del on_enhance, enhance_label, enhancing, on_clear, clear_label
     send_label = tx(send_label) if send_label is not None else t("composer.send")
     hint = tx(hint) if hint else ""
-    clear_label = tx(clear_label) if clear_label is not None else t("composer.clear")
     with me.box(classes="gm-composer" + (" gm-busy" if busy else "")):
         if render_top:
             render_top()
@@ -214,41 +227,9 @@ def composer(
             with me.box(classes="gm-composer-tools"):
                 me.slot()
             with me.box(classes="gm-composer-actions"):
-                if history:
-                    composer_icon_button(
-                        icon="history",
-                        label="Recent prompts",
-                        on_click=on_history_click,
-                        disabled=busy,
-                        key=history,
-                    )
-                if on_clear:
-                    composer_icon_button(
-                        icon="restart_alt",
-                        label=clear_label,
-                        on_click=on_clear,
-                        disabled=busy,
-                    )
-                if on_enhance:
-                    if enhancing:
-                        with me.box(
-                            classes="gm-composer-btn",
-                            style=me.Style(
-                                display="flex",
-                                align_items="center",
-                                justify_content="center",
-                                width=40,
-                                height=40,
-                            ),
-                        ):
-                            me.progress_spinner(diameter=20, stroke_width=3)
-                    else:
-                        composer_icon_button(
-                            icon="auto_awesome",
-                            label=enhance_label,
-                            on_click=on_enhance,
-                            disabled=busy,
-                        )
+                if Default.LIVE_AGENT_ENABLED:
+                    with me.box(classes="gm-composer-live"):
+                        live_call_button(compact=True, key="composer_live")
                 if dictation:
                     with me.box(classes="gm-composer-mic"):
                         composer_dictation(key="composer_mic")
@@ -267,7 +248,7 @@ def composer(
                         primary=True,
                     )
         if history:
-            history_panel(history)
+            composer_prompt_keys(page=history, key=f"keys-{history}")
         if notice:
             composer_notice(text=notice, on_undo=on_notice_undo)
         elif hint:
