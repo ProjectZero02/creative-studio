@@ -1500,13 +1500,14 @@ class VertexStoryBackend:
         """One JSON Gemini call. `media`: GCS URIs (images, films) sent
         before the prompt so the model can look at them. `schema`: a JSON
         schema the reply must follow. `system`: the system instruction.
-        `thinking`: let the model think first (dynamic budget). With no
+        `thinking`: let the model think first (models.thinking). With no
         `temperature` the model's own default is used, as Google advises
         for its reasoning models."""
         from google.genai import types
 
         from common.analytics import track_model_call
         from models.gemini import client
+        from models.thinking import dynamic_thinking
 
         model = model or self.cfg.STORY_SCENARIO_MODEL_ID
         parts = [
@@ -1519,9 +1520,7 @@ class VertexStoryBackend:
             temperature=temperature,
             response_json_schema=schema,
             system_instruction=system or None,
-            thinking_config=(
-                types.ThinkingConfig(thinking_budget=-1) if thinking else None
-            ),
+            thinking_config=dynamic_thinking(model) if thinking else None,
         )
         with track_model_call(model_name=model, task=task):
             response = client.models.generate_content(

@@ -29,6 +29,7 @@ from common.metadata import MediaItem, add_media_item_to_firestore
 from common.storage import download_from_gcs, store_to_gcs
 from config.default import Default
 
+from models.thinking import dynamic_thinking
 from models.gemini import (
     get_facial_composite_profile,
     get_natural_language_description,
@@ -349,7 +350,7 @@ def _write_video_prompt(image_bytes: bytes, provided_prompt: str | None = None) 
         model=cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL,
         contents=gemini_contents,
         config=genai.types.GenerateContentConfig(
-            thinking_config=genai.types.ThinkingConfig(thinking_budget=-1)
+            thinking_config=dynamic_thinking(cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL)
         ),
     )
     return video_prompt_response.text.strip()
