@@ -69,6 +69,7 @@ from services.story_models import (
     furthest_step,
     max_words,
     reachable_steps,
+    set_text_from_cast,
     supported_durations,
 )
 from services import story_timeline as timeline_mod
@@ -1766,8 +1767,15 @@ def set_step(story: Story) -> None:
                 "Characters, places and props, made once and reused in every shot.",
             )
             me.text(
-                "Gemini casts your story, then makes about 4 images per "
-                "character, 2 per place and 1 per prop.",
+                (
+                    "Your scenario already cast the story. Make set paints about "
+                    "4 images per character, 2 per place and 1 per prop."
+                )
+                if set_text_from_cast(story.cast_json, story.scenes)
+                else (
+                    "Gemini casts your story, then makes about 4 images per "
+                    "character, 2 per place and 1 per prop."
+                ),
                 style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
             )
             with me.box(classes="ss-set-tools"):
