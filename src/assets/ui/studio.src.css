@@ -667,6 +667,34 @@ html body .gm-veo-refs { padding-bottom: 6px; }
 html body .gm-veo-refs > * { flex-wrap: wrap; }
 html body .gm-ref-slot { background: var(--sys-surface-container-low); }
 
+/* Mode switch with hover tips (demo_mode_switch; Settings, Fashion): a tonal pill group. */
+html body .gm-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--gm-tonal);
+  flex: none;
+}
+html body .gm-seg-opt .mdc-button,
+html body .gm-seg-opt .mat-mdc-button {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sys-on-surface-variant);
+  background: transparent;
+  white-space: nowrap;
+}
+html body .gm-seg-opt.is-on .mdc-button,
+html body .gm-seg-opt.is-on .mat-mdc-button {
+  background: var(--sys-surface-container-lowest);
+  color: var(--sys-on-surface);
+  box-shadow: var(--gm-card-shadow);
+}
+
 /* Segmented control (Veo modes) */
 html body .gm-segmented { display: flex; justify-content: center; }
 html body .gm-segmented .mat-button-toggle-group {
@@ -1082,4 +1110,76 @@ html:root body :is(.gm-demo-card, .gm-demo-settings, .gm-demo-result, .ss-card, 
       backdrop-filter: var(--gm-glass-blur);
     }
   }
+}
+
+/* ---------- Settings (/settings, pages/settings.py) ---------- */
+/* Sections on the left, the chosen section on the right; on phones the
+   sections become a scrolling row of pills above the content. */
+html body .gm-settings {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 28px;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  align-items: start;
+}
+html body .gm-set-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 8px; }
+html body .gm-set-nav-item .mat-mdc-button-base,
+html body .gm-set-nav-item button {
+  width: 100%;
+  justify-content: flex-start;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  color: var(--sys-on-surface-variant);
+  font-size: 14.5px;
+  font-weight: 500;
+}
+html body .gm-set-nav-item .mdc-button__label { display: flex; align-items: center; gap: 12px; }
+html body .gm-set-nav-item .mat-icon { font-size: 20px; width: 20px; height: 20px; }
+html body .gm-set-nav-item button:hover { background: var(--gm-tonal-hover); }
+html body .gm-set-nav-item.is-on button {
+  background: var(--sys-secondary-container);
+  color: var(--sys-on-secondary-container);
+}
+html body .gm-set-body { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+html body .gm-set-heading { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--sys-on-surface); }
+html body .gm-set-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--gm-radius-xl);
+  background: var(--gm-glass-fill);
+  border: 1px solid var(--gm-glass-border);
+  backdrop-filter: var(--gm-glass-blur);
+  -webkit-backdrop-filter: var(--gm-glass-blur);
+  overflow: hidden;
+}
+html body .gm-set-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px;
+  min-height: 72px;
+  box-sizing: border-box;
+}
+html body .gm-set-row + .gm-set-row { border-top: 1px solid var(--gm-glass-border); }
+html body .gm-set-row-text { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; min-width: 0; }
+html body .gm-set-row-title { font-size: 15px; font-weight: 500; color: var(--sys-on-surface); }
+html body .gm-set-row-desc { font-size: 13.5px; line-height: 1.45; color: var(--sys-on-surface-variant); }
+html body .gm-set-row-icon {
+  flex: none; width: 40px; height: 40px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--gm-tonal); color: var(--sys-on-surface-variant);
+}
+html body .gm-set-body .gm-usage,
+html body .gm-set-body .gm-brand { width: 100%; max-width: none; }
+@media (max-width: 760px) {
+  html body .gm-settings { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  html body .gm-set-nav {
+    flex-direction: row; position: static; overflow-x: auto; scrollbar-width: none;
+    gap: 6px; padding-bottom: 2px;
+  }
+  html body .gm-set-nav-item button { width: auto; white-space: nowrap; border-radius: 999px; }
+  html body .gm-set-row { flex-wrap: wrap; padding: 16px; }
 }

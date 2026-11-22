@@ -26,6 +26,8 @@ import json
 import logging
 from dataclasses import field
 
+from contextlib import nullcontext
+
 import mesop as me
 
 from common import usage
@@ -140,18 +142,21 @@ def _chart(days: list[dict]) -> None:
         me.text("Today")
 
 
-def usage_content():
+def usage_content(embedded: bool = False):
+    """The Usage page body; `embedded` drops the frame and title (Settings)."""
     s = me.state(UsageState)
     try:
         summary = json.loads(s.summary_json) if s.summary_json else None
     except ValueError:
         summary = None
-    with page_frame():  # pylint: disable=not-context-manager
-        header(
-            "Usage",
-            "monitoring",
-            description="What you generated and an estimate of what it cost.",
-        )
+    frame = nullcontext() if embedded else page_frame()
+    with frame:  # pylint: disable=not-context-manager
+        if not embedded:
+            header(
+                "Usage",
+                "monitoring",
+                description="What you generated and an estimate of what it cost.",
+            )
         with me.box(classes="gm-usage"):
             with me.box(classes="gm-segmented gm-filter-row"):
                 me.button_toggle(

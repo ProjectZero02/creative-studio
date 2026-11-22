@@ -23,6 +23,8 @@ import json
 import logging
 import uuid
 
+from contextlib import nullcontext
+
 import mesop as me
 
 from common import brand_kit
@@ -162,15 +164,18 @@ def page():
         brand_content()
 
 
-def brand_content():
+def brand_content(embedded: bool = False):
+    """The My brand body; `embedded` drops the frame and title (Settings)."""
     s = me.state(BrandState)
     kit = _kit(s)
-    with page_frame():  # pylint: disable=not-context-manager
-        header(
-            "My brand",
-            "palette",
-            description="Your logo, colours and tone, applied to films and images.",
-        )
+    frame = nullcontext() if embedded else page_frame()
+    with frame:  # pylint: disable=not-context-manager
+        if not embedded:
+            header(
+                "My brand",
+                "palette",
+                description="Your logo, colours and tone, applied to films and images.",
+            )
         if not s.loaded:
             me.progress_spinner()
             return

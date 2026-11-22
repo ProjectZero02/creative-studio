@@ -28,6 +28,8 @@ POSTs to /account/renew for a fresh cookie (see components/session_renew).
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import mesop as me
 from flask import request
 
@@ -307,16 +309,19 @@ def _reset_dialog(state: AccountState):
             me.button(t("admin.reset_password"), on_click=submit_reset, type="flat")
 
 
-def account_content():
+def account_content(embedded: bool = False):
+    """The account body; `embedded` drops the frame and title (Settings)."""
     state = me.state(AccountState)
     email = current_user_email()
-    with page_frame():  # pylint: disable=not-context-manager
-        header(
-            t("account.title"),
-            "manage_accounts",
-            description=t("account.description"),
-            centered=True,
-        )
+    frame = nullcontext() if embedded else page_frame()
+    with frame:  # pylint: disable=not-context-manager
+        if not embedded:
+            header(
+                t("account.title"),
+                "manage_accounts",
+                description=t("account.description"),
+                centered=True,
+            )
         if email is None:
             _banner(t("account.err_signed_out"), error=True)
             return
