@@ -61,6 +61,7 @@ let uid = 0;
 class GmChipMenu extends LitElement {
   static properties = {
     label: { type: String },
+    tip: { type: String }, // what the setting does, shown on hover and focus
     value: { type: String },
     options: { type: String }, // JSON: [{value, label, hint?}]
     icon: { type: String },
@@ -218,6 +219,12 @@ class GmChipMenu extends LitElement {
     this._emit(this.checked ? 'true' : 'false');
   }
 
+  _tipEl() {
+    const text = this.tip ? `${this.label}: ${this.tip}` : this.label;
+    if (!text || this._open) return nothing;
+    return html`<span class="tip" role="tooltip">${text}</span>`;
+  }
+
   render() {
     const icon = ICONS[this.icon];
     if (this.kind === 'toggle') {
@@ -226,11 +233,10 @@ class GmChipMenu extends LitElement {
         type="button"
         aria-pressed=${this.checked ? 'true' : 'false'}
         ?disabled=${this.disabled}
-        title=${this.label}
         @click=${this._onToggle}
       >
         ${icon ? svg(icon) : nothing}<span class="text">${this.value || this.label}</span>
-      </button>`;
+      </button>${this._tipEl()}`;
     }
 
     const opts = this._opts;
@@ -238,9 +244,9 @@ class GmChipMenu extends LitElement {
     const shown = cur ? cur.label : this.value;
     const isStatic = opts.length <= 1;
     if (isStatic) {
-      return html`<span class="chip static" role="note" aria-label="${this.label}: ${shown}" title=${this.label}>
+      return html`<span class="chip static" role="note" aria-label="${this.label}: ${shown}" tabindex="0">
         ${icon ? svg(icon) : nothing}<span class="text">${shown}</span>
-      </span>`;
+      </span>${this._tipEl()}`;
     }
     return html`
       <button
@@ -250,13 +256,13 @@ class GmChipMenu extends LitElement {
         aria-expanded=${this._open ? 'true' : 'false'}
         aria-controls=${this._id}
         aria-label="${this.label}: ${shown}"
-        title=${this.label}
         ?disabled=${this.disabled}
         @click=${this._toggleOpen}
         @keydown=${this._onChipKey}
       >
         ${icon ? svg(icon) : nothing}<span class="text">${shown}</span>${svg(CARET, 18)}
       </button>
+      ${this._tipEl()}
       ${this._open
         ? html`<div class="menu" role="listbox" id=${this._id} aria-label=${this.label} @keydown=${this._onListKey}>
             <div class="menu-title" aria-hidden="true">${this.label}</div>
@@ -283,6 +289,32 @@ class GmChipMenu extends LitElement {
       position: relative;
       display: inline-flex;
       font-family: var(--gm-font, 'Google Sans', system-ui, sans-serif);
+    }
+    /* Hover / focus description above the chip (same look as Mesop tooltips). */
+    .tip {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: 260px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: var(--gm-tip-bg, #2b2f38);
+      color: var(--gm-tip-fg, #fff);
+      font-size: 12.5px;
+      line-height: 1.4;
+      text-align: center;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 120ms ease 350ms, visibility 0s linear 470ms;
+      z-index: 30;
+    }
+    :host(:hover) .tip, :host(:focus-within) .tip {
+      opacity: 1;
+      visibility: visible;
+      transition: opacity 120ms ease 350ms, visibility 0s linear 350ms;
     }
     .chip {
       all: unset;

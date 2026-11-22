@@ -82,6 +82,48 @@ html body .gm-step.is-done .gm-step-num {
 /* ---------- Switch (segmented control) ---------- */
 html body .gm-demo-switch .mat-button-toggle-label-content { padding: 0 22px !important; }
 
+/* Mode switch with hover tips (demo_mode_switch): a tonal pill group. */
+html body .gm-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--gm-tonal);
+  flex: none;
+}
+html body .gm-seg-opt .mdc-button,
+html body .gm-seg-opt .mat-mdc-button {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sys-on-surface-variant);
+  background: transparent;
+  white-space: nowrap;
+}
+html body .gm-seg-opt.is-on .mdc-button,
+html body .gm-seg-opt.is-on .mat-mdc-button {
+  background: var(--sys-surface-container-lowest);
+  color: var(--sys-on-surface);
+  box-shadow: var(--gm-card-shadow);
+}
+
+/* Mode switch on the left, steps beside it, in one row; stacks on phones. */
+html body .gm-demo-toprow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+}
+html body .gm-demo-toprow .gm-steps-wrap { flex: 1 1 auto; justify-content: flex-end; }
+@media (max-width: 760px) {
+  html body .gm-demo-toprow { justify-content: center; }
+  html body .gm-demo-toprow .gm-steps-wrap { justify-content: center; }
+}
+
 /* ---------- Inline alert and status ---------- */
 html body .gm-demo-alert {
   display: flex;

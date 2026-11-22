@@ -638,6 +638,20 @@ _DICTS: dict[str, dict[str, str]] = {"en": EN, "ar": AR}
 # Strings pages pass to shared components, keyed by their English text.       #
 # --------------------------------------------------------------------------- #
 AR_TEXT: dict[str, str] = {
+    # Hover descriptions on the composer chips (components/composer/chip_menu.py)
+    "Which Google model makes the result": "نموذج Google الذي يُنشئ النتيجة",
+    "The shape: wide, square or tall": "الشكل: عريض أو مربع أو طويل",
+    "Sharper results take a little longer": "النتائج الأوضح تستغرق وقتًا أطول قليلًا",
+    "How many seconds the video runs": "مدة الفيديو بالثواني",
+    "How many versions to make at once": "عدد النسخ التي تُنشأ دفعة واحدة",
+    "Who reads the script": "من يقرأ النص",
+    "How fast the voice speaks": "سرعة الصوت في الكلام",
+    "The mood of the delivery": "طابع الأداء",
+    "The language the voice speaks": "اللغة التي يتحدث بها الصوت",
+    "Add sound and speech to the video": "أضف الصوت والكلام إلى الفيديو",
+    # Fashion mode switch
+    "Put one garment on your own model photo": "ضع قطعة ملابس واحدة على صورة العارضة",
+    "Pick a model and style a full outfit from the catalog": "اختر عارضة ونسّق إطلالة كاملة من الكتالوج",
     # Composer placeholders and buttons (the 10 menu pages)
     "Describe the image you want to generate…": "صِف الصورة التي تريد إنشاءها…",
     "Describe the video you want to create…": "صِف الفيديو الذي تريد إنشاءه…",
