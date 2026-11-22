@@ -43,17 +43,17 @@ Controls which versions of the Gemini models are used for various tasks.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| **`MODEL_ID`** | `gemini-3.8-flash` | The primary Gemini model used for general text and reasoning tasks throughout the app. |
+| **`MODEL_ID`** | `gemini-4-neon` | The primary Gemini model used for general text and reasoning tasks throughout the app. |
 | **`GEMINI_LOCATION`** | `global` | Region for Gemini 3.x model calls. Gemini 3.x is served only from the `global` endpoint (and the us/eu multi-regions), so this is kept separate from `LOCATION`. |
 | **`GEMINI_TTS_LOCATION`** | `global` | Region for Gemini text-to-speech (TTS) model calls. |
 | **`GEMINI_IMAGE_GEN_MODEL`** | `gemini-nano-banana-2.1` | The default model used for image generation features (supports `gemini-nano-banana-2.1` (default), `gemini-3.1-flash-lite-image`, `gemini-3.1-flash-image`, or `gemini-3-pro-image`). |
 | **`GEMINI_IMAGE_GEN_LOCATION`** | `global` | The region for the Gemini Image Generation API. |
-| **`GEMINI_AUDIO_ANALYSIS_MODEL_ID`** | `gemini-3.5-flash-lite` | The model used specifically for analyzing audio content. |
-| **`GEMINI_WRITERS_WORKSHOP_MODELS`** | `gemini-4-argon,gemini-3.8-flash` | Comma-separated models offered in the Gemini Writers Workshop model picker. |
-| **`GEMINI_WRITERS_WORKSHOP_MODEL_ID`** | `gemini-4-argon` | The model preselected in the Gemini Writers Workshop picker (added to the picker if not listed in `GEMINI_WRITERS_WORKSHOP_MODELS`). |
-| **`GEMINI_STORYBOARDER_NARRATIVE_MODELS`** | `gemini-3.8-flash,gemini-4-argon,gemini-3.5-flash-lite` | Comma-separated models offered in the Storyboarder "Narrative Writer Model" picker. |
-| **`GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID`** | `gemini-3.8-flash` | The model preselected in the Storyboarder Narrative Writer picker (added to the picker if not listed in `GEMINI_STORYBOARDER_NARRATIVE_MODELS`). |
-| **`GEMINI_CRITIQUE_MODEL_ID`** | `gemini-3.8-flash` | The specific model used for the Imagen critique functionality. |
+| **`GEMINI_AUDIO_ANALYSIS_MODEL_ID`** | `gemini-4-neon` | The model used specifically for analyzing audio content. |
+| **`GEMINI_WRITERS_WORKSHOP_MODELS`** | `gemini-4-neon,gemini-4-argon,gemini-3.8-flash` | Comma-separated models offered in the Gemini Writers Workshop model picker. |
+| **`GEMINI_WRITERS_WORKSHOP_MODEL_ID`** | `gemini-4-neon` | The model preselected in the Gemini Writers Workshop picker (added to the picker if not listed in `GEMINI_WRITERS_WORKSHOP_MODELS`). |
+| **`GEMINI_STORYBOARDER_NARRATIVE_MODELS`** | `gemini-4-neon,gemini-3.8-flash,gemini-4-argon,gemini-3.5-flash-lite` | Comma-separated models offered in the Storyboarder "Narrative Writer Model" picker. |
+| **`GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID`** | `gemini-4-neon` | The model preselected in the Storyboarder Narrative Writer picker (added to the picker if not listed in `GEMINI_STORYBOARDER_NARRATIVE_MODELS`). |
+| **`GEMINI_CRITIQUE_MODEL_ID`** | `gemini-4-neon` | The specific model used for the Imagen critique functionality. |
 | **`GEMINI_CRITIQUE_LOCATION`** | `global` | The region for the Gemini image critique model. |
 | **`CHARACTER_CONSISTENCY_GEMINI_MODEL`** | `MODEL_ID` | The model used for Character Consistency tasks. |
 | **`CHARACTER_CONSISTENCY_GEMINI_LOCATION`** | `global` | The region for the Character Consistency Gemini model. |
@@ -144,6 +144,7 @@ Sets hold a story's characters (with their voices), locations, props and style, 
 | **`STORY_SETS_COLLECTION_NAME`** | `story_sets` | Firestore collection for saved sets. Each set is owner-only; the list query filters on `owner` alone and sorts in the app, so no composite index is needed. |
 | **`STORY_MAX_CLIP_REFERENCES`** | `6` | Most reference images sent with one clip when a story uses a set (storyboard frame, cast faces and fronts, location plate, props). The video model's own `max_reference_images` also caps it, so the lower of the two wins. When over the cap, props are dropped first, then extra character views. |
 | **`STORY_MAX_SCENE_SECONDS`** | `30` | Longest scene. Up to the video model's single-clip limit (15 s for Gemini Omni 1.2 Flash) a scene is one clip; a longer scene is that clip plus extension turns in the same Omni thread (3 to 10 s each), joined into one clip. Omni extends up to 30 s in all. |
+| **`STORY_SCENARIO_MODEL_ID`** | `MODEL_ID` (`gemini-4-neon`) | Gemini model that writes the Story Studio scenario and its cast, casts older stories on the Set step, rewrites scenes and plans fixes. |
 | **`STORY_LIVE_SETTINGS_MODEL`** | `gemini-3.5-flash-lite` | Small Gemini model that reads the film settings (length, scenes, aspect ratio, language, style, who speaks) out of the idea each time typing pauses on the Create step, after a free rules pass. Empty turns the live model off (the rules pass still runs). |
 
 ## 🎵 Lyria (Music Generation)
@@ -201,9 +202,9 @@ These variables are exposed in `variables.tf` and directly map to environment va
 | :--- | :--- | :--- |
 | `project_id` | `PROJECT_ID` | *(Required)* |
 | `region` | `LOCATION` | `us-central1` |
-| `model_id` | `MODEL_ID` | `gemini-3.8-flash` |
-| `gemini_audio_analysis_model_id` | `GEMINI_AUDIO_ANALYSIS_MODEL_ID` | `gemini-3.5-flash-lite` |
-| `gemini_critique_model_id` | `GEMINI_CRITIQUE_MODEL_ID` | `gemini-3.8-flash` |
+| `model_id` | `MODEL_ID` | `gemini-4-neon` |
+| `gemini_audio_analysis_model_id` | `GEMINI_AUDIO_ANALYSIS_MODEL_ID` | `gemini-4-neon` |
+| `gemini_critique_model_id` | `GEMINI_CRITIQUE_MODEL_ID` | `gemini-4-neon` |
 | `gemini_critique_location` | `GEMINI_CRITIQUE_LOCATION` | `global` |
 | `character_consistency_gemini_location` | `CHARACTER_CONSISTENCY_GEMINI_LOCATION` | `global` |
 | `veo_model_id` | `VEO_MODEL_ID` | `veo-3.1-fast-generate-001` |
