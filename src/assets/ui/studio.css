@@ -326,6 +326,51 @@ html body .gm-nav-item:hover { background: var(--gm-hover); }
 /* Rail: pages scroll on short screens with no visible bar; Settings stays at the bottom. */
 html body .gm-nav-pages { scrollbar-width: none; }
 html body .gm-nav-pages::-webkit-scrollbar { display: none; }
+/* Opening and closing the rail: the same elements in both states. The width
+   animates (side_nav.py), labels and the wordmark fade, group headings grow
+   from a gap, and icons stay where they are. */
+html body .gm-nav-label {
+  display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  opacity: 1; transition: opacity 160ms ease 70ms;
+}
+html body .gm-nav-brand { min-width: 0; overflow: hidden; opacity: 1; transition: opacity 160ms ease 70ms; }
+html body .gm-nav-collapsed .gm-nav-label,
+html body .gm-nav-collapsed .gm-nav-brand { opacity: 0; transition: opacity 70ms ease; pointer-events: none; }
+html body .gm-nav-group {
+  height: 30px; padding: 12px 10px 0; box-sizing: border-box; overflow: hidden;
+  transition: height 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+html body .gm-nav-group .gm-nav-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--sys-on-surface-variant);
+}
+html body .gm-nav-collapsed .gm-nav-group { height: 12px; }
+/* Short screens: slightly tighter rows so every page fits without scrolling. */
+@media (max-height: 720px) {
+  html body .gm-nav .gm-nav-pages .mat-mdc-button-base,
+  html body .gm-nav > :last-child .mat-mdc-button-base { height: 36px !important; }
+  html body .gm-nav-group { height: 24px; padding-top: 8px; }
+  html body .gm-nav-collapsed .gm-nav-group { height: 8px; }
+}
+/* Rail buttons show a fill only on hover (no lingering focus or ripple circle);
+   keyboard focus still gets an outline. */
+html body .gm-nav .mat-mdc-button-persistent-ripple::before,
+html body .gm-nav .mat-mdc-button-ripple { opacity: 0 !important; }
+html body .gm-nav .mat-mdc-button-base:hover { background-color: var(--gm-hover); }
+/* Only real keyboard focus gets the ring (the drawer focuses its first button on load). */
+html body .gm-nav button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: 1px; }
+html body .gm-nav button:focus-visible:not(.cdk-keyboard-focused) { outline: none; }
+@media (prefers-reduced-motion: reduce) {
+  html body .gm-nav-label, html body .gm-nav-brand, html body .gm-nav-group { transition: none; }
+}
+/* Theme, language and account live at the bottom of the rail on wider
+   screens; the top bar holds them only on phones, where the rail folds away. */
+@media (min-width: 601px) {
+  html body .gm-topbar { display: none !important; }
+}
+@media (max-width: 600px) {
+  html body .gm-nav-account { display: none; }
+}
 
 /* ---------- Motion: gentle by default, off when asked ---------- */
 @keyframes gm-fade-up {
@@ -481,9 +526,7 @@ html body .gm-title p { margin: 0; }
   html body .gm-nav-collapsed { padding: 8px !important; overflow: visible !important; background: transparent; }
   html body .gm-nav-collapsed > :not(:first-child) { display: none !important; }
   html body .gm-nav-collapsed > :first-child .mdc-icon-button,
-  html body .gm-nav-collapsed > :first-child button {
-    background: var(--sys-surface-container-high); border-radius: 50%;
-  }
+  html body .gm-nav-collapsed > :first-child button { border-radius: 50%; }
   html body .gm-content:not(.gm-nav-open),
   html body .gm-content.gm-nav-open { margin-left: 0; }
   /* The avatar row (.gm-topbar) shares the line with the floating menu button. */
@@ -896,6 +939,7 @@ html body .gm-frame { margin-inline: auto; width: 100%; }
    the same width all round: no inset top highlight, which read as a thicker
    top edge. --gm-glass-highlight stays defined for older components. */
 html body {
+  --gm-panel: #eef2f8;
   --gm-glass-fill: rgba(255, 255, 255, 0.55);
   --gm-glass-solid: rgba(255, 255, 255, 0.95);
   --gm-glass-border: rgba(20, 24, 40, 0.08);
@@ -910,6 +954,7 @@ html body {
   --gm-accent-gradient: linear-gradient(135deg, #1a73e8 0%, #6a4cf0 100%);
 }
 html body.dark-theme {
+  --gm-panel: #1d1f25;
   --gm-glass-fill: rgba(30, 33, 48, 0.50);
   --gm-glass-solid: rgba(24, 26, 38, 0.94);
   --gm-glass-border: rgba(255, 255, 255, 0.10);
@@ -1085,7 +1130,14 @@ html body .gm-next {
     }
   }
 }
-html body .gm-composer { border-radius: 28px; }
+/* The prompt box itself is solid, in the open rail's colour, like Home's. */
+html body .gm-composer {
+  border-radius: 28px;
+  background: var(--gm-panel);
+  border-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 html body .gm-composer.gm-busy { box-shadow: var(--gm-glass-shadow); }
 html body .gm-composer:focus-within { border-color: color-mix(in srgb, var(--sys-primary) 45%, var(--gm-glass-border)); }
 html body .gm-empty {
@@ -1244,5 +1296,5 @@ html body .gm-home-chat { gap: 0; }
 html body .gm-page:has(.gm-home-chat),
 html body .gm-frame:has(.gm-home-chat),
 html body .gm-home.gm-home-chat { padding-bottom: 0 !important; }
-html body gm-home-chat { --gm-home-fit: calc(100dvh - 84px); }
+html body gm-home-chat { --gm-home-fit: calc(100dvh - 36px); }
 @media (max-width: 760px) { html body gm-home-chat { --gm-home-fit: calc(100dvh - 72px); } }

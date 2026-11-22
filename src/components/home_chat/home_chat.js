@@ -533,14 +533,15 @@ class GmHomeChat extends LitElement {
     /* The prompt box (same glass as the studios' composer). */
     .dock { width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
     .wrap.chat .dock { position: sticky; bottom: 0; padding: 10px 0 16px; }
-    .wrap.chat .box { background: var(--gm-glass-solid, rgba(24, 26, 38, 0.94)); }
+    /* A solid box in the open rail's colour (--gm-panel), like Gemini's: it
+       stands out from the page instead of blending in as glass. */
     .box {
       width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 14px 14px 12px 20px;
-      border-radius: 26px; background: var(--gm-glass-fill, rgba(30, 33, 48, 0.5)); border: 1px solid var(--gm-glass-border, rgba(255, 255, 255, 0.1));
-      box-shadow: var(--gm-glass-shadow, 0 12px 40px rgba(0, 0, 0, 0.35)); backdrop-filter: var(--gm-glass-blur, blur(20px)); -webkit-backdrop-filter: var(--gm-glass-blur, blur(20px));
+      border-radius: 28px; background: var(--gm-panel, #1d1f25); border: 1px solid transparent;
+      box-shadow: 0 10px 34px rgba(0, 0, 0, 0.22);
       transition: border-color 160ms ease, box-shadow 160ms ease;
     }
-    .box:focus-within { border-color: color-mix(in srgb, var(--sys-primary, #8ab4f8) 55%, transparent); }
+    .box:focus-within { border-color: color-mix(in srgb, var(--sys-on-surface, #e8eaed) 14%, transparent); }
     textarea {
       width: 100%; min-height: 32px; max-height: 220px; resize: none; border: 0; outline: 0; background: transparent;
       color: inherit; font: inherit; font-size: 17px; line-height: 1.55; padding: 6px 0;

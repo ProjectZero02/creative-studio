@@ -177,7 +177,7 @@ const STYLE = `
 @keyframes gml-ping { 0% { box-shadow: 0 0 0 0 rgba(26,95,216,.6); } 100% { box-shadow: 0 0 0 12px rgba(26,95,216,0); } }
 
 /* ---- Call window: one card, like a video call. Drag it anywhere; it starts on the right. */
-.gml-call { position: fixed; top: 84px; right: 20px; width: 280px; border-radius: 24px; overflow: hidden;
+.gml-call { position: fixed; top: 20px; right: 20px; width: 280px; border-radius: 24px; overflow: hidden;
   pointer-events: auto; display: flex; flex-direction: column; touch-action: none;
   animation: gml-pop .25s ease-out; transition: width .2s ease, border-radius .2s ease; }
 .gml-call.dragging { transition: none; cursor: grabbing; }
@@ -598,7 +598,7 @@ class GmLive {
     if (!this.callPos) {
       try { this.callPos = JSON.parse(localStorage.getItem(CALL_POS_KEY) || 'null'); } catch (_) { this.callPos = null; }
     }
-    const p = this.callPos || { side: 'right', inset: 20, top: 84 };
+    const p = this.callPos || { side: 'right', inset: 20, top: window.innerWidth > 600 ? 20 : 72 };
     const r = el.getBoundingClientRect();
     const inset = Math.max(8, Math.min(p.inset, window.innerWidth - r.width - 8));
     const topMax = Math.max(8, window.innerHeight - r.height - 8);
@@ -1302,7 +1302,7 @@ class LiveCallButton extends LitElement {
   static properties = {
     stringsJson: { type: String },
     compact: { type: Boolean, reflect: true },
-    pill: { type: Boolean, reflect: true }, // tonal 44px pill (Home prompt box)
+    pill: { type: Boolean, reflect: true }, // Home prompt box: gradient text, no fill
   };
 
   static styles = css`
@@ -1321,10 +1321,19 @@ class LiveCallButton extends LitElement {
     :host([compact]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(21, 23, 28, 0.10)); }
     :host([compact]) button.on { background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); }
     :host([compact]) svg { width: 22px; height: 22px; }
-    :host([pill]) button { height: 44px; padding: 0 18px 0 14px; gap: 8px; font-size: 14.5px; box-shadow: none;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); color: var(--sys-on-surface, #15171c); }
-    :host([pill]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.18)); }
-    :host([pill]) svg { width: 20px; height: 20px; }
+    /* Home: no pill. The wave and label carry the Gemini gradient, so Talk
+       stands out from the plain Dictate and Send icons beside it; a soft fill
+       shows only on hover. */
+    :host([pill]) button { height: 44px; padding: 0 14px 0 10px; gap: 8px; font-size: 15px; font-weight: 500; box-shadow: none;
+      background: transparent; color: var(--sys-on-surface, #15171c); }
+    :host([pill]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14)); }
+    :host([pill]) svg { width: 22px; height: 22px; fill: url(#gm-talk-grad); }
+    :host([pill]) .lbl { background: linear-gradient(90deg, #1a73e8, #7b3fe4 60%, #c2185b); -webkit-background-clip: text;
+      background-clip: text; color: transparent; }
+    :host-context(body.dark-theme):host([pill]) .lbl { background-image: linear-gradient(90deg, #8ab4f8, #b388ff 60%, #f48fb1); }
+    :host([pill]) button:hover svg path { animation: gm-talk 900ms ease-in-out infinite alternate; transform-origin: 50% 50%; }
+    @keyframes gm-talk { from { transform: scaleY(0.75); } to { transform: scaleY(1.08); } }
+    @media (prefers-reduced-motion: reduce) { :host([pill]) button:hover svg path { animation: none; } }
     @media (max-width: 600px) {
       :host([pill]) button { width: 44px; padding: 0; justify-content: center; gap: 0; }
       :host([pill]) .lbl { display: none; }
@@ -1349,7 +1358,10 @@ class LiveCallButton extends LitElement {
       // looks like the Dictate mic next to it.
       const wave = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z"/></svg>`;
       if (this.pill) {
-        return html`<button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>${wave}<span class="lbl">${s.talk}</span></button>`;
+        const grad = html`<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gm-talk-grad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#4f8df7"/><stop offset="0.6" stop-color="#9b6cf6"/><stop offset="1" stop-color="#e06aa5"/></linearGradient></defs>
+          <path d="M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z"/></svg>`;
+        return html`<button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>${grad}<span class="lbl">${s.talk}</span></button>`;
       }
       return html`<button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>${wave}</button>`;
     }

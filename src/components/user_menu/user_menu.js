@@ -15,7 +15,12 @@
  */
 
 /**
- * <user-menu>: avatar button at the top right of every page.
+ * <user-menu>: light/dark, language and the account menu.
+ *
+ * Two layouts: the top bar (phones) and `rail`, a column at the bottom of
+ * the side rail (wider screens), like Gemini. In the rail each control is an
+ * icon with a label that shows when the rail is `expanded`; the account panel
+ * opens beside the rail.
  *
  * Opens a small panel with the user's name, email and role, a light/dark
  * switch, a "Users" link for admins and "Sign out" (a real POST form to
@@ -32,7 +37,7 @@ import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit
 const GLOBE = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4a14 14 0 0 1 1.9 4h-3.8A14 14 0 0 1 12 4zM4.3 14a8.2 8.2 0 0 1 0-4h3.4a16.5 16.5 0 0 0 0 4zm.8 2h2.9a15.7 15.7 0 0 0 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6A15.7 15.7 0 0 0 8 8zm4 12a14 14 0 0 1-1.9-4h3.8A14 14 0 0 1 12 20zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6a15.7 15.7 0 0 0 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.7-5.6a16.5 16.5 0 0 0 0-4h3.4a8.2 8.2 0 0 1 0 4z"/></svg>`;
 
 const MOON = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>`;
-const SUN = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5zm0-5a1 1 0 0 0-1 1v2a1 1 0 0 0 2 0V3a1 1 0 0 0-1-1zm0 17a1 1 0 0 0-1 1v2a1 1 0 0 0 2 0v-2a1 1 0 0 0-1-1zM4.2 5.6a1 1 0 0 0-1.4 1.4l1.4 1.4a1 1 0 0 0 1.4-1.4zm15.6 12.8a1 1 0 0 0-1.4 0 1 1 0 0 0 0 1.4l1.4 1.4a1 1 0 0 0 1.4-1.4zM3 11H1a1 1 0 0 0 0 2h2a1 1 0 0 0 0-2zm20 0h-2a1 1 0 0 0 0 2h2a1 1 0 0 0 0-2zM5.6 18.4a1 1 0 0 0-1.4 0l-1.4 1.4a1 1 0 0 0 1.4 1.4l1.4-1.4a1 1 0 0 0 0-1.4zM21.2 4.2a1 1 0 0 0-1.4 0l-1.4 1.4a1 1 0 0 0 1.4 1.4l1.4-1.4a1 1 0 0 0 0-1.4z"/></svg>`;
+const SUN = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM2 13h2a1 1 0 0 0 0-2H2a1 1 0 0 0 0 2zm18 0h2a1 1 0 0 0 0-2h-2a1 1 0 0 0 0 2zM11 2v2a1 1 0 0 0 2 0V2a1 1 0 0 0-2 0zm0 18v2a1 1 0 0 0 2 0v-2a1 1 0 0 0-2 0zM5.99 4.58a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41L5.99 4.58zm12.37 12.37a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41l-1.06-1.06zm1.06-10.96a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06zM7.05 18.36a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06z"/></svg>`;
 
 class UserMenu extends LitElement {
   static properties = {
@@ -48,7 +53,10 @@ class UserMenu extends LitElement {
     labels: { type: String },
     themeEvent: { type: String },
     langEvent: { type: String },
+    rail: { type: Boolean, reflect: true },
+    expanded: { type: Boolean, reflect: true },
     _open: { state: true },
+    _pos: { state: true },
     _notify: { state: true },
   };
 
@@ -66,7 +74,10 @@ class UserMenu extends LitElement {
     this.labels = '{}';
     this.themeEvent = '';
     this.langEvent = '';
+    this.rail = false;
+    this.expanded = false;
     this._open = false;
+    this._pos = null;
     this._onDocClick = (e) => {
       if (this._open && !e.composedPath().includes(this)) this._close(false);
     };
@@ -133,7 +144,7 @@ class UserMenu extends LitElement {
       padding: 0 14px;
       border: 0;
       border-radius: 999px;
-      background: var(--gm-tonal, rgba(21, 23, 28, 0.06));
+      background: transparent;
       color: inherit;
       font: inherit;
       font-size: 14px;
@@ -152,7 +163,7 @@ class UserMenu extends LitElement {
       padding: 0;
       border: 0;
       border-radius: 50%;
-      background: var(--gm-tonal, rgba(21, 23, 28, 0.06));
+      background: transparent;
       color: inherit;
       cursor: pointer;
     }
@@ -253,6 +264,30 @@ class UserMenu extends LitElement {
     .switch.on { background: var(--sys-primary, #1a5fd8); }
     .switch.on::after { inset-inline-start: 18px; }
     form { margin: 0; }
+
+    /* ---- Rail: icons in the side rail's column, labels when it is open. */
+    :host([rail]) { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: 100%; }
+    .rail-item {
+      display: flex; align-items: center; gap: 14px; width: 100%; height: 40px; padding: 0 10px; margin-bottom: 2px;
+      border: 0; border-radius: 20px; background: transparent; color: var(--sys-on-surface, #15171c);
+      font: inherit; font-size: 14px; text-align: start; cursor: pointer; white-space: nowrap; overflow: hidden; box-sizing: border-box;
+    }
+    .rail-item:hover { background: var(--gm-hover, rgba(127, 127, 127, 0.1)); }
+    .rail-item[aria-expanded="true"] { background: var(--gm-active-nav, rgba(127, 127, 127, 0.16)); }
+    .rail-item svg { width: 20px; height: 20px; flex: none; fill: var(--sys-on-surface-variant, #4b515d); }
+    .rail-item .avatar { width: 26px; height: 26px; font-size: 11px; margin: 0 -3px; }
+    .rail-item .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: 1; transition: opacity 160ms ease 60ms; }
+    :host([rail]:not([expanded])) .rail-item .lbl { opacity: 0; transition: opacity 80ms ease; }
+    :host([rail]) .panel { position: fixed; top: auto; inset-inline-end: auto; }
+    /* Short screens (a 768p laptop): theme and language move into the account
+       panel so the rail fits without scrolling. */
+    .short-only { display: none; }
+    @media (max-height: 720px) {
+      :host([rail]) .rail-item.opt { display: none; }
+      :host([rail]) .rail-item { height: 36px; }
+      :host([rail]) .panel .short-only { display: flex; }
+    }
+    @media (prefers-reduced-motion: reduce) { .rail-item .lbl { transition: none; } }
     @media (prefers-reduced-motion: reduce) {
       .switch, .switch::after { transition: none; }
     }
@@ -284,6 +319,15 @@ class UserMenu extends LitElement {
   }
 
   async _openPanel() {
+    if (this.rail) {
+      const r = this.renderRoot.querySelector('.trigger, .rail-item.account')?.getBoundingClientRect();
+      if (r) {
+        const rtl = document.documentElement.dir === 'rtl';
+        this._pos = rtl
+          ? `right:${Math.round(window.innerWidth - r.left + 10)}px;bottom:${Math.round(window.innerHeight - r.bottom)}px`
+          : `left:${Math.round(r.right + 10)}px;bottom:${Math.round(window.innerHeight - r.bottom)}px`;
+      }
+    }
     this._open = true;
     await this.updateComplete;
     const first = this.renderRoot.querySelector('.panel .item');
@@ -293,7 +337,7 @@ class UserMenu extends LitElement {
   _close(returnFocus) {
     this._open = false;
     if (returnFocus) {
-      this.updateComplete.then(() => this.renderRoot.querySelector('.trigger')?.focus());
+      this.updateComplete.then(() => this.renderRoot.querySelector('.trigger, .rail-item.account')?.focus());
     }
   }
 
@@ -347,6 +391,23 @@ class UserMenu extends LitElement {
     const themeLabel = this.dark
       ? (L.theme_to_light || 'Switch to light mode')
       : (L.theme_to_dark || 'Switch to dark mode');
+    if (this.rail) {
+      const themeName = this.dark ? (L.light_mode || 'Light mode') : (L.dark_mode || 'Dark mode');
+      return html`
+        ${this.themeEvent ? html`
+          <button class="rail-item opt" type="button" @click=${this._theme} aria-label=${themeLabel} title=${this.expanded ? '' : themeLabel}>
+            ${this.dark ? SUN : MOON}<span class="lbl">${themeName}</span>
+          </button>` : nothing}
+        <button class="rail-item opt" type="button" @click=${this._lang} aria-label=${switchLabel} title=${this.expanded ? '' : switchLabel}>
+          ${GLOBE}<span class="lbl" lang=${other}>${otherName}</span>
+        </button>
+        <button class="rail-item account" type="button" aria-haspopup="true"
+          aria-expanded=${this._open ? 'true' : 'false'} aria-label=${accountLabel}
+          title=${this.expanded ? '' : accountLabel} @click=${this._toggle}>
+          <span class="avatar" aria-hidden="true">${initials}</span><span class="lbl">${label}</span>
+        </button>
+        ${this._open ? this._panel(initials, isAdmin, L) : nothing}`;
+    }
     return html`
       ${this.themeEvent ? html`
         <button class="theme-btn" type="button" @click=${this._theme}
@@ -363,8 +424,13 @@ class UserMenu extends LitElement {
         aria-label=${accountLabel} @click=${this._toggle}>
         <span class="avatar" aria-hidden="true">${initials}</span>
       </button>
-      ${this._open ? html`
-        <div class="panel" role="group" aria-label=${L.account || 'Account'}>
+      ${this._open ? this._panel(initials, isAdmin, L) : nothing}
+    `;
+  }
+
+  _panel(initials, isAdmin, L) {
+    return html`
+        <div class="panel" role="group" aria-label=${L.account || 'Account'} style=${this.rail && this._pos ? this._pos : ''}>
           <div class="who">
             <span class="avatar" aria-hidden="true">${initials}</span>
             <div class="who-text">
@@ -374,6 +440,14 @@ class UserMenu extends LitElement {
             </div>
           </div>
           <hr>
+          ${this.rail ? html`
+            <button class="item short-only" type="button" @click=${this._theme}>
+              ${this.dark ? SUN : MOON}
+              <span class="grow">${this.dark ? (L.light_mode || 'Light mode') : (L.dark_mode || 'Dark mode')}</span>
+            </button>
+            <button class="item short-only" type="button" @click=${this._lang}>
+              ${GLOBE}<span class="grow" lang=${this.lang === 'ar' ? 'en' : 'ar'}>${L[`name.${this.lang === 'ar' ? 'en' : 'ar'}`] || (this.lang === 'ar' ? 'English' : 'العربية')}</span>
+            </button>` : nothing}
           ${this._canNotify ? html`
             <button class="item" type="button" role="switch"
               aria-checked=${this._notifyOn() ? 'true' : 'false'} @click=${this._toggleNotify}>
@@ -412,8 +486,7 @@ class UserMenu extends LitElement {
                 <span class="grow">${L.sign_out || 'Sign out'}</span>
               </button>
             </form>` : nothing}
-        </div>` : nothing}
-    `;
+        </div>`;
   }
 }
 
