@@ -60,6 +60,7 @@ from services.story_models import (
     clip_refs,
     frame_refs,
     frame_prompt,
+    regen_links,
     scenario_media,
     scenario_prompt,
     scenario_schema,
@@ -473,6 +474,41 @@ _MOCK_PLACES = [
 ]
 
 
+def _mock_cast(story: Story, hero: str, spoken: bool) -> dict:
+    """The demo scenario's cast: the hero and up to three of the places."""
+    look = story.character.strip() or (
+        f"the {hero}, early 30s, medium build, warm brown eyes, a small scar on "
+        "the chin"
+    )
+    places = min(3, max(1, story.scene_count))
+    return {
+        "characters": [
+            {
+                "key": "c1",
+                "name": hero.title(),
+                "description": look,
+                "outfit": "a weathered olive jacket over a grey shirt",
+                "voice": {
+                    "tts_voice": "Puck",
+                    "style": "warm, unhurried",
+                    "description": "a male voice, early 30s, warm and steady",
+                },
+            }
+        ],
+        "narrator": None if spoken else {"tts_voice": "Kore", "style": "warm"},
+        "locations": [
+            {
+                "key": f"l{i + 1}",
+                "name": _MOCK_PLACES[i % len(_MOCK_PLACES)].capitalize(),
+                "description": f"{_MOCK_PLACES[i % len(_MOCK_PLACES)]}, soft light",
+                "time_of_day": "golden hour",
+            }
+            for i in range(places)
+        ],
+        "props": [],
+    }
+
+
 def _hero_from_idea(idea: str) -> str:
     words = re.findall(r"[A-Za-z][A-Za-z'-]+", idea or "")
     stop = {
@@ -560,6 +596,7 @@ class MockStoryBackend:
             f"about the {hero}, warm and hopeful in tone, with a clear beginning, "
             "middle and end, for a general audience."
         )
+        reply = {"brief": brief, "title": title, "voice": voice, "scenes": scenes}
         if story_set is not None:  # a saved set: cast it in every scene
             lead = story_set.on_screen()[:1]
             places = story_set.locations
@@ -569,9 +606,14 @@ class MockStoryBackend:
                 sc["speaker"] = lead[0].name if lead and sc["spoken"] else ""
                 if lead:
                     sc["visual"] = sc["visual"].replace(f"The {hero}", lead[0].name, 1)
-        return json.dumps(
-            {"brief": brief, "title": title, "voice": voice, "scenes": scenes}
-        )
+        else:  # demo stand-in for the writer casting the film itself
+            reply.update(_mock_cast(story, hero, spoken))
+            for i, sc in enumerate(scenes):
+                sc["cast"] = ["c1"]
+                sc["location"] = f"l{i % 3 + 1}" if n > 1 else "l1"
+                sc["props"] = []
+                sc["speaker"] = "c1" if sc["spoken"] else ""
+        return json.dumps(reply)
 
     def live_settings(self, idea: str) -> dict:
         """Demo stand-in for the live settings model: the rules pass."""
@@ -1570,9 +1612,10 @@ class VertexStoryBackend:
         )
 
     def rewrite_scene(self, story: Story, index: int) -> str:
+        story_set = self._set(story)
         return self._json_text(
-            scene_regen_prompt(story, index),
-            schema=scene_schema(),
+            scene_regen_prompt(story, index, story_set),
+            schema=scene_schema(with_links=regen_links(story, story_set)),
             system=SCENARIO_SYSTEM,
             thinking=True,
         )

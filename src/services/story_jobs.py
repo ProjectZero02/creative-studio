@@ -46,6 +46,7 @@ from services.story_models import (
     Story,
     alt_story,
     build_stitch_plan,
+    cast_from_scenario,
     default_music_prompt,
     parse_brief,
     parse_scenario,
@@ -54,6 +55,8 @@ from services.story_models import (
     parse_single_scene,
     parse_translation,
     parse_voice,
+    relink_scene,
+    set_text_from_cast,
 )
 from services.story_service import get_backend
 from services.story_store import StoryAccessError, get_store
@@ -357,8 +360,13 @@ def start_scenario(story_id: str, owner: str) -> Job:
                     )
                     voice = parse_voice(text) if any(sc.spoken for sc in scenes) else ""
                     brief = parse_brief(text)
+                    cast_json = ""
                     if story_set is not None:
                         parse_scene_links(text, story_set, scenes)
+                    else:
+                        cast_json = cast_from_scenario(
+                            text, Story(title=title, style=story.style, scenes=scenes)
+                        )
                     break
                 except ScenarioError as exc:
                     last = exc
@@ -372,6 +380,7 @@ def start_scenario(story_id: str, owner: str) -> Job:
                 if brief:
                     s.brief = brief
                 s.scenes = scenes
+                s.cast_json = cast_json
                 s.approved = False
                 s.clear_films()
                 s.step = "scenario"
@@ -397,16 +406,22 @@ def start_scene_rewrite(story_id: str, owner: str, index: int) -> Job:
             raise StoryAccessError("Story not found.")
 
         def rewrite() -> str:
+            text = backend.rewrite_scene(story, index)
             scene = parse_single_scene(
-                backend.rewrite_scene(story, index),
+                text,
                 story.scenes[index].duration,
                 story.camera,
                 story.speech_mode,
+            )
+            story_set = (
+                get_set_store().get(story.set_id, owner) if story.set_id else None
             )
 
             def apply(s: Story) -> None:
                 if index < len(s.scenes):
                     cur = s.scenes[index]
+                    cur.spoken = scene.spoken
+                    relink_scene(s, cur, text, story_set)
                     cur.narration, cur.visual, cur.camera = (
                         scene.narration,
                         scene.visual,
@@ -415,7 +430,6 @@ def start_scene_rewrite(story_id: str, owner: str, index: int) -> Job:
                     cur.frame_uri = ""
                     cur.clear_clip()
                     cur.narration_alt = ""
-                    cur.spoken = scene.spoken
                     s.clear_films()
 
             mutate_story(story_id, owner, apply)
@@ -1209,6 +1223,20 @@ def _seed_lead(story_set: StorySet, story: Story) -> None:
             img.uri, img.locked = story.reference_uri, True
 
 
+def _set_from_scenario(story: Story) -> StorySet | None:
+    """The set from the cast the scenario call already wrote (no second
+    Gemini call), or None when there is none or it no longer fits the
+    scenes (then the film is cast afresh)."""
+    text = set_text_from_cast(story.cast_json, story.scenes)
+    if not text:
+        return None
+    try:
+        return parse_set_build(text, story)
+    except ScenarioError:
+        logger.warning("Story %s: stored cast unusable; casting again", story.id)
+        return None
+
+
 def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
     """Make the story's set.
 
@@ -1225,7 +1253,13 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
     job = _new_job(owner, story_id, "set", {"targets": targets, "task_targets": {}})
     cast_task = None
     if not story.set_id:
-        cast_task = _add_task(job, "Casting with Gemini", "set")
+        cast_task = _add_task(
+            job,
+            "Building the set from the scenario"
+            if set_text_from_cast(story.cast_json, story.scenes)
+            else "Casting with Gemini",
+            "set",
+        )
     cfg = Default()
 
     def work(job: Job) -> None:
@@ -1238,16 +1272,18 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
                 current = get_store().get(story_id, owner)
                 if current is None:
                     raise StoryAccessError("Story not found.")
+                made = _set_from_scenario(current)
                 last: Exception | None = None
-                for _ in range(2):  # one automatic retry on malformed JSON
+                for _ in range(0 if made else 2):  # one retry on malformed JSON
                     try:
                         made = parse_set_build(backend.write_set(current), current)
-                        _seed_lead(made, current)
                         break
                     except ScenarioError as exc:
                         last = exc
                 else:
-                    raise last or ScenarioError("No set.")
+                    if made is None:
+                        raise last or ScenarioError("No set.")
+                _seed_lead(made, current)
                 made = get_set_store().save(made, owner)
                 links = {
                     sc.id: (sc.cast, sc.location_id, sc.prop_ids, sc.speaker_id)
@@ -1256,6 +1292,7 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
 
                 def apply(s: Story) -> None:
                     s.set_id = made.id
+                    s.cast_json = ""  # the set holds the cast now
                     for sc in s.scenes:
                         if sc.id in links:
                             sc.cast, sc.location_id, sc.prop_ids, sc.speaker_id = links[

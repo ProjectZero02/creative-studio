@@ -1273,6 +1273,7 @@ def on_generate_scenario(e: me.ClickEvent):
             picked = ""
         story.set_id = picked
         story.set_version = 0
+        story.cast_json = ""
         story.scenes = []
         story.approved = False
         story.clear_films()
