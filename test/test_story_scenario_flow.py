@@ -243,3 +243,74 @@ def test_rewrite_moves_the_scene_in_the_stored_cast(stores, monkeypatch):
     after = story_store.get_store().get(story.id, OWNER)
     row = json.loads(after.cast_json)["scenes"][after.scenes[1].id]
     assert row == {"cast": [], "location": "l3", "props": [], "speaker": ""}
+
+
+# --- Narration fits its scene ------------------------------------------------
+
+
+def _reply(lines, spoken=False):
+    return json.dumps(
+        {
+            "title": "T",
+            "scenes": [
+                {
+                    "narration": ln,
+                    "spoken": spoken,
+                    "visual": f"v{i}",
+                    "camera": "static",
+                }
+                for i, ln in enumerate(lines)
+            ],
+        }
+    )
+
+
+def test_long_spoken_line_stretches_its_scene():
+    line = " ".join(["word"] * 30)  # about 12 s at 2.5 words a second
+    _, scenes = story_models.parse_scenario(_reply([line], spoken=True), 1, 6)
+    assert scenes[0].duration >= 12
+    assert story_models.fits_narration(30, scenes[0].duration)
+
+
+def test_long_narrated_line_raises_only_when_strict():
+    line = " ".join(["word"] * 40)
+    with pytest.raises(story_models.NarrationTooLong) as err:
+        story_models.parse_scenario(_reply(["short", line]), 2, 6, strict_length=True)
+    assert err.value.scenes == [2] and "scene 2" in err.value.note()
+    _, scenes = story_models.parse_scenario(_reply(["short", line]), 2, 6)
+    assert scenes[1].duration == 6  # kept as written on the last try
+
+
+def test_line_a_word_over_still_fits():
+    words = story_models.max_words(6) + 1
+    assert story_models.fits_narration(words, 6)
+
+
+def test_scenario_retries_long_lines_with_a_note(stores, monkeypatch):
+    long_line = " ".join(["word"] * 40)
+    notes = []
+
+    def write(story, note=""):
+        notes.append(note)
+        return _reply([long_line, "ok", "ok"]) if not note else _reply(["a", "b", "c"])
+
+    monkeypatch.setattr(stores, "write_scenario", write)
+    story = _scenario_story()
+    assert notes[0] == "" and "scene 1" in notes[1]
+    assert [sc.narration for sc in story.scenes] == ["a", "b", "c"]
+
+
+def test_scenario_keeps_long_lines_after_the_retry(stores, monkeypatch):
+    long_line = " ".join(["word"] * 40)
+    monkeypatch.setattr(
+        stores, "write_scenario", lambda story, note="": _reply([long_line, "b", "c"])
+    )
+    story = _scenario_story()
+    assert story.scenes[0].narration == long_line
+
+
+def test_vertex_retry_sends_the_note():
+    calls: list = []
+    backend = _vertex(calls)
+    backend.write_scenario(Story(idea="x"), note="Shorten scene 2.")
+    assert calls[0]["prompt"].endswith("Shorten scene 2.")

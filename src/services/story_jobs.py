@@ -42,6 +42,7 @@ from common import usage
 from services import story_versions
 from config.default import Default
 from services.story_models import (
+    NarrationTooLong,
     ScenarioError,
     Story,
     alt_story,
@@ -344,12 +345,14 @@ def start_scenario(story_id: str, owner: str) -> Job:
 
         def write() -> str:
             last: Exception | None = None
-            for _ in range(2):  # one automatic retry on malformed JSON
+            note = ""
+            for attempt in range(2):  # one retry on bad JSON or long lines
                 try:
+                    args = (story, story_set) if story_set is not None else (story,)
                     text = (
-                        backend.write_scenario(story, story_set)
-                        if story_set is not None
-                        else backend.write_scenario(story)
+                        backend.write_scenario(*args, note=note)
+                        if note
+                        else backend.write_scenario(*args)
                     )
                     title, scenes = parse_scenario(
                         text,
@@ -357,6 +360,7 @@ def start_scenario(story_id: str, owner: str) -> Job:
                         story.duration,
                         story.camera,
                         story.speech_mode,
+                        strict_length=attempt == 0,
                     )
                     voice = parse_voice(text) if any(sc.spoken for sc in scenes) else ""
                     brief = parse_brief(text)
@@ -368,6 +372,9 @@ def start_scenario(story_id: str, owner: str) -> Job:
                             text, Story(title=title, style=story.style, scenes=scenes)
                         )
                     break
+                except NarrationTooLong as exc:
+                    last, note = exc, exc.note()
+                    logger.info("Story %s: %s Asking again.", story_id, exc)
                 except ScenarioError as exc:
                     last = exc
             else:

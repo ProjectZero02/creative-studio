@@ -148,7 +148,7 @@ def display_url(uri: str) -> str:
 class StoryBackend(Protocol):
     name: str
 
-    def write_scenario(self, story: Story, story_set=None) -> str: ...
+    def write_scenario(self, story: Story, story_set=None, note: str = "") -> str: ...
     def live_settings(self, idea: str) -> dict: ...
     def write_set(self, story: Story) -> str: ...
     def generate_set_image(
@@ -551,7 +551,7 @@ class MockStoryBackend:
         return LOCAL_SCHEME + rel, path
 
     # -- scenario --
-    def write_scenario(self, story: Story, story_set=None) -> str:
+    def write_scenario(self, story: Story, story_set=None, note: str = "") -> str:
         self._sleep(1.6, 2.6)
         hero = _hero_from_idea(story.idea)
         n = story.scene_count
@@ -1533,9 +1533,11 @@ class VertexStoryBackend:
             raise GenerationError("Gemini returned an empty scenario.")
         return response.text
 
-    def write_scenario(self, story: Story, story_set=None) -> str:
+    def write_scenario(self, story: Story, story_set=None, note: str = "") -> str:
+        """`note`: what went wrong in the last try, for the retry."""
+        prompt = scenario_prompt(story, story_set)
         return self._json_text(
-            scenario_prompt(story, story_set),
+            f"{prompt}\n\n{note}" if note else prompt,
             media=scenario_media(story, story_set),
             schema=scenario_schema(story, story_set),
             system=SCENARIO_SYSTEM,

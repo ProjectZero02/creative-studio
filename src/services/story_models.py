@@ -513,6 +513,11 @@ def apply_caps(scene_count: int, duration: int, resolution: str | None = None) -
 # ---------------------------------------------------------------------------
 
 
+# A line may run this far past its scene's word budget before it counts as
+# too long (speech pace varies; a word or two over still fits).
+NARRATION_SLACK = 1.15
+
+
 class ScenarioError(ValueError):
     """The model's scenario could not be used."""
 
@@ -550,6 +555,50 @@ def normalize_camera(value: str | None, default: str = "static") -> str:
     return default
 
 
+class NarrationTooLong(ScenarioError):
+    """Narrated lines that cannot be spoken within their scene."""
+
+    def __init__(self, scenes: list[int]):
+        self.scenes = scenes
+        listed = ", ".join(str(n) for n in scenes)
+        super().__init__(f"The narration of scene {listed} is too long for its length.")
+
+    def note(self) -> str:
+        """What the writer is told on the retry."""
+        listed = " and ".join(str(n) for n in self.scenes)
+        return (
+            f"In the last try the narration of scene {listed} was too long to "
+            "be spoken in its scene. Keep every line within its word limit."
+        )
+
+
+def _words(text: str) -> int:
+    return len(text.split())
+
+
+def fits_narration(words: int, seconds: int | float) -> bool:
+    """`words` can be spoken within a scene of `seconds`."""
+    return words <= max_words(seconds) * NARRATION_SLACK + 1
+
+
+def _fit_lengths(scenes: list[Scene]) -> list[int]:
+    """Stretch spoken scenes whose line is too long to the shortest length
+    that fits (spoken scenes may run longer). Returns the 1-based numbers
+    of narrated scenes that still do not fit."""
+    long: list[int] = []
+    lengths = supported_durations()
+    for n, sc in enumerate(scenes, start=1):
+        words = _words(sc.narration)
+        if not words or fits_narration(words, sc.duration):
+            continue
+        if sc.spoken:
+            fits = [d for d in lengths if d >= sc.duration and fits_narration(words, d)]
+            sc.duration = min(fits) if fits else max([sc.duration, *lengths])
+            continue
+        long.append(n)
+    return long
+
+
 def _strip_fences(text: str) -> str:
     text = (text or "").strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
@@ -567,6 +616,7 @@ def parse_scenario(
     duration: int,
     camera_preset: str = "auto",
     speech_mode: str = "auto",
+    strict_length: bool = False,
 ) -> tuple[str, list[Scene]]:
     """Parse and validate the model's scenario JSON.
 
@@ -575,6 +625,9 @@ def parse_scenario(
     ``speech_mode`` "narrator" or "on_camera" overrides each scene's "spoken".
     Extra scenes are dropped; too few or empty scenes raise ScenarioError.
     A fixed camera preset (not "auto") overrides each scene's camera.
+    A spoken scene whose line is too long is stretched to fit. With
+    ``strict_length`` a narrated line that is too long raises
+    NarrationTooLong (the caller retries with its note).
     """
     try:
         data = json.loads(_strip_fences(text))
@@ -620,6 +673,9 @@ def parse_scenario(
         )
     if len(scenes) < scene_count:
         raise ScenarioError(f"Expected {scene_count} scenes, got {len(scenes)}.")
+    long = _fit_lengths(scenes)
+    if long and strict_length:
+        raise NarrationTooLong(long)
     if sum(s.duration for s in scenes) > Default().STORY_MAX_FILM_SECONDS:
         for s in scenes:
             s.duration = duration
