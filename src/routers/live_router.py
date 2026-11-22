@@ -49,6 +49,7 @@ from config.default import Default
 from services.live_agent import (
     ACT,
     FILL,
+    NON_BLOCKING_TOOLS,
     Deferred,
     LiveCall,
     ScriptedAgent,
@@ -145,6 +146,17 @@ class _Bridge:
         ] = {}  # job id -> (call id, name, gen)
         self.agent: ScriptedAgent | None = None
         self.loop = asyncio.get_running_loop()
+        # Call ids the model cancelled (the presenter talked over it).
+        self.cancelled: set[str] = set()
+        # Jobs whose result went out, so each is said once.
+        self.delivered: set[str] = set()
+        # Tool calls still starting their job, and jobs that finished before
+        # their call registered them (delivered once the call has).
+        self._starting = 0
+        self.early: dict[str, object] = {}
+        # Job updates wait while the model speaks, then go at the pause.
+        self.model_speaking = False
+        self.updates: list[str] = []
 
     async def send(self, message: dict) -> None:
         if self.closed:
@@ -197,21 +209,38 @@ class _Bridge:
         while not self.closed:
             job = await self.job_events.get()
             await self.send({"type": "job", "job": job.public()})
+            if job.kind == "story" and self.call.screen == "/story":
+                # Walk the presenter through Story Studio as the steps run
+                # (not when they have moved to another studio).
+                await self.call.show_story(job)
             if job.status not in (DONE, FAILED):
                 continue
             if self.agent is not None:
                 await self.agent.on_job_done(job)
                 continue
+            if job.id not in self.deferred and self._starting:
+                # Its tool call may still be registering it: let the call
+                # answer with it (see _tool).
+                self.early[job.id] = job
+                continue
             await self._deliver_result(job)
 
     async def _deliver_result(self, job) -> None:
+        if job.id in self.delivered:
+            return
+        self.delivered.add(job.id)
         result = LiveCall.job_result(job)
         pending = self.deferred.pop(job.id, None)
         session = self.session
         if session is None:
             return
         try:
-            if pending and pending[2] == self.session_gen and Default.LIVE_ASYNC_TOOLS:
+            if (
+                pending
+                and pending[2] == self.session_gen
+                and pending[0] not in self.cancelled
+                and Default.LIVE_ASYNC_TOOLS
+            ):
                 call_id, name, _ = pending
                 await session.send_tool_response(
                     function_responses=[
@@ -224,15 +253,31 @@ class _Bridge:
                     ]
                 )
             else:
-                await session.send_client_content(
-                    turns=types.Content(
-                        role="user",
-                        parts=[types.Part(text="[job update] " + json.dumps(result))],
-                    ),
-                    turn_complete=True,
-                )
+                # The model no longer has the call (cancelled, or from before
+                # a reconnect): tell it as a note at the next pause.
+                await self._say_update(session, "[job update] " + json.dumps(result))
         except Exception:
             logger.exception("Could not deliver %s result to Live", job.handle)
+
+    async def _say_update(self, session, text: str) -> None:
+        if self.model_speaking:
+            self.updates.append(text)
+            return
+        await session.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=text)]),
+            turn_complete=True,
+        )
+
+    async def _flush_updates(self, session) -> None:
+        while self.updates and not self.model_speaking:
+            await self._say_update(session, self.updates.pop(0))
+
+    async def _flush_early(self) -> None:
+        if self._starting:
+            return
+        while self.early:
+            _, job = self.early.popitem()
+            await self._deliver_result(job)
 
     # -- offline agent ------------------------------------------------------
 
@@ -346,6 +391,8 @@ class _Bridge:
                     self.resume_handle = update.new_handle
                 if msg.go_away is not None:
                     return True
+                if msg.tool_call_cancellation:
+                    self.cancelled.update(msg.tool_call_cancellation.ids or [])
                 if msg.tool_call:
                     for fc in msg.tool_call.function_calls or []:
                         task = asyncio.create_task(self._tool(session, fc))
@@ -355,8 +402,10 @@ class _Bridge:
                 if not content:
                     continue
                 if content.interrupted:
+                    self.model_speaking = False
                     await self.send({"type": "interrupted"})
                 if content.model_turn:
+                    self.model_speaking = True
                     for part in content.model_turn.parts or []:
                         if part.inline_data and part.inline_data.data:
                             mime = part.inline_data.mime_type or ""
@@ -385,30 +434,52 @@ class _Bridge:
                         }
                     )
                 if content.turn_complete:
+                    self.model_speaking = False
                     await self.send({"type": "turn_complete"})
+                    await self._flush_updates(session)
                     if self.call.ended:
                         return False
         return False
 
     async def _tool(self, session, fc) -> None:
         await self.send({"type": "tool", "name": fc.name, "args": fc.args or {}})
-        result = await self.call.run_tool(fc.name, dict(fc.args or {}))
+        self._starting += 1
+        try:
+            result = await self.call.run_tool(fc.name, dict(fc.args or {}))
+        finally:
+            self._starting -= 1
         if isinstance(result, Deferred):
+            job = result.job
             if Default.LIVE_ASYNC_TOOLS:
-                # Answered when the job finishes (pump_jobs -> WHEN_IDLE).
-                self.deferred[result.job.id] = (fc.id, fc.name, self.session_gen)
-                if result.job.status in (DONE, FAILED):
-                    await self._deliver_result(result.job)
+                # Answered when the job finishes (pump_jobs -> WHEN_IDLE). A
+                # call cancelled meanwhile gets a [job update] note instead.
+                if fc.id not in self.cancelled:
+                    self.deferred[job.id] = (fc.id, fc.name, self.session_gen)
+                early = self.early.pop(job.id, None) is not None
+                if early or job.status in (DONE, FAILED):
+                    await self._deliver_result(job)
+                await self._flush_early()
                 return
             result = {
-                "job": result.job.handle,
+                "job": job.handle,
                 "status": "started",
                 "note": "Runs in the background. A [job update] message arrives when it is done.",
             }
+        await self._flush_early()
+        if fc.id in self.cancelled:
+            return  # the model dropped this call; an answer would confuse it
+        # A non-blocking tool's answer waits for a pause in the conversation.
+        scheduling = (
+            types.FunctionResponseScheduling.WHEN_IDLE
+            if Default.LIVE_ASYNC_TOOLS and fc.name in NON_BLOCKING_TOOLS
+            else None
+        )
         try:
             await session.send_tool_response(
                 function_responses=[
-                    types.FunctionResponse(id=fc.id, name=fc.name, response=result)
+                    types.FunctionResponse(
+                        id=fc.id, name=fc.name, response=result, scheduling=scheduling
+                    )
                 ]
             )
         except Exception:

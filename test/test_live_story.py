@@ -242,3 +242,61 @@ def test_scripted_agent_drives_story_offline(story_env):
     _wait_done(call)
     asyncio.run(agent.handle("story status"))
     assert any("film ready" in line for line in lines)
+
+
+
+def test_whole_film_runs_every_step_and_walks_the_pages(story_env):
+    call, browser = _make_call()
+    created = asyncio.run(
+        call.run_tool(
+            "create_story",
+            {
+                "idea": "A red fox explores a lantern-lit forest at dusk",
+                "length": "18 seconds",
+            },
+        )
+    )
+    _wait_done(call)
+    assert created.job.status == DONE, created.job.error
+    # The page opened once the scenario step was running, so it can follow it.
+    first = [m for m in browser.sent if m.get("action") == "navigate"][0]
+    assert first["args"]["params"]["step"] == "scenario"
+    assert created.job.params["story_job_id"]
+
+    pages = []
+    call.jobs.subscribe(
+        OWNER,
+        lambda job: (
+            job.kind == "story"
+            and job.status == "running"
+            and pages.append(job.params.get("story_step"))
+        ),
+    )
+    whole = asyncio.run(call.run_tool("continue_story", {"all_steps": True}))
+    assert isinstance(whole, Deferred)
+    _wait_done(call, timeout=60.0)
+    assert whole.job.status == DONE, whole.job.error
+    result = LiveCall.job_result(whole.job)
+    assert result["has_film"] is True
+    # Each step was reported while running: approve and set, storyboard, film.
+    for page in ("set", "storyboard", "video"):
+        assert page in pages
+    assert pages.index("set") < pages.index("storyboard") < pages.index("video")
+    status = asyncio.run(call.run_tool("story_status", {}))
+    assert status["approved"] and status["has_set"] and status["next_action"] == "done"
+
+
+def test_story_page_is_shown_once_per_step(story_env):
+    from types import SimpleNamespace
+
+    call, browser = _make_call()
+    job = SimpleNamespace(
+        id="j1", params={"story_id": "s1", "story_job_id": "a", "story_step": "set"}
+    )
+    asyncio.run(call.show_story(job))
+    asyncio.run(call.show_story(job))
+    job.params.update(story_job_id="b", story_step="storyboard")
+    asyncio.run(call.show_story(job))
+    navs = [m["args"]["params"] for m in browser.sent if m.get("action") == "navigate"]
+    assert navs == [{"id": "s1", "step": "set"}, {"id": "s1", "step": "storyboard"}]
+    assert call.screen == "/story"

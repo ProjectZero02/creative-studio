@@ -63,6 +63,15 @@ class LiveJob:
     display_url: str = ""
     mime_type: str = ""
     params: dict[str, Any] = field(default_factory=dict)
+    # Set by LiveJobs.submit: tells listeners the job moved on while running.
+    on_progress: Callable[[], None] | None = field(
+        default=None, repr=False, compare=False
+    )
+
+    def progress(self) -> None:
+        """Report a change while running (e.g. a story moved to its next step)."""
+        if self.on_progress is not None:
+            self.on_progress()
 
     @property
     def is_edit(self) -> bool:
@@ -72,6 +81,7 @@ class LiveJob:
         """What the browser and the agent see (no owner)."""
         data = asdict(self)
         data.pop("owner", None)
+        data.pop("on_progress", None)
         data["is_edit"] = self.is_edit
         data["seconds"] = round((self.finished_at or time.time()) - self.created_at, 1)
         return data
@@ -209,6 +219,7 @@ class LiveJobs:
                 source_uri=(source.gcs_uri or source.display_url) if source else "",
                 params=dict(params or {}),
             )
+            job.on_progress = lambda: self._emit(job)
             self._jobs[job.id] = job
         self._emit(job)
         if run_async:

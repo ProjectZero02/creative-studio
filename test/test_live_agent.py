@@ -956,3 +956,173 @@ def test_avatar_calls_ask_for_video_and_voice_calls_for_audio():
     # The avatar gets its own (female) voice, not the model's male default.
     name = avatar.speech_config.voice_config.prebuilt_voice_config.voice_name
     assert name == Default.LIVE_AVATAR_VOICE == "Aoede"
+
+
+
+# ---------------------------------------------------------------------------
+# Tool hardening: schemas, cancellation, one delivery, waiting for a pause
+# ---------------------------------------------------------------------------
+
+
+def test_declarations_use_enums_numbers_and_a_non_blocking_fix_planner():
+    decls = {d.name: d for d in tool_declarations(True)[0].function_declarations}
+    props = lambda name: decls[name].parameters.properties  # noqa: E731
+    assert props("generate_image")["aspect_ratio"].enum == [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+    ]
+    assert props("generate_video")["aspect_ratio"].enum == ["16:9", "9:16"]
+    assert props("create_story")["style"].enum == [
+        "photographic",
+        "2d",
+        "3d",
+        "anime",
+        "claymation",
+    ]
+    assert "stories" not in props("open_story")["step"].enum
+    assert "video" in props("open_story")["step"].enum
+    assert set(props("open_page")["page"].enum) == set(live_agent.PAGES)
+    assert "Kore" in props("generate_voice")["voice"].enum
+    assert props("plan_film_fix")["at_seconds"].type == types.Type.NUMBER
+    assert props("continue_story")["all_steps"].type == types.Type.BOOLEAN
+    assert decls["plan_film_fix"].behavior == types.Behavior.NON_BLOCKING
+    assert props("generate_image")["prompt"].enum is None
+
+
+def test_confirming_a_fix_while_it_is_planned_says_to_wait():
+    call, _ = make_call()
+    call.planning = True
+    assert "still being made" in run(call.run_tool("run_film_fix", {}))["error"]
+
+
+def _live_app(monkeypatch, script, runners):
+    from fastapi import FastAPI
+
+    from routers import live_router
+
+    session = _FakeSession(script)
+    fake_live = _FakeLive(session)
+
+    class _Client:
+        class aio:  # noqa: N801
+            live = fake_live
+
+    jobs = LiveJobs(runners)
+    monkeypatch.setattr(live_router, "get_live_jobs", lambda: jobs)
+    monkeypatch.setattr(live_router, "_owner", _fake_owner)
+    monkeypatch.setattr(live_router, "_genai_client", lambda: (_Client(), "fake-live"))
+    monkeypatch.setattr(live_router.Default, "LIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(live_router.Default, "LIVE_AGENT_OFFLINE", False)
+    monkeypatch.setattr(live_router.Default, "LIVE_ASYNC_TOOLS", True)
+    app = FastAPI()
+    app.include_router(live_router.router)
+    return app, session
+
+
+def _call_live(app, until, seconds=3.0):
+    from fastapi.testclient import TestClient
+
+    with TestClient(app).websocket_connect("/api/live?agent=act") as ws:
+        ws.receive_json()  # first status
+        end = time.time() + seconds
+        while not until() and time.time() < end:
+            time.sleep(0.02)
+        time.sleep(0.2)  # let any duplicate arrive
+        ws.send_json({"type": "hangup"})
+
+
+def _tool_call(name, call_id="call-1", **args):
+    return types.LiveServerMessage(
+        tool_call=types.LiveServerToolCall(
+            function_calls=[types.FunctionCall(id=call_id, name=name, args=args)]
+        )
+    )
+
+
+def test_a_cancelled_job_call_gets_its_result_as_a_note(monkeypatch):
+    script = [
+        _tool_call("generate_image", prompt="a red fox"),
+        types.LiveServerMessage(
+            tool_call_cancellation=types.LiveServerToolCallCancellation(ids=["call-1"])
+        ),
+    ]
+    app, session = _live_app(monkeypatch, script, instant_runners(delay=0.3))
+    _call_live(app, lambda: session.texts)
+    assert session.tool_responses == []
+    assert len(session.texts) == 1 and session.texts[0].startswith("[job update]")
+
+
+def test_a_job_that_finishes_at_once_is_answered_once_on_its_call(monkeypatch):
+    app, session = _live_app(
+        monkeypatch,
+        [_tool_call("generate_image", prompt="a red fox")],
+        instant_runners(),
+    )
+    _call_live(app, lambda: session.tool_responses)
+    assert [r.id for r in session.tool_responses] == ["call-1"]
+    assert not [t for t in session.texts if t.startswith("[job update]")]
+
+
+def test_non_blocking_answers_wait_for_a_pause_and_screen_answers_do_not(monkeypatch):
+    script = [
+        _tool_call("continue_story", call_id="c1"),  # no story: answered at once
+        _tool_call("list_jobs", call_id="c2"),
+    ]
+    app, session = _live_app(monkeypatch, script, instant_runners())
+    _call_live(app, lambda: len(session.tool_responses) >= 2)
+    by_id = {r.id: r for r in session.tool_responses}
+    assert "error" in by_id["c1"].response
+    assert by_id["c1"].scheduling == types.FunctionResponseScheduling.WHEN_IDLE
+    assert by_id["c2"].scheduling is None
+
+
+def test_job_notes_wait_until_the_model_stops_speaking():
+    from routers.live_router import _Bridge
+
+    class _Ws:
+        async def send_text(self, text):
+            pass
+
+    async def go():
+        bridge = _Bridge(_Ws(), OWNER)
+        session = _FakeSession([])
+        bridge.model_speaking = True
+        await bridge._say_update(session, "[job update] one")
+        assert session.texts == [] and bridge.updates == ["[job update] one"]
+        bridge.model_speaking = False
+        await bridge._flush_updates(session)
+        return session.texts
+
+    assert run(go()) == ["[job update] one"]
+
+
+def test_story_navigation_keeps_its_id_and_opens_the_story(monkeypatch):
+    from components.live_agent import live_agent as bridge
+    from pages import story_studio
+
+    calls, opened = [], []
+    monkeypatch.setattr(
+        bridge.me,
+        "navigate",
+        lambda url, query_params=None: calls.append((url, query_params)),
+    )
+    monkeypatch.setattr(
+        story_studio, "open_for_agent", lambda sid, step="": opened.append((sid, step))
+    )
+    event = type(
+        "E",
+        (),
+        {
+            "value": {
+                "action": "navigate",
+                "page": "/story",
+                "params": {"id": "s1", "step": "set", "veo_model": "x"},
+            }
+        },
+    )()
+    list(bridge.on_live_action(event))
+    assert calls == [("/story", {"id": "s1", "step": "set"})]
+    assert opened == [("s1", "set")]
