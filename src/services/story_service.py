@@ -46,8 +46,10 @@ from common.identity import LOCAL_APP_ENVS
 from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
+    CASTING_SYSTEM,
     LANGUAGES,
     SAME_TAKE_REF,
+    SCENARIO_SYSTEM,
     STYLE_BY_ID,
     Scene,
     StitchPlan,
@@ -60,8 +62,11 @@ from services.story_models import (
     frame_prompt,
     scenario_media,
     scenario_prompt,
+    scenario_schema,
     scene_regen_prompt,
+    scene_schema,
     set_build_prompt,
+    set_schema,
     translation_prompt,
 )
 
@@ -1442,13 +1447,20 @@ class VertexStoryBackend:
     def _json_text(
         self,
         prompt: str,
-        temperature: float = 0.8,
+        temperature: float | None = None,
         task: str = "story_scenario",
         model: str = "",
         media: list[str] | None = None,
+        schema: dict | None = None,
+        system: str = "",
+        thinking: bool = False,
     ) -> str:
         """One JSON Gemini call. `media`: GCS URIs (images, films) sent
-        before the prompt so the model can look at them."""
+        before the prompt so the model can look at them. `schema`: a JSON
+        schema the reply must follow. `system`: the system instruction.
+        `thinking`: let the model think first (dynamic budget). With no
+        `temperature` the model's own default is used, as Google advises
+        for its reasoning models."""
         from google.genai import types
 
         from common.analytics import track_model_call
@@ -1460,14 +1472,20 @@ class VertexStoryBackend:
             for u in (media or [])
             if u
         ]
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=temperature,
+            response_json_schema=schema,
+            system_instruction=system or None,
+            thinking_config=(
+                types.ThinkingConfig(thinking_budget=-1) if thinking else None
+            ),
+        )
         with track_model_call(model_name=model, task=task):
             response = client.models.generate_content(
                 model=model,
                 contents=[*parts, prompt],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=temperature,
-                ),
+                config=config,
             )
         if not response.text:
             raise GenerationError("Gemini returned an empty scenario.")
@@ -1477,6 +1495,9 @@ class VertexStoryBackend:
         return self._json_text(
             scenario_prompt(story, story_set),
             media=scenario_media(story, story_set),
+            schema=scenario_schema(story, story_set),
+            system=SCENARIO_SYSTEM,
+            thinking=True,
         )
 
     def live_settings(self, idea: str) -> dict:
@@ -1501,7 +1522,11 @@ class VertexStoryBackend:
 
     def write_set(self, story: Story) -> str:
         return self._json_text(
-            set_build_prompt(story), temperature=0.6, task="story_set"
+            set_build_prompt(story),
+            task="story_set",
+            schema=set_schema(),
+            system=CASTING_SYSTEM,
+            thinking=True,
         )
 
     def generate_set_image(
@@ -1545,7 +1570,12 @@ class VertexStoryBackend:
         )
 
     def rewrite_scene(self, story: Story, index: int) -> str:
-        return self._json_text(scene_regen_prompt(story, index))
+        return self._json_text(
+            scene_regen_prompt(story, index),
+            schema=scene_schema(),
+            system=SCENARIO_SYSTEM,
+            thinking=True,
+        )
 
     def plan_fix(
         self, story: Story, request: str, scene: int, seconds: float | None
@@ -1559,6 +1589,7 @@ class VertexStoryBackend:
             temperature=0.2,
             task="story_fix",
             media=fix_media(story),
+            thinking=True,
         )
 
     def translate(self, story: Story) -> str:

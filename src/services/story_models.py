@@ -1033,8 +1033,7 @@ def scenario_prompt(story: Story, story_set=None) -> str:
         if story.brief.strip()
         else ""
     )
-    return f"""You are a film director and screenwriter.
-Turn the idea below into a short film of exactly {story.scene_count} scenes,
+    return f"""Turn the idea below into a short film of exactly {story.scene_count} scenes,
 each about {story.duration} seconds long. Visual style: {style["label"]}.
 
 Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}{_main_character(story, story_set)}
@@ -1061,6 +1060,155 @@ Rules:
 Return only JSON: {{"brief": str, "title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str{links}}}]}}"""
 
 
+# System instructions: the role and the craft rules that never change. The
+# story's own settings and the idea go in the user message.
+SCENARIO_SYSTEM = (
+    "You are a film director and screenwriter. You turn a short idea into a "
+    "short film that image and video models shoot one scene at a time, so "
+    "every scene's visual must stand on its own as a shot description, and "
+    "the scenes together must tell one story with a clear beginning, middle "
+    "and end. Follow the user's rules and settings exactly, keep everything "
+    "the idea asks for, and never add anything that contradicts it."
+)
+CASTING_SYSTEM = (
+    "You are a casting director and production designer. You fix how every "
+    "person, place and object in a short film looks and sounds, in plain, "
+    "fixed wording that an image model can paint the same way every time."
+)
+
+
+def _str() -> dict:
+    return {"type": "string"}
+
+
+def _str_list() -> dict:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+def _links_schema() -> dict:
+    """Per-scene links to the set: keys (or names) of who, where and what."""
+    return {
+        "cast": _str_list(),
+        "location": _str(),
+        "props": _str_list(),
+        "speaker": _str(),
+    }
+
+
+def cast_schema() -> dict:
+    """JSON-schema properties for a film's cast, places and props."""
+    voice = {
+        "type": "object",
+        "properties": {
+            "tts_voice": {"type": "string", "enum": list(VOICES)},
+            "style": _str(),
+            "description": _str(),
+        },
+        "required": ["tts_voice", "style", "description"],
+    }
+    item = {"key": _str(), "name": _str(), "description": _str()}
+    return {
+        "characters": {
+            "type": "array",
+            "maxItems": SET_MAX_CHARACTERS,
+            "items": {
+                "type": "object",
+                "properties": {**item, "outfit": _str(), "voice": voice},
+                "required": ["key", "name", "description", "outfit", "voice"],
+            },
+        },
+        "narrator": {
+            "type": "object",
+            "properties": {
+                "tts_voice": {"type": "string", "enum": list(VOICES)},
+                "style": _str(),
+            },
+        },
+        "locations": {
+            "type": "array",
+            "maxItems": SET_MAX_LOCATIONS,
+            "items": {
+                "type": "object",
+                "properties": {**item, "time_of_day": _str()},
+                "required": ["key", "name", "description"],
+            },
+        },
+        "props": {
+            "type": "array",
+            "maxItems": SET_MAX_PROPS,
+            "items": {
+                "type": "object",
+                "properties": item,
+                "required": ["key", "name", "description"],
+            },
+        },
+    }
+
+
+def scene_schema(with_links: bool = False) -> dict:
+    """JSON schema for one scene of the scenario."""
+    props = {
+        "narration": _str(),
+        "spoken": {"type": "boolean"},
+        "seconds": {"type": "integer"},
+        "visual": _str(),
+        "camera": {"type": "string", "enum": list(CAMERA_IDS)},
+    }
+    required = ["narration", "spoken", "visual", "camera"]
+    if with_links:
+        props.update(_links_schema())
+        required += ["cast", "location", "props", "speaker"]
+    return {"type": "object", "properties": props, "required": required}
+
+
+def scenario_schema(story: Story, story_set=None) -> dict:
+    """Response schema for the scenario call: exactly `scene_count` scenes,
+    a camera move from the presets, and the cast when there is no saved set
+    (scenario_casts)."""
+    casting = scenario_casts(story_set)
+    props = {
+        "brief": _str(),
+        "title": _str(),
+        "voice": _str(),
+        "scenes": {
+            "type": "array",
+            "minItems": story.scene_count,
+            "maxItems": story.scene_count,
+            "items": scene_schema(with_links=story_set is not None or casting),
+        },
+    }
+    required = ["brief", "title", "voice", "scenes"]
+    if casting:
+        props.update(cast_schema())
+        required += ["characters", "locations", "props"]
+    return {"type": "object", "properties": props, "required": required}
+
+
+def set_schema() -> dict:
+    """Response schema for the Set step's casting call."""
+    return {
+        "type": "object",
+        "properties": {
+            "name": _str(),
+            **cast_schema(),
+            "scenes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": _links_schema(),
+                    "required": ["cast", "location", "props", "speaker"],
+                },
+            },
+        },
+        "required": ["name", "characters", "locations", "props", "scenes"],
+    }
+
+
+def scenario_casts(story_set) -> bool:
+    """The scenario call also casts the film (no saved set yet)."""
+    return False
+
+
 def set_build_prompt(story: Story) -> str:
     """Ask Gemini for the story's cast, places and props, with a fixed look
     and voice for each, and which of them appear in every scene."""
@@ -1076,8 +1224,7 @@ def set_build_prompt(story: Story) -> str:
         if story.character.strip()
         else ""
     )
-    return f"""You are a casting director and production designer.
-Read this short film and list everything that must look and sound the same
+    return f"""Read this short film and list everything that must look and sound the same
 in every shot. Visual style: {style["label"]}.
 
 Idea: \"\"\"{story.idea.strip()}\"\"\"{lead}
@@ -1120,7 +1267,7 @@ def scene_regen_prompt(story: Story, index: int) -> str:
         else "(this is the last scene)"
     )
     current = story.scenes[index]
-    return f"""You are a film director. Rewrite scene {index + 1} of the film
+    return f"""Rewrite scene {index + 1} of the film
 "{story.title}" with a fresh idea that still fits between its neighbours.
 Idea of the film: {story.idea}
 Previous scene: {before}
