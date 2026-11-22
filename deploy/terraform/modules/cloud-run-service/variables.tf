@@ -80,6 +80,24 @@ variable "max_instance_count" {
   type        = number
 }
 
+variable "cpu_always_on" {
+  description = "Keep CPU allocated between requests (resources.cpu_idle = false), so background jobs keep running."
+  type        = bool
+  default     = false
+}
+
+variable "startup_cpu_boost" {
+  description = "Give instances extra CPU while they start (resources.startup_cpu_boost)."
+  type        = bool
+  default     = false
+}
+
+variable "session_affinity" {
+  description = "Send a client's requests to the same instance where possible (template.session_affinity)."
+  type        = bool
+  default     = false
+}
+
 # --- use_lb decomposition: explicit ingress + auth fields ---
 # These replace the root's `use_lb`-derived ternaries so this module carries no
 # knowledge of the load-balancer topology. The root computes each value and

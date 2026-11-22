@@ -197,7 +197,7 @@ DEPLOY=(gcloud run deploy "${SERVICE}" --source=. --region="${REGION}"
   --service-account="${SA_EMAIL}"
   --session-affinity --cpu-boost --timeout=3600
   --no-cpu-throttling
-  --cpu=2 --memory=4Gi --concurrency=40
+  --cpu=4 --memory=8Gi --concurrency=20
   --min-instances="${MIN_INSTANCES}" --max-instances="${MAX_INSTANCES}"
   --set-env-vars="${ENV_VARS}" "${G[@]}")
 [[ -n "${SECRETS}" ]] && DEPLOY+=(--set-secrets="${SECRETS}")
