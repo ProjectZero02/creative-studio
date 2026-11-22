@@ -24,6 +24,7 @@ from common.utils import create_display_url, warm_display_urls
 from components.dialog import dialog
 from components.library.events import LibrarySelectionChangeEvent
 from components.library.library_image_selector import library_image_selector
+from config.default import Default as cfg
 from state.state import AppState
 
 
@@ -96,13 +97,19 @@ def library_chooser_button(
         """Helper to fetch items based on current state and update UI."""
         state.is_loading = True
         yield
-        user_email = app_state.user_email if state.show_only_my_items else None
-        # Use the media_type stored in state, which was set when opening the dialog
-        print(f"DEBUG: fetching items with media_type={state.media_type}")
-        state.media_items_json = load_chooser_items_json(
-            state.media_type,
-            user_email,
+        shared = cfg().SHARED_LIBRARY
+        if not shared:
+            state.show_only_my_items = True
+        user_email = (
+            app_state.user_email if (state.show_only_my_items or not shared) else None
         )
+        if not shared and not user_email:
+            state.media_items_json = "[]"
+        else:
+            state.media_items_json = load_chooser_items_json(
+                state.media_type,
+                user_email,
+            )
         state.is_loading = False
         yield
 
@@ -200,11 +207,12 @@ def library_chooser_button(
                         f"Select {media_type_label} from Library",
                         type="headline-6",
                     )
-                    me.slide_toggle(
-                        label="Show only my items",
-                        checked=state.show_only_my_items,
-                        on_change=on_toggle_my_items,
-                    )
+                    if cfg().SHARED_LIBRARY:
+                        me.slide_toggle(
+                            label="Show only my items",
+                            checked=state.show_only_my_items,
+                            on_change=on_toggle_my_items,
+                        )
 
                 with me.box(style=me.Style(flex_grow=1, overflow_y="auto")):
                     if state.is_loading:

@@ -567,6 +567,23 @@ def add_vto_metadata(
     logger.info(f"VTO data stored in Firestore with document ID: {doc_ref.id}")
 
 
+def _matches_type_filters(
+    mime_type: str, type_filters: list[str] | None
+) -> bool:
+    """Return whether ``mime_type`` passes the Library's type filter list."""
+    if not type_filters or "all" in type_filters:
+        return True
+    if "videos" in type_filters and mime_type.startswith("video/"):
+        return True
+    if "images" in type_filters and mime_type.startswith("image/"):
+        return True
+    if (
+        "music" in type_filters or "audio" in type_filters
+    ) and mime_type.startswith("audio/"):
+        return True
+    return False
+
+
 def get_media_for_page(
     page: int,
     media_per_page: int,
@@ -620,11 +637,7 @@ def get_media_for_page(
             error_message_present = bool(raw_item_data.get("error_message"))
 
             # Apply type filters
-            passes_type_filter = False
-            if not type_filters or "all" in type_filters or ("videos" in type_filters and mime_type.startswith("video/")) or ("images" in type_filters and mime_type.startswith("image/")) or ("music" in type_filters and mime_type.startswith("audio/")):
-                passes_type_filter = True
-
-            if not passes_type_filter:
+            if not _matches_type_filters(mime_type, type_filters):
                 continue
 
             # Apply error filter
@@ -662,6 +675,68 @@ def get_media_for_page(
         return []
 
 
+def _stream_media_for_page_optimized(
+    page_size: int,
+    type_filters: list[str],
+    start_after=None,
+    filter_by_user_email: str | None = None,
+):
+    """Run the indexed chooser query, falling back to timestamp-order filtering
+    when Firestore lacks the composite index for ``mime_type``/``user_email`` +
+    ``timestamp``.
+    """
+    coll = db.collection(config.GENMEDIA_COLLECTION_NAME)
+    query = coll
+    if filter_by_user_email:
+        query = query.where("user_email", "==", filter_by_user_email)
+
+    if "videos" in type_filters:
+        query = query.where("mime_type", ">=", "video/").where(
+            "mime_type", "<", "video0",
+        )
+    elif "images" in type_filters:
+        query = query.where("mime_type", ">=", "image/").where(
+            "mime_type", "<", "image0",
+        )
+    elif "music" in type_filters or "audio" in type_filters:
+        query = query.where("mime_type", ">=", "audio/").where(
+            "mime_type", "<", "audio0",
+        )
+
+    query = query.order_by("timestamp", direction=firestore.Query.DESCENDING)
+    if start_after:
+        query = query.start_after(start_after)
+    query = query.limit(page_size)
+
+    try:
+        return list(query.stream())
+    except Exception as exc:
+        logger.info(
+            "Indexed chooser query failed (%s); falling back to timestamp scan.",
+            exc,
+        )
+
+    fallback = db.collection(config.GENMEDIA_COLLECTION_NAME).order_by(
+        "timestamp", direction=firestore.Query.DESCENDING
+    )
+    if start_after:
+        fallback = fallback.start_after(start_after)
+    scan_limit = max(page_size * 10, 200)
+    matched = []
+    for doc in fallback.limit(scan_limit).stream():
+        raw = doc.to_dict()
+        if raw is None:
+            continue
+        if filter_by_user_email and raw.get("user_email") != filter_by_user_email:
+            continue
+        if not _matches_type_filters(raw.get("mime_type") or "", type_filters):
+            continue
+        matched.append(doc)
+        if len(matched) >= page_size:
+            break
+    return matched
+
+
 def get_media_for_page_optimized(
     page_size: int,
     type_filters: list[str],
@@ -669,180 +744,26 @@ def get_media_for_page_optimized(
     filter_by_user_email: str | None = None,
 ):
     """Fetches a paginated and filtered list of media items from Firestore
-    using server-side pagination and filtering.
+    using server-side pagination and filtering (with a client-filtered fallback
+    when composite indexes are not provisioned).
     """
+    if not db:
+        return [], None
     try:
-        query = db.collection(config.GENMEDIA_COLLECTION_NAME)
-
-        # Apply user email filter if provided
-        if filter_by_user_email:
-            query = query.where("user_email", "==", filter_by_user_email)
-
-        # Apply type filters using WHERE clauses
-        # Note: This requires Firestore indexes. For a single 'mime_type' startsWith,
-        # a single-field index on 'mime_type' might suffice. For combinations with
-        # sorting, a composite index is likely needed.
-        if "videos" in type_filters:
-            query = query.where("mime_type", ">=", "video/").where(
-                "mime_type", "<", "video0",
-            )
-        elif "images" in type_filters:
-            query = query.where("mime_type", ">=", "image/").where(
-                "mime_type", "<", "image0",
-            )
-        elif "music" in type_filters or "audio" in type_filters:
-            query = query.where("mime_type", ">=", "audio/").where(
-                "mime_type", "<", "audio0",
-            )
-
-        # Always sort by timestamp
-        query = query.order_by("timestamp", direction=firestore.Query.DESCENDING)
-
-        # Server-side pagination
-        if start_after:
-            query = query.start_after(start_after)
-
-        query = query.limit(page_size)
-
-        docs = list(query.stream())
+        docs = _stream_media_for_page_optimized(
+            page_size,
+            type_filters,
+            start_after=start_after,
+            filter_by_user_email=filter_by_user_email,
+        )
         media_items = []
         for doc in docs:
-            # This reuses the same parsing logic as the original function
-            # A refactor could extract this parsing into a helper
             raw_item_data = doc.to_dict()
             if raw_item_data is None:
                 continue
-
-            if isinstance(raw_item_data.get("gcsuri"), list):
-                gcsuri = (
-                    raw_item_data.get("gcsuri")[0]
-                    if raw_item_data.get("gcsuri")
-                    else None
-                )
-            elif raw_item_data.get("gcsuri") is not None:
-                gcsuri = str(raw_item_data.get("gcsuri"))
-            else:
-                gcsuri = None
-
-            timestamp_iso_str: str | None = None
-            raw_timestamp = raw_item_data.get("timestamp")
-            if isinstance(raw_timestamp, datetime.datetime):
-                timestamp_iso_str = raw_timestamp.isoformat()
-            elif isinstance(raw_timestamp, str):
-                timestamp_iso_str = raw_timestamp  # Assuming it's already ISO format
-            elif hasattr(raw_timestamp, "isoformat"):  # For Firestore Timestamp objects
-                timestamp_iso_str = raw_timestamp.isoformat()
-
-            try:
-                gen_time = (
-                    float(raw_item_data.get("generation_time"))
-                    if raw_item_data.get("generation_time") is not None
-                    else None
-                )
-            except (ValueError, TypeError):
-                gen_time = None
-
-            try:
-                item_duration = (
-                    float(raw_item_data.get("duration"))
-                    if raw_item_data.get("duration") is not None
-                    else None
-                )
-            except (ValueError, TypeError):
-                item_duration = None
-
-            media_item = MediaItem(
-                id=doc.id,
-                aspect=(
-                    str(raw_item_data.get("aspect"))
-                    if raw_item_data.get("aspect") is not None
-                    else None
-                ),
-                gcsuri=gcsuri,
-                gcs_uris=raw_item_data.get("gcs_uris", []),
-                source_images_gcs=raw_item_data.get("source_images_gcs", []),
-                prompt=(
-                    str(raw_item_data.get("prompt"))
-                    if raw_item_data.get("prompt") is not None
-                    else None
-                ),
-                generation_time=gen_time,
-                timestamp=timestamp_iso_str,
-                reference_image=(
-                    str(raw_item_data.get("reference_image"))
-                    if raw_item_data.get("reference_image") is not None
-                    else None
-                ),
-                last_reference_image=(
-                    str(raw_item_data.get("last_reference_image"))
-                    if raw_item_data.get("last_reference_image") is not None
-                    else None
-                ),
-                negative_prompt=(
-                    str(raw_item_data.get("negative_prompt"))
-                    if raw_item_data.get("negative_prompt") is not None
-                    else None
-                ),
-                enhanced_prompt_used=raw_item_data.get("enhanced_prompt"),
-                duration=item_duration,
-                error_message=(
-                    str(raw_item_data.get("error_message"))
-                    if raw_item_data.get("error_message") is not None
-                    else None
-                ),
-                rewritten_prompt=(
-                    str(raw_item_data.get("rewritten_prompt"))
-                    if raw_item_data.get("rewritten_prompt") is not None
-                    else None
-                ),
-                comment=(
-                    str(raw_item_data.get("comment"))
-                    if raw_item_data.get("comment") is not None
-                    else None
-                ),
-                resolution=(
-                    str(raw_item_data.get("resolution"))
-                    if raw_item_data.get("resolution") is not None
-                    else None
-                ),
-                media_type=(
-                    str(raw_item_data.get("media_type"))
-                    if raw_item_data.get("media_type") is not None
-                    else None
-                ),
-                source_character_images=raw_item_data.get(
-                    "source_character_images", [],
-                ),
-                character_description=(
-                    str(raw_item_data.get("character_description"))
-                    if raw_item_data.get("character_description") is not None
-                    else None
-                ),
-                imagen_prompt=(
-                    str(raw_item_data.get("imagen_prompt"))
-                    if raw_item_data.get("imagen_prompt") is not None
-                    else None
-                ),
-                veo_prompt=(
-                    str(raw_item_data.get("veo_prompt"))
-                    if raw_item_data.get("veo_prompt") is not None
-                    else None
-                ),
-                candidate_images=raw_item_data.get("candidate_images", []),
-                best_candidate_image=(
-                    str(raw_item_data.get("best_candidate_image"))
-                    if raw_item_data.get("best_candidate_image") is not None
-                    else None
-                ),
-                outpainted_image=(
-                    str(raw_item_data.get("outpainted_image"))
-                    if raw_item_data.get("outpainted_image") is not None
-                    else None
-                ),
-                original_resolution=raw_item_data.get("original_resolution"),
-                upscale_factor=raw_item_data.get("upscale_factor"),
-            )
-            media_items.append(media_item)
+            item = _create_media_item_from_dict(doc.id, raw_item_data)
+            if item:
+                media_items.append(item)
 
         last_doc = docs[-1] if docs else None
         return media_items, last_doc
