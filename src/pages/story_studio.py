@@ -141,6 +141,33 @@ def on_load(e: me.LoadEvent):
     yield
 
 
+# The step each story job shows while it runs (as the page's own buttons do).
+_JOB_STEP = {
+    "scenario": "scenario",
+    "set": "set",
+    "storyboard": "storyboard",
+    "video": "video",
+    "fix": "video",
+}
+
+
+def open_for_agent(story_id: str, step: str = "") -> None:
+    """The voice agent opens a story at a step (also after the page loaded
+    once, when on_load no longer reads ?id=). It follows the story's running
+    job. Like the page's own Generate and Render buttons, a step whose job is
+    running opens before it is reachable; otherwise the page falls back to the
+    furthest step the story can reach."""
+    s = me.state(StoryState)
+    if not s.loaded:
+        s.loaded = True
+        _refresh_stories()
+        _refresh_sets()
+    _open_story(story_id)
+    running = s.job_running and _JOB_STEP.get(s.job_kind) == step
+    if step and (running or can_enter(step, _story())):
+        s.step = step
+
+
 def _prefill_idea() -> None:
     """?prompt= (from the home page) opens Create with the idea filled in.
 

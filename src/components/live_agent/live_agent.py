@@ -45,8 +45,12 @@ ALLOWED_ROUTES = {
     "/story",
     "/library_v2",
 }
-# Video Studio deep-link params (pages/veo.py on_veo_load).
-ALLOWED_PARAMS = {"veo_model", "image_path"}
+# Deep-link params each route reads: Video Studio (pages/veo.py on_veo_load)
+# and Story Studio (pages/story_studio.py on_load).
+ALLOWED_PARAMS = {
+    "/veo": {"veo_model", "image_path"},
+    "/story": {"id", "step"},
+}
 
 
 @me.stateclass
@@ -81,12 +85,19 @@ def on_live_action(e: me.WebEvent):
     elif value.get("action") == "navigate":
         route = str(value.get("page") or "")
         raw = value.get("params") or {}
+        allowed = ALLOWED_PARAMS.get(route, set())
         params = {
             k: str(v)[:500]
             for k, v in (raw.items() if isinstance(raw, dict) else [])
-            if k in ALLOWED_PARAMS and v
+            if k in allowed and v
         }
         if route in ALLOWED_ROUTES:
+            if route == "/story" and params.get("id"):
+                # Story Studio reads ?id= only on its first load, so open the
+                # story (and its step) in the page state directly.
+                from pages import story_studio
+
+                story_studio.open_for_agent(params["id"], params.get("step", ""))
             me.navigate(route, query_params=params or None)
     yield
 
