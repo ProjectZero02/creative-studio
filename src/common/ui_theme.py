@@ -52,6 +52,7 @@ SHARED_STYLESHEETS = [
     "/ui/video_studio.css",  # Video Studio
     "/ui/audio-studio.css",  # Voice and Music
     "/ui/rtl.css",  # Arabic font and right-to-left layout (common/i18n.py)
+    "/ui/extras.css",  # usage page, Library marks, prompt history, brand kit
 ]
 
 _original_page = me.page

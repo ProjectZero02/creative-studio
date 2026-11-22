@@ -46,6 +46,7 @@ class UserMenu extends LitElement {
     themeEvent: { type: String },
     langEvent: { type: String },
     _open: { state: true },
+    _notify: { state: true },
   };
 
   constructor() {
@@ -279,6 +280,33 @@ class UserMenu extends LitElement {
     }
   }
 
+  get _canNotify() {
+    return 'Notification' in window;
+  }
+
+  _notifyOn() {
+    try {
+      return localStorage.getItem('gm-notify') === 'on'
+        && Notification.permission === 'granted';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async _toggleNotify() {
+    // Browser-only setting read by <gm-notify> (components/notify/notify.js).
+    const on = !this._notifyOn();
+    if (on && Notification.permission !== 'granted') {
+      const answer = await Notification.requestPermission();
+      if (answer !== 'granted') {
+        this._notify = false;
+        return;
+      }
+    }
+    try { localStorage.setItem('gm-notify', on ? 'on' : 'off'); } catch (_) { /* ignore */ }
+    this._notify = on;
+  }
+
   _theme() {
     if (!this.themeEvent) return;
     this.dispatchEvent(new MesopEvent(this.themeEvent, { dark: !this.dark }));
@@ -327,6 +355,13 @@ class UserMenu extends LitElement {
             <span class="grow">${L.dark_mode || 'Dark mode'}</span>
             <span class="switch ${this.dark ? 'on' : ''}" aria-hidden="true"></span>
           </button>
+          ${this._canNotify ? html`
+            <button class="item" type="button" role="switch"
+              aria-checked=${this._notifyOn() ? 'true' : 'false'} @click=${this._toggleNotify}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6V11a6 6 0 0 0-5-5.9V4a1 1 0 0 0-2 0v1.1A6 6 0 0 0 6 11v5l-2 2v1h16v-1z"/></svg>
+              <span class="grow">${L.notify || 'Notify me when done'}</span>
+              <span class="switch ${this._notifyOn() ? 'on' : ''}" aria-hidden="true"></span>
+            </button>` : nothing}
           ${this.langEvent ? html`
             <button class="item" type="button" @click=${this._lang}
               aria-label=${`${L.label || 'Language'}: ${thisName}. ${switchLabel}`}>

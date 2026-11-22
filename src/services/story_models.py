@@ -306,6 +306,19 @@ class Story:
     film_edited: bool = False
     # The story and its set before the last AI fix (JSON), for undo.
     fix_undo_json: str = ""
+    # The last films with their timelines, newest first (services/story_versions.py).
+    film_versions_json: str = ""
+    # Subtitled downloads (services/story_subtitles.py). The main film has no
+    # captions; each variant ("en", "ar", "en+ar") is rendered on request.
+    subtitle_style: str = "clean"
+    # {"en": {"key": source hash, "lines": [one per scene]}, "ar": {...}}
+    subtitle_lines_json: str = ""
+    # {"en": {"uri": film, "key": what it was made from}, ...}
+    film_variants_json: str = ""
+    # A copy of the owner's brand kit (common/brand_kit.py) when "Use my brand
+    # kit" was on at Create: colours and tone go into the prompts, the logo
+    # into the exported film.
+    brand_json: str = ""
     # Second-language version: same clips and music, narration translated
     # into alt_language and voiced again. Needs the voiceover on.
     second_on: bool = False
@@ -959,6 +972,24 @@ def _set_cast_rules(story_set) -> str:
     return "\n" + "\n".join(lines)
 
 
+def _brand_line(story: Story) -> str:
+    if not story.brand_json:
+        return ""
+    from common import brand_kit
+
+    return brand_kit.prompt_line(brand_kit.from_json(story.brand_json))
+
+
+def _brand_rule(story: Story) -> str:
+    line = _brand_line(story)
+    return (
+        f"\n- Brand: {line} Match this in the visuals and the narration; never "
+        "show the brand name or a logo in a scene."
+        if line
+        else ""
+    )
+
+
 def scenario_prompt(story: Story, story_set=None) -> str:
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cams = ", ".join(CAMERA_IDS)
@@ -996,7 +1027,7 @@ Rules:
   {NOT_FAMOUS}: give them one or two distinctive details (for example
   greying temples, freckles, glasses, a small scar). Write visuals in English.
 - {cam_rule}
-- Build a clear beginning, middle and end.{_set_cast_rules(story_set)}
+- Build a clear beginning, middle and end.{_set_cast_rules(story_set)}{_brand_rule(story)}
 - "brief": first, rewrite the idea as a clear, vivid film brief in English
   (3 to 5 sentences: subject, audience, tone, arc, setting and look). Keep
   everything the idea asks for and add nothing that contradicts it. Then
@@ -1269,8 +1300,10 @@ def frame_prompt(
         if scene.spoken and scene.narration.strip()
         else ""
     )
+    brand = _brand_line(story)
+    brand = f" {brand}" if brand else ""
     return (
-        f"{scene.visual}{character}{place}{facing} Style: {style['prompt']}. "
+        f"{scene.visual}{character}{place}{facing} Style: {style['prompt']}.{brand} "
         f"Aspect ratio {story.aspect_ratio}, one single frame, no text, no captions."
         f"{people}{keep}{refs_sentence(ref_labels or [])}"
     )

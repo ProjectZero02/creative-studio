@@ -25,6 +25,8 @@ from components.lang_manager.lang_manager import lang_manager, on_lang_load
 from components.theme_manager.theme_manager import theme_manager
 from components.user_menu.user_menu import user_menu_bar
 from components.live_agent.live_agent import live_agent_bridge
+from components.notify.notify import notify_bridge
+from state.notify_state import NotifyState
 from config.default import Default
 
 def on_theme_load(e: me.WebEvent):
@@ -59,6 +61,10 @@ def page_scaffold(page_name: str):
     # browser outside Mesop's tree, so it survives navigation.
     if Default.LIVE_AGENT_ENABLED:
         live_agent_bridge(page=page_name)
+
+    # Browser notification when a generation finishes (common/notify.py).
+    notice = me.state(NotifyState)
+    notify_bridge(seq=notice.seq, title=notice.title, body=notice.body, key="gm-notify")
 
     sidenav("")
 

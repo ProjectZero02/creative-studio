@@ -26,6 +26,8 @@ import json
 import mesop as me
 
 from common.analytics import get_logger
+from common import brand_kit
+from common.notify import notify
 from common.prompt_prefill import is_new_prompt_arrival, read_prompt_param
 from components.dialog import dialog, dialog_actions
 from components.header import header
@@ -39,6 +41,7 @@ from components.story_studio.set_cards import (
     parse_key,
 )
 from components.story_studio.widgets import (
+    film_compare,
     story_idea_watch,
     story_stepper,
     story_style_picker,
@@ -46,7 +49,7 @@ from components.story_studio.widgets import (
     story_timeline,
 )
 from config.default import Default
-from services import story_autoset, story_fix, story_jobs
+from services import story_autoset, story_fix, story_jobs, story_subtitles, story_versions
 from services.story_models import (
     ASPECT_RATIOS,
     CAMERA_IDS,
@@ -291,6 +294,7 @@ def _load_form(story: Story) -> None:
     s.character = story.character
     s.language = story.language
     s.speech_mode = story.speech_mode
+    s.use_brand = bool(story.brand_json)
     s.scene_count = story.scene_count
     s.duration = story.duration
     s.aspect_ratio = story.aspect_ratio
@@ -484,6 +488,10 @@ def _on_missing_job(s: StoryState) -> None:
         s.job_misses = 0
 
 
+# Jobs worth a browser notification (common/notify.py): the long ones.
+NOTIFY_KINDS = ("scenario", "storyboard", "video", "export", "music", "subtitles", "fix")
+
+
 def on_tick(e: me.WebEvent):
     s = me.state(StoryState)
     if not s.job_id:
@@ -518,10 +526,17 @@ def on_tick(e: me.WebEvent):
             s.notice = "Export finished. The new video is saved to your library."
         elif snap["kind"] == "music" and snap["status"] == "done":
             s.notice = "New music is on the timeline."
+        elif snap["kind"] == "subtitles" and snap["status"] == "done":
+            s.notice = "The subtitled film is ready. Download it below."
         elif snap["kind"] == "fix" and snap["status"] == "done":
             s.notice = "The fix is in the film. Play it back, or describe another fix."
         elif snap["kind"] == "set" and snap["status"] == "done":
             _refresh_sets()
+        if snap["kind"] in NOTIFY_KINDS:
+            if snap["status"] == "done":
+                notify("Story Studio", s.notice or "Your story step is done.")
+            elif snap["status"] == "failed":
+                notify("Story Studio", "Something went wrong. Open the story to retry.")
 
 
 def on_dismiss_error(e: me.ClickEvent):
@@ -929,6 +944,14 @@ def create_step(story: Story | None) -> None:
                 SPEECH_HINTS.get(s.speech_mode, ""),
                 style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )
+            with me.box(classes="ss-brand-row"):
+                me.slide_toggle(
+                    "Use my brand",
+                    checked=s.use_brand,
+                    on_change=on_use_brand,
+                    key="ss-use-brand",
+                )
+                me.link(text="Edit my brand", url="/brand", open_in_new_tab=True)
             story_style_picker(
                 options=[
                     {
@@ -1156,6 +1179,23 @@ def on_language(e: me.SelectSelectionChangeEvent):
     _pin("language")
 
 
+def _brand_json(owner: str) -> str:
+    kit = brand_kit.load(owner)
+    return "" if brand_kit.is_empty(kit) else json.dumps(kit)
+
+
+def on_use_brand(e: me.SlideToggleChangeEvent):  # pylint: disable=unused-argument
+    s = me.state(StoryState)
+    if s.use_brand:
+        s.use_brand = False
+        return
+    if not _brand_json(_owner()):
+        s.error = "Your brand is empty. Set it up on the My brand page first."
+        return
+    s.error = ""
+    s.use_brand = True
+
+
 def on_speech_mode(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).speech_mode = e.value
     _pin("speech_mode")
@@ -1221,6 +1261,7 @@ def on_generate_scenario(e: me.ClickEvent):
         story.character = s.character.strip()
         story.language = s.language
         story.speech_mode = s.speech_mode
+        story.brand_json = _brand_json(owner) if s.use_brand else ""
         story.scene_count = caps.scene_count
         story.duration = caps.duration
         story.aspect_ratio = s.aspect_ratio
@@ -2849,6 +2890,213 @@ def edit_view(story: Story) -> None:
         if story.final_alt_uri:
             with me.box(classes="ss-card ss-player"):
                 _alt_film(story)
+        versions_panel(story, busy)
+        if job_open:
+            progress_panel("Adding subtitles", ("subtitles",))
+        downloads_panel(story, busy)
+
+
+# ---------------------------------------------------------------------------
+# Edit step: film versions (compare, go back)
+# ---------------------------------------------------------------------------
+
+
+def versions_panel(story: Story, busy: bool) -> None:
+    """Earlier films of this story: compare one with the current film, or
+    bring it back. Shown once there is more than one film."""
+    rows = story_versions.versions(story)
+    if len(rows) < 2 and not (rows and rows[0]["uri"] != story.final_uri):
+        return
+    s = me.state(StoryState)
+    with me.box(classes="ss-card ss-dl"):
+        with me.box(classes="ss-dl-title"):
+            me.text("Versions", style=me.Style(font_size=16, font_weight=600))
+            me.text(
+                "Earlier films of this story. Compare one with the current film, or "
+                "bring it back with its edit (scenes and pictures stay as they are).",
+                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+            )
+        compare = next((r for r in rows if r["uri"] == s.compare_uri), None)
+        if compare and compare["uri"] != story.final_uri:
+            film_compare(
+                left_url=display_url(compare["uri"]),
+                right_url=display_url(story.final_uri),
+                left_label=f"{compare['label']} · {story_versions.ago(compare['at'])}",
+                right_label="Current film",
+                portrait=story.aspect_ratio == "9:16",
+                key=f"ss-compare-{compare['uri'][-24:]}",
+            )
+        for n, row in enumerate(rows):
+            current = row["uri"] == story.final_uri
+            with me.box(classes="ss-dl-row"):
+                with me.box(classes="ss-dl-name"):
+                    me.text(row["label"])
+                    me.text(
+                        story_versions.ago(row["at"]) + (" · current" if current else ""),
+                        style=me.Style(font_size=12, color=me.theme_var("on-surface-variant")),
+                    )
+                with me.box(classes="ss-dl-actions"):
+                    me.link(text="Download", url=display_url(row["uri"]), open_in_new_tab=True)
+                    if not current:
+                        me.button(
+                            "Hide" if s.compare_uri == row["uri"] else "Compare",
+                            type="stroked",
+                            on_click=on_compare_version,
+                            key=f"ss-vcmp-{n}",
+                        )
+                        me.button(
+                            "Use this version",
+                            type="stroked",
+                            disabled=busy,
+                            on_click=on_use_version,
+                            key=f"ss-vuse-{n}",
+                        )
+
+
+def _version_at(key: str, prefix: str) -> dict | None:
+    story = _story()
+    if story is None:
+        return None
+    try:
+        n = int((key or "").removeprefix(prefix))
+    except ValueError:
+        return None
+    rows = story_versions.versions(story)
+    return rows[n] if 0 <= n < len(rows) else None
+
+
+def on_compare_version(e: me.ClickEvent):
+    s = me.state(StoryState)
+    row = _version_at(e.key, "ss-vcmp-")
+    if row is not None:
+        s.compare_uri = "" if s.compare_uri == row["uri"] else row["uri"]
+
+
+def on_use_version(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    row = _version_at(e.key, "ss-vuse-")
+    if row is None:
+        return
+
+    def apply(story: Story) -> None:
+        story_versions.restore(story, row["uri"])
+
+    try:
+        story = story_jobs.mutate_story(s.story_id, _owner(), apply)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _set_story(story)
+    s.compare_uri = ""
+    s.notice = "That version is back, with its edit."
+
+
+# ---------------------------------------------------------------------------
+# Edit step: downloads (without subtitles, English, Arabic, both)
+# ---------------------------------------------------------------------------
+
+
+def downloads_panel(story: Story, busy: bool) -> None:
+    """The film to download, with or without subtitles. Subtitled versions
+    are made on request from the current edit (free, apart from a short
+    translation when the story is not in that language)."""
+    if not story.final_uri:
+        return
+    making = _job_active_for("subtitles")
+    making_variant = ((_job() or {}).get("params") or {}).get("variant") if making else ""
+    with me.box(classes="ss-card ss-dl"):
+        with me.box(classes="ss-dl-head"):
+            with me.box(classes="ss-dl-title"):
+                me.text("Downloads", style=me.Style(font_size=16, font_weight=600))
+                me.text(
+                    "The film with or without subtitles. A subtitled version is made "
+                    "from your current edit; change the edit or the style and it is "
+                    "made again.",
+                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+                )
+            me.button_toggle(
+                value=story.subtitle_style
+                if story.subtitle_style in story_subtitles.STYLES
+                else "clean",
+                buttons=[
+                    me.ButtonToggleButton(label=story_subtitles.STYLE_LABELS[k], value=k)
+                    for k in story_subtitles.STYLES
+                ],
+                disabled=busy,
+                on_change=on_subtitle_style,
+                key="ss-dl-style",
+            )
+        for variant in story_subtitles.VARIANTS:
+            ready = story_subtitles.ready_variant(story, variant)
+            stale = (
+                not ready
+                and variant != "none"
+                and variant in story_subtitles.variants(story)
+            )
+            with me.box(classes="ss-dl-row"):
+                with me.box(classes="ss-dl-name"):
+                    me.text(story_subtitles.VARIANT_LABELS[variant])
+                    if stale:
+                        me.text(
+                            "Out of date: the edit or style changed",
+                            style=me.Style(font_size=12, color=me.theme_var("primary")),
+                        )
+                with me.box(classes="ss-dl-actions"):
+                    if variant != "none" and _subtitle_file_ready(story, variant):
+                        me.link(
+                            text=".srt",
+                            url=f"/api/story/{story.id}/subtitles/{variant}.srt",
+                            open_in_new_tab=True,
+                        )
+                    if ready and not (story.film_edited and variant == "none"):
+                        me.link(
+                            text="Download",
+                            url=display_url(ready),
+                            open_in_new_tab=True,
+                        )
+                    elif variant == "none":
+                        me.text(
+                            "Export your edit first",
+                            style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+                        )
+                    else:
+                        me.button(
+                            "Making…" if making_variant == variant else ("Make again" if stale else "Make"),
+                            type="stroked",
+                            disabled=busy or story.film_edited,
+                            on_click=on_make_subtitled,
+                            key=f"ss-dl-{variant}",
+                        )
+        if story.film_edited:
+            me.text(
+                "Export your edit first, so every download matches it.",
+                style=me.Style(font_size=13, color=me.theme_var("primary")),
+            )
+
+
+def _subtitle_file_ready(story: Story, variant: str) -> bool:
+    return all(
+        story_subtitles.lines_for(story, c) is not None
+        for c in story_subtitles.variant_langs(variant)
+    )
+
+
+def on_subtitle_style(e: me.ButtonToggleChangeEvent):
+    if e.value in story_subtitles.STYLES:
+        _set_story_field("subtitle_style", e.value)
+
+
+def on_make_subtitled(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    variant = (e.key or "").removeprefix("ss-dl-")
+    try:
+        job = story_jobs.start_subtitled(s.story_id, _owner(), variant)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
 
 
 # ---------------------------------------------------------------------------

@@ -320,6 +320,7 @@ def veo_content(app_state: me.state):
         with me.box(classes="gm-studio"):
             veo_mode_toggle()
             with composer(
+                history="veo",
                 value=state.veo_prompt_input,
                 placeholder=_VEO_PLACEHOLDERS.get(
                     state.veo_mode, _VEO_PLACEHOLDERS["t2v"]

@@ -84,6 +84,8 @@ import pages.character_sheet
 import pages.fashion
 import pages.shop_the_look
 import pages.story_studio
+import pages.usage
+import pages.brand
 import pages.storyboarder
 from app_factory import app
 from common.identity import (
@@ -151,7 +153,7 @@ from pages.test_uploader import test_uploader_page
 from pages.test_vto_prompt_generator import page as test_vto_prompt_generator_page
 from pages import account as account_page
 from pages import admin_users as admin_users_page
-from routers import auth_router, live_router, veo_router
+from routers import auth_router, live_router, story_router, veo_router
 from routers.auth_router import session_gate
 from services import story_service
 from state.state import AppState
@@ -716,6 +718,8 @@ app.mount(
 app.include_router(veo_router.router)
 # Live voice agent WebSocket (/api/live); checks identity itself.
 app.include_router(live_router.router)
+# Story Studio subtitle files (owner-scoped).
+app.include_router(story_router.router)
 
 
 # Old speech pages now live on /voice. Full page loads (bookmarks, shared links)

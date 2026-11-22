@@ -1,0 +1,168 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Usage of the generative models, per person, for the usage page.
+
+Every model call is already logged by ``common.analytics.log_model_call``;
+it also calls :func:`record`, which stores one small document per call in
+the Firestore collection ``usage_events`` (owner, model, kind, page, status,
+estimated cost, time). Writing is best effort and happens on a background
+thread, so a slow or failing Firestore never slows a generation.
+
+Background jobs (Story Studio, Live) run in threads where the page state is
+not available. They wrap their work in :func:`acting_for` so their calls are
+counted for the right person.
+
+:func:`summarize` turns events into the page's totals; it is pure.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import contextvars
+import datetime
+import logging
+import threading
+import time
+from collections import defaultdict
+from collections.abc import Iterator
+
+from config import pricing
+
+logger = logging.getLogger(__name__)
+
+COLLECTION = "usage_events"
+_owner: contextvars.ContextVar[str] = contextvars.ContextVar("usage_owner", default="")
+_pending = threading.Semaphore(32)  # never pile up writer threads
+
+
+def current_owner() -> str:
+    return _owner.get()
+
+
+@contextlib.contextmanager
+def acting_for(owner: str) -> Iterator[None]:
+    """Count model calls made inside this block for `owner`."""
+    token = _owner.set(owner or "")
+    try:
+        yield
+    finally:
+        _owner.reset(token)
+
+
+def event(
+    owner: str,
+    model: str,
+    status: str,
+    units: dict | None = None,
+    page: str = "",
+    task: str = "",
+    at: float | None = None,
+) -> dict:
+    at = at if at is not None else time.time()
+    units = units or {}
+    return {
+        "owner": owner or "unknown",
+        "model": model or "unknown",
+        "kind": pricing.kind_of(model, units),
+        "status": status,
+        "page": page or "",
+        "task": task or "",
+        "cost": round(pricing.estimate(model, units, status), 5),
+        "at": at,
+        "day": datetime.datetime.fromtimestamp(at, datetime.UTC).strftime("%Y-%m-%d"),
+    }
+
+
+def _db():
+    from common.metadata import db
+
+    return db
+
+
+def _write(doc: dict) -> None:
+    try:
+        _db().collection(COLLECTION).add(doc)
+    except Exception:  # best effort: usage must never break a generation
+        logger.debug("usage: could not store an event", exc_info=True)
+    finally:
+        _pending.release()
+
+
+def record(
+    owner: str,
+    model: str,
+    status: str,
+    units: dict | None = None,
+    page: str = "",
+    task: str = "",
+) -> None:
+    """Store one model call (in the background)."""
+    if not owner or owner == "unknown":
+        owner = current_owner() or "unknown"
+    doc = event(owner, model, status, units, page, task)
+    if not _pending.acquire(blocking=False):
+        return  # too many writes in flight: drop rather than slow down
+    threading.Thread(target=_write, args=(doc,), daemon=True).start()
+
+
+def load(owner: str | None, days: int, limit: int = 5000) -> list[dict]:
+    """Events of the last `days` days: one person's, or everyone's (None).
+    One person's are read by owner only (no composite index needed) and
+    filtered by time here."""
+    since = time.time() - days * 86400
+    coll = _db().collection(COLLECTION)
+    if owner:
+        query = coll.where("owner", "==", owner).limit(limit)
+    else:
+        query = coll.where("at", ">=", since).limit(limit)
+    rows = [d.to_dict() for d in query.stream()]
+    return [r for r in rows if float(r.get("at") or 0) >= since]
+
+
+def summarize(events: list[dict], days: int, now: float | None = None) -> dict:
+    """Totals for the page: overall, per model, per day (every day of the
+    period, zero when unused) and per person."""
+    now = now if now is not None else time.time()
+    today = datetime.datetime.fromtimestamp(now, datetime.UTC).date()
+    day_keys = [(today - datetime.timedelta(days=d)).isoformat() for d in range(days - 1, -1, -1)]
+    per_day = {d: 0.0 for d in day_keys}
+    per_model: dict[str, dict] = defaultdict(lambda: {"calls": 0, "failed": 0, "cost": 0.0, "kind": ""})
+    per_owner: dict[str, dict] = defaultdict(lambda: {"calls": 0, "cost": 0.0})
+    total = {"calls": 0, "failed": 0, "cost": 0.0}
+    for e in events:
+        cost = float(e.get("cost") or 0)
+        failed = e.get("status") != "success"
+        m = per_model[e.get("model") or "unknown"]
+        m["calls"] += 1
+        m["failed"] += int(failed)
+        m["cost"] += cost
+        m["kind"] = e.get("kind") or m["kind"]
+        o = per_owner[e.get("owner") or "unknown"]
+        o["calls"] += 1
+        o["cost"] += cost
+        total["calls"] += 1
+        total["failed"] += int(failed)
+        total["cost"] += cost
+        if e.get("day") in per_day:
+            per_day[e["day"]] += cost
+    models = sorted(
+        ({"model": k, **v} for k, v in per_model.items()), key=lambda r: -r["cost"]
+    )
+    owners = sorted(({"owner": k, **v} for k, v in per_owner.items()), key=lambda r: -r["cost"])
+    return {
+        "total": total,
+        "models": models,
+        "days": [{"day": d, "cost": round(c, 4)} for d, c in per_day.items()],
+        "owners": owners,
+    }

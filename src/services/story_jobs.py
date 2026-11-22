@@ -32,11 +32,14 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 
 from common.analytics import get_logger
 from common.error_handling import GenerationError, classify_error
+from common import usage
+from services import story_versions
 from config.default import Default
 from services.story_models import (
     ScenarioError,
@@ -239,10 +242,19 @@ def _finish(job: Job) -> None:
     job.finished_at = time.time()
 
 
+class _Pool(ThreadPoolExecutor):
+    """A thread pool whose tasks run in the caller's context, so model calls
+    made in them are counted for the job's owner (common.usage)."""
+
+    def submit(self, fn, /, *args, **kwargs):
+        return super().submit(contextvars.copy_context().run, fn, *args, **kwargs)
+
+
 def _spawn(job: Job, target: Callable[[Job], None]) -> Job:
     def runner():
         try:
-            target(job)
+            with usage.acting_for(job.owner):
+                target(job)
         except Exception as exc:
             logger.exception("Story Studio job crashed")
             job.message = friendly_error(exc)
@@ -306,6 +318,8 @@ def job_snapshot(job_id: str, owner: str) -> dict | None:
         "tasks": tasks,
         # Set jobs: task id -> [kind, asset id, view], so cards show progress.
         "targets": dict(job.params.get("task_targets") or {}),
+        # Subtitle jobs: which download is being made.
+        "params": {"variant": job.params.get("variant", "")},
     }
 
 
@@ -476,11 +490,11 @@ def start_storyboard(
             return current.scenes[current.take_start(i)].frame_uri or reference
 
         workers = max(1, cfg.STORY_MAX_PARALLEL)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with _Pool(max_workers=workers) as pool:
             for i in rest:
                 if i not in later:
                     pool.submit(_run_task, tasks[i], lambda i=i: paint(i, reference))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with _Pool(max_workers=workers) as pool:
             for i in later:
                 pool.submit(
                     _run_task, tasks[i], lambda i=i: paint(i, take_reference(i))
@@ -786,7 +800,7 @@ def start_video(story_id: str, owner: str) -> Job:
         ]
         held = {id(t) for t, _ in after_clips}
 
-        with ThreadPoolExecutor(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
+        with _Pool(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
             futures = []
             if music_task:
                 seconds = sum(s.duration for s in story.scenes)
@@ -814,7 +828,7 @@ def start_video(story_id: str, owner: str) -> Job:
                 f.result()
         pending_lines = [(t, fn) for t, fn in after_clips if t.status == QUEUED]
         if pending_lines:
-            with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+            with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
                 for f in [
                     pool.submit(_run_task, t, lambda fn=fn, i=t.scene_index: fn(i))
                     for t, fn in pending_lines
@@ -865,7 +879,7 @@ def start_video(story_id: str, owner: str) -> Job:
             for i in sorted(pending_alt):
                 _run_task(alt_clip_tasks[i], lambda i=i: animate_alt(i))
         elif pending_alt:
-            with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+            with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
                 for f in [
                     pool.submit(_run_task, alt_clip_tasks[i], lambda i=i: animate_alt(i))
                     for i in pending_alt
@@ -909,6 +923,7 @@ def start_video(story_id: str, owner: str) -> Job:
             s.step = "video"
             if made.get("timeline"):
                 s.timeline_json = json.dumps(made["timeline"])
+            story_versions.remember(s, "render")
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(final, film, owner))
@@ -1008,9 +1023,68 @@ def start_export(story_id: str, owner: str) -> Job:
             # Same clips as the render, so set_version stays as it was.
             s.final_uri = film
             s.film_edited = False
+            story_versions.remember(s, "export")
 
         mutate_story(story_id, owner, apply)
         _run_task(library_task, lambda: backend.save_to_library(story, film, owner))
+
+    return _spawn(job, work)
+
+
+def start_subtitled(story_id: str, owner: str, variant: str) -> Job:
+    """Make a download of the film with subtitles (`variant` is "en", "ar" or
+    "en+ar", see services/story_subtitles.py): translate the lines that are
+    not in the story yet (cached on the story), then render the current
+    timeline with captions. The main film is left as it is."""
+    from services import story_subtitles as subs
+
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    if variant not in subs.VARIANTS or variant == "none":
+        raise GenerationError("Unknown subtitle version.")
+    if not story.final_uri or not story.timeline_json:
+        raise GenerationError("Render the film first.")
+    job = _new_job(owner, story_id, "subtitles", {"variant": variant})
+    missing = [c for c in subs.variant_langs(variant) if subs.lines_for(story, c) is None]
+    words = {c: subs.LANGS[c] for c in missing}
+    translate_task = (
+        _add_task(job, "Subtitles · translating to " + " and ".join(words.values()), "translate")
+        if missing
+        else None
+    )
+    render_task = _add_task(job, f"Film · {subs.VARIANT_LABELS[variant].lower()}", "stitch")
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+
+        def translate() -> str:
+            for code in missing:
+                lines = backend.translate_subtitles(story, code)
+
+                def keep(s: Story, code=code, lines=lines) -> None:
+                    s.subtitle_lines_json = subs.with_cached_lines(s, code, lines)
+
+                mutate_story(story_id, owner, keep)
+            return ""
+
+        if translate_task and not _run_task(translate_task, translate):
+            render_task.status = SKIPPED
+            return
+        current = get_store().get(story_id, owner)
+        lines = {c: subs.lines_for(current, c) for c in subs.variant_langs(variant)}
+        timeline = subs.variant_timeline(current, current.timeline_json, variant, lines)
+        key = subs.variant_key(current, variant, lines)
+        if not _run_task(render_task, lambda: backend.render_timeline(current, timeline)):
+            return
+        film = render_task.result_uri
+
+        def apply(s: Story) -> None:
+            stored = subs.variants(s)
+            stored[variant] = {"uri": film, "key": key}
+            s.film_variants_json = json.dumps(stored)
+
+        mutate_story(story_id, owner, apply)
 
     return _spawn(job, work)
 
@@ -1257,7 +1331,7 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
         for kind, aid, view in pieces:
             by_asset.setdefault((kind, aid), []).append(view)
         order = {"front": 0, "plate": 0, "voice": 9}
-        with ThreadPoolExecutor(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+        with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
             for (kind, aid), views in by_asset.items():
                 views.sort(key=lambda v: order.get(v, 1))
                 pool.submit(chain, kind, aid, views)

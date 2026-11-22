@@ -22,7 +22,11 @@ can render it::
           {"id", "src", "start", "in", "out", "gain", "fade_in", "label", "scene"}]},
        {"id": "voice", "kind": "voice", "clips": [{"id", "src", "start", "in", "out", "gain", "tempo"}]},
        {"id": "music", "kind": "music", "duck": true, "clips": [{"id", "src", "start", "in", "out", "gain"}]},
-       {"id": "text",  "kind": "text",  "clips": [{"id", "text", "start", "dur", "pos", "size"}]}]}
+       {"id": "text",  "kind": "text",  "clips": [{"id", "text", "start", "dur", "pos", "size",
+                                                    "style", "sub"}]}]}
+
+A text clip with ``"sub": true`` is a subtitle (see services/story_subtitles.py);
+``style`` is "clean", "boxed" or "bold".
 
 Times are seconds. A clip plays its source from ``in`` to ``out`` at
 ``start`` on the film. Video clips also carry the clip's own sound (speech,
@@ -38,12 +42,32 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
 
 TRACK_KINDS = ("video", "voice", "music", "text")
 TEXT_POSITIONS = ("top", "center", "bottom")
+TEXT_STYLES = ("clean", "boxed", "bold")
+# Fonts tried in order for on-film text: Noto covers Arabic and most scripts
+# (fonts-noto-core in the container); Arial Unicode / Segoe UI on Windows.
+FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "C:/Windows/Fonts/ARIALUNI.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+)
+BOLD_FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+)
+_RTL = re.compile("[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]")
 MAX_GAIN = 4.0
 # Loudness targets (LUFS): each clip's dialogue, the model's own sound under
 # a narrator (an ambient bed), and the finished film.
@@ -173,7 +197,7 @@ def _clean_clip(kind: str, c: dict) -> dict | None:
         if not text:
             return None
         pos = c.get("pos") if c.get("pos") in TEXT_POSITIONS else "bottom"
-        return {
+        clean = {
             "id": cid,
             "text": text,
             "start": start,
@@ -181,6 +205,11 @@ def _clean_clip(kind: str, c: dict) -> dict | None:
             "pos": pos,
             "size": int(_num(c.get("size"), 48, 12, 200)),
         }
+        if c.get("style") in TEXT_STYLES:
+            clean["style"] = c["style"]
+        if c.get("sub"):
+            clean["sub"] = True
+        return clean
     srcuri = str(c.get("src") or "").strip()
     if not srcuri:
         return None
@@ -566,11 +595,13 @@ def render_args(
     overlays: dict[str, str],
     out_path: str,
     preset: str = "veryfast",
+    logo_png: str = "",
 ) -> list[str]:
     """ffmpeg argv that renders `timeline` (already normalized).
 
     ``paths`` maps each clip src to a local file, ``has_audio`` says which
     files have sound, ``overlays`` maps text clip ids to full-frame RGBA PNGs.
+    ``logo_png`` is a full-frame PNG shown for the whole film (brand logo).
     """
     w, h, fps = timeline["width"], timeline["height"], timeline["fps"]
     total = max(0.1, duration(timeline))
@@ -638,6 +669,10 @@ def render_args(
             f"[{last}][{idx}:v]overlay=0:0:enable='between(t,{c['start']:.3f},{end:.3f})'[t{k}]"
         )
         last = f"t{k}"
+    if logo_png:
+        idx = add_input(logo_png, "-loop", "1", "-t", f"{total:.3f}")
+        filters.append(f"[{last}][{idx}:v]overlay=0:0[logo]")
+        last = "logo"
     filters.append(f"[{last}]format=yuv420p[vout]")
 
     for k, c in enumerate(track(timeline, "voice")["clips"]):
@@ -721,47 +756,107 @@ def _audio_chain(
     return label
 
 
-def text_overlay_png(clip: dict, width: int, height: int, out_path: str) -> str:
-    """A full-frame transparent PNG with the clip's text (shadowed, wrapped)."""
-    from PIL import Image, ImageDraw, ImageFont
+def overlay_font(size: int, bold: bool = False):
+    """The first available font that covers most scripts, else Pillow's own."""
+    from PIL import ImageFont
 
-    size = max(10, int(clip.get("size", 48) * height / 720))
+    for path in (BOLD_FONT_CANDIDATES if bold else ()) + FONT_CANDIDATES:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                continue
     try:
-        font = ImageFont.load_default(size=size)
+        return ImageFont.load_default(size=size)
     except TypeError:  # older Pillow
-        font = ImageFont.load_default()
+        return ImageFont.load_default()
+
+
+def _text_kwargs(text: str) -> dict:
+    """Right-to-left layout for Arabic and Hebrew when Pillow can shape it."""
+    from PIL import features
+
+    if _RTL.search(text) and features.check("raqm"):
+        return {"direction": "rtl"}
+    return {}
+
+
+def wrap_lines(text: str, measure, max_width: float) -> list[str]:
+    """Break `text` into lines no wider than `max_width` (explicit line
+    breaks are kept). `measure(line)` returns a line's width."""
+    lines: list[str] = []
+    for para in str(text).split("\n"):
+        line = ""
+        for word in para.split():
+            trial = f"{line} {word}".strip()
+            if measure(trial) > max_width and line:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        lines.append(line)
+    return [ln for ln in lines if ln] or [""]
+
+
+def text_overlay_png(clip: dict, width: int, height: int, out_path: str) -> str:
+    """A full-frame transparent PNG with the clip's text, wrapped, in its
+    style: clean (soft shadow), boxed (dark box) or bold (outlined)."""
+    from PIL import Image, ImageDraw
+
+    style = clip.get("style") if clip.get("style") in TEXT_STYLES else "clean"
+    size = max(10, int(clip.get("size", 48) * height / 720))
+    font = overlay_font(size, bold=style == "bold")
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    words, lines, line = clip["text"].split(), [], ""
-    for word in words:
-        trial = f"{line} {word}".strip()
-        if draw.textlength(trial, font=font) > width * 0.86 and line:
-            lines.append(line)
-            line = word
-        else:
-            line = trial
-    lines.append(line)
-    gap = int(size * 1.25)
+    # Direction per line: an English + Arabic caption mixes both.
+    def measure(s: str) -> float:
+        return draw.textlength(s, font=font, **_text_kwargs(s))
+
+    lines = wrap_lines(clip["text"], measure, width * 0.86)
+    gap = int(size * 1.3)
     block = gap * len(lines)
-    y = {"top": int(height * 0.08), "center": (height - block) // 2}.get(
-        clip.get("pos"), height - block - int(height * 0.08)
+    margin = int(height * (0.07 if clip.get("sub") else 0.08))
+    y = {"top": margin, "center": (height - block) // 2}.get(
+        clip.get("pos"), height - block - margin
     )
+    pad = max(2, size // 16)
+    if style == "boxed":
+        widest = max(measure(ln) for ln in lines)
+        bx, by = size * 0.5, size * 0.3
+        draw.rounded_rectangle(
+            ((width - widest) / 2 - bx, y - by, (width + widest) / 2 + bx, y + block + by * 0.4),
+            radius=int(size * 0.35),
+            fill=(0, 0, 0, 160),
+        )
     for ln in lines:
-        tw = draw.textlength(ln, font=font)
-        x = (width - tw) / 2
-        pad = max(2, size // 16)
-        draw.text((x + pad, y + pad), ln, font=font, fill=(0, 0, 0, 170))
-        draw.text((x, y), ln, font=font, fill=(255, 255, 255, 255))
+        x = (width - measure(ln)) / 2
+        kw = _text_kwargs(ln)
+        if style == "clean":
+            draw.text((x + pad, y + pad), ln, font=font, fill=(0, 0, 0, 170), **kw)
+            draw.text((x, y), ln, font=font, fill=(255, 255, 255, 255), **kw)
+        elif style == "bold":
+            draw.text(
+                (x, y), ln, font=font, fill=(255, 255, 255, 255),
+                stroke_width=max(2, size // 12), stroke_fill=(0, 0, 0, 230), **kw,
+            )
+        else:
+            draw.text((x, y), ln, font=font, fill=(255, 255, 255, 255), **kw)
         y += gap
     img.save(out_path, "PNG")
     return out_path
 
 
 def render_timeline(
-    timeline: dict, fetch, out_path: str, preset: str = "veryfast"
+    timeline: dict,
+    fetch,
+    out_path: str,
+    preset: str = "veryfast",
+    logo: str = "",
+    logo_corner: str = "br",
 ) -> str:
     """Render a timeline to MP4. ``fetch(uri, local_path)`` copies a source
-    file to disk (GCS download, or a local copy in demo mode)."""
+    file to disk (GCS download, or a local copy in demo mode). ``logo`` is an
+    image uri drawn small in ``logo_corner`` for the whole film."""
     from common.error_handling import GenerationError
 
     tl = normalize(timeline)
@@ -786,7 +881,23 @@ def render_timeline(
             )
             for c in track(tl, "text")["clips"]
         }
-        args = render_args(tl, paths, has_audio, overlays, out_path, preset)
+        logo_png = ""
+        if logo:
+            try:
+                from common.brand_kit import logo_overlay_png
+
+                ext = os.path.splitext(logo.split("?")[0])[1][:6] or ".png"
+                raw = os.path.join(tmp, f"logo_src{ext}")
+                fetch(logo, raw)
+                logo_png = logo_overlay_png(
+                    raw, tl["width"], tl["height"], os.path.join(tmp, "logo.png"), logo_corner
+                )
+            except Exception:  # a broken logo never stops the film
+                from common.analytics import get_logger
+
+                get_logger(__name__).warning("Brand logo skipped", exc_info=True)
+                logo_png = ""
+        args = render_args(tl, paths, has_audio, overlays, out_path, preset, logo_png)
         result = subprocess.run(args, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             from common.analytics import get_logger
