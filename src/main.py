@@ -342,7 +342,9 @@ async def add_global_csp(request: Request, call_next):
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com http://fonts.googleapis.com/; "
         "font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com http://fonts.googleapis.com;"
         "img-src 'self' data: blob: https://google-ai-skin-tone-research.imgix.net https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
-        "media-src 'self' https://deepmind.google https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
+        # blob: lets the Live Avatar play: its MediaSource (in a worker, or
+        # behind a blob URL) counts as a blob: media source.
+        "media-src 'self' blob: https://deepmind.google https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
         "worker-src 'self' blob:;"
     )
     # HSTS only in deployed environments over a real host: a browser that sees it

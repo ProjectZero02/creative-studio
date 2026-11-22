@@ -210,3 +210,43 @@ def test_subtitle_route_is_owner_scoped(monkeypatch):
     assert subtitle_file(story, "en", "srt").startswith("1\n")
     assert subtitle_file(story, "ar", "srt") is None  # not translated yet
     assert subtitle_file(story, "en", "exe") is None
+
+
+def test_each_caption_line_uses_a_font_for_its_script(tmp_path, monkeypatch):
+    """English + Arabic: the English line must not get the Arabic-only font
+    (Noto Sans Arabic has no Latin letters, so English drew as boxes)."""
+    import os
+
+    from PIL import ImageDraw
+
+    from services import story_timeline as tl
+
+    latin, arabic = "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf"
+    if not (os.path.exists(latin) and os.path.exists(arabic)):
+        pytest.skip("needs two distinct local fonts")
+    monkeypatch.setattr(tl, "FONT_CANDIDATES", (latin,))
+    monkeypatch.setattr(tl, "BOLD_FONT_CANDIDATES", ())
+    monkeypatch.setattr(tl, "RTL_FONT_CANDIDATES", (arabic,))
+    monkeypatch.setattr(tl, "RTL_BOLD_FONT_CANDIDATES", ())
+    used = {}
+    real = ImageDraw.ImageDraw.text
+
+    def spy(self, xy, text, *a, **kw):
+        used.setdefault(text, set()).add(kw["font"].path)
+        return real(self, xy, text, *a, **kw)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
+    text_overlay_png(
+        {"text": "ثعلب يستيقظ\nA fox wakes up", "pos": "bottom", "size": 32,
+         "style": "boxed", "sub": True},
+        640, 360, str(tmp_path / "c.png"),
+    )
+    assert used["A fox wakes up"] == {latin}
+    assert used["ثعلب يستيقظ"] == {arabic}
+
+
+def test_latin_font_list_has_no_arabic_only_font():
+    from services import story_timeline as tl
+
+    for path in tl.FONT_CANDIDATES + tl.BOLD_FONT_CANDIDATES:
+        assert "Arabic" not in path

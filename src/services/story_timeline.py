@@ -52,8 +52,11 @@ TEXT_POSITIONS = ("top", "center", "bottom")
 TEXT_STYLES = ("clean", "boxed", "bold")
 # Fonts tried in order for on-film text: Noto covers Arabic and most scripts
 # (fonts-noto-core in the container); Arial Unicode / Segoe UI on Windows.
+# Fonts per script. Noto Sans Arabic has no Latin letters (English drew as
+# boxes with it), so each caption line gets a font for its own script: Latin
+# for most lines, Arabic for right-to-left ones. The Windows fonts at the end
+# cover both, for local runs.
 FONT_CANDIDATES = (
-    "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "C:/Windows/Fonts/ARIALUNI.ttf",
@@ -61,8 +64,20 @@ FONT_CANDIDATES = (
     "C:/Windows/Fonts/arial.ttf",
 )
 BOLD_FONT_CANDIDATES = (
-    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+)
+RTL_FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "C:/Windows/Fonts/ARIALUNI.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+)
+RTL_BOLD_FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "C:/Windows/Fonts/segoeuib.ttf",
     "C:/Windows/Fonts/arialbd.ttf",
@@ -756,11 +771,16 @@ def _audio_chain(
     return label
 
 
-def overlay_font(size: int, bold: bool = False):
-    """The first available font that covers most scripts, else Pillow's own."""
+def overlay_font(size: int, bold: bool = False, rtl: bool = False):
+    """The first available font for the script (Latin, or Arabic and Hebrew
+    when `rtl`), else Pillow's own."""
     from PIL import ImageFont
 
-    for path in (BOLD_FONT_CANDIDATES if bold else ()) + FONT_CANDIDATES:
+    if rtl:
+        paths = (RTL_BOLD_FONT_CANDIDATES if bold else ()) + RTL_FONT_CANDIDATES
+    else:
+        paths = (BOLD_FONT_CANDIDATES if bold else ()) + FONT_CANDIDATES
+    for path in paths:
         if os.path.exists(path):
             try:
                 return ImageFont.truetype(path, size)
@@ -805,12 +825,17 @@ def text_overlay_png(clip: dict, width: int, height: int, out_path: str) -> str:
 
     style = clip.get("style") if clip.get("style") in TEXT_STYLES else "clean"
     size = max(10, int(clip.get("size", 48) * height / 720))
-    font = overlay_font(size, bold=style == "bold")
+    bold = style == "bold"
+    fonts = {False: overlay_font(size, bold), True: overlay_font(size, bold, rtl=True)}
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # Direction per line: an English + Arabic caption mixes both.
+
+    # Font and direction per line: an English + Arabic caption mixes both.
+    def font_for(s: str):
+        return fonts[bool(_RTL.search(s))]
+
     def measure(s: str) -> float:
-        return draw.textlength(s, font=font, **_text_kwargs(s))
+        return draw.textlength(s, font=font_for(s), **_text_kwargs(s))
 
     lines = wrap_lines(clip["text"], measure, width * 0.86)
     gap = int(size * 1.3)
@@ -831,6 +856,7 @@ def text_overlay_png(clip: dict, width: int, height: int, out_path: str) -> str:
     for ln in lines:
         x = (width - measure(ln)) / 2
         kw = _text_kwargs(ln)
+        font = font_for(ln)
         if style == "clean":
             draw.text((x + pad, y + pad), ln, font=font, fill=(0, 0, 0, 170), **kw)
             draw.text((x, y), ln, font=font, fill=(255, 255, 255, 255), **kw)
