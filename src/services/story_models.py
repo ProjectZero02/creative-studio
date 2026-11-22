@@ -990,6 +990,31 @@ def _brand_rule(story: Story) -> str:
     )
 
 
+REFERENCE_PHOTO_NOTE = (
+    "The attached image is a photo of the main character: match their face, "
+    "hair, build and look."
+)
+
+
+def scenario_media(story: Story, story_set=None) -> list[str]:
+    """Images sent with the scenario call: the Create step's reference photo
+    of the main character (a saved set already fixes the cast's looks)."""
+    return [story.reference_uri] if story.reference_uri and story_set is None else []
+
+
+def _main_character(story: Story, story_set) -> str:
+    """The Create step's main character text and reference photo, so the
+    writer builds the film around that person instead of inventing one."""
+    if story_set is not None:
+        return ""
+    lines = []
+    if story.character.strip():
+        lines.append(f"Main character (keep this look): {story.character.strip()}")
+    if scenario_media(story):
+        lines.append(REFERENCE_PHOTO_NOTE)
+    return "\n" + "\n".join(lines) if lines else ""
+
+
 def scenario_prompt(story: Story, story_set=None) -> str:
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cams = ", ".join(CAMERA_IDS)
@@ -1012,7 +1037,7 @@ def scenario_prompt(story: Story, story_set=None) -> str:
 Turn the idea below into a short film of exactly {story.scene_count} scenes,
 each about {story.duration} seconds long. Visual style: {style["label"]}.
 
-Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}
+Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}{_main_character(story, story_set)}
 
 Rules:
 - Write the title and every narration line in {story.language}.

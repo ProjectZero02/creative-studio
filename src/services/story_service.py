@@ -58,6 +58,7 @@ from services.story_models import (
     clip_refs,
     frame_refs,
     frame_prompt,
+    scenario_media,
     scenario_prompt,
     scene_regen_prompt,
     set_build_prompt,
@@ -1473,7 +1474,10 @@ class VertexStoryBackend:
         return response.text
 
     def write_scenario(self, story: Story, story_set=None) -> str:
-        return self._json_text(scenario_prompt(story, story_set))
+        return self._json_text(
+            scenario_prompt(story, story_set),
+            media=scenario_media(story, story_set),
+        )
 
     def live_settings(self, idea: str) -> dict:
         """Film settings a small Gemini model reads out of the idea (one
