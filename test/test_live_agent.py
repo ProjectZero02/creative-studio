@@ -944,6 +944,7 @@ def test_fill_only_calls_have_no_fix_tools():
 
 
 def test_avatar_calls_ask_for_video_and_voice_calls_for_audio():
+    from config.default import Default
     from routers.live_router import _live_config
 
     voice = _live_config(None, "fill")
@@ -952,4 +953,6 @@ def test_avatar_calls_ask_for_video_and_voice_calls_for_audio():
     avatar = _live_config(None, "fill", "Kira")
     assert avatar.response_modalities == ["VIDEO"]
     assert avatar.avatar_config.avatar_name == "Kira"
-    assert avatar.speech_config is None  # the avatar brings its own voice
+    # The avatar gets its own (female) voice, not the model's male default.
+    name = avatar.speech_config.voice_config.prebuilt_voice_config.voice_name
+    assert name == Default.LIVE_AVATAR_VOICE == "Aoede"

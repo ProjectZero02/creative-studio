@@ -96,24 +96,19 @@ def _live_config(
     resume_handle: str | None, mode: str = FILL, avatar: str = ""
 ) -> types.LiveConnectConfig:
     # Voice only (the default), or a Live Avatar: the model then answers with
-    # a fragmented MP4 (H.264 video with the AAC voice inside) and the avatar
-    # brings its own voice.
+    # a fragmented MP4 (H.264 video with the AAC voice inside). The avatar
+    # gets its own voice, else it speaks with a default that may not match it.
+    voice = Default.LIVE_AVATAR_VOICE if avatar else Default.LIVE_VOICE
+    output = {
+        "response_modalities": ["VIDEO" if avatar else "AUDIO"],
+        "speech_config": types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
+            )
+        ),
+    }
     if avatar:
-        output = {
-            "response_modalities": ["VIDEO"],
-            "avatar_config": types.AvatarConfig(avatar_name=avatar),
-        }
-    else:
-        output = {
-            "response_modalities": ["AUDIO"],
-            "speech_config": types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=Default.LIVE_VOICE
-                    )
-                )
-            ),
-        }
+        output["avatar_config"] = types.AvatarConfig(avatar_name=avatar)
     return types.LiveConnectConfig(
         **output,
         input_audio_transcription=types.AudioTranscriptionConfig(),
