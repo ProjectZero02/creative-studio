@@ -440,7 +440,7 @@ def test_the_planner_watches_the_film_and_the_frames(monkeypatch):
     assert "rendered film is attached first" in story_fix.fix_prompt(story, "too dark")
     seen = {}
 
-    def fake(self, prompt, temperature=0.8, task="", model="", media=None):
+    def fake(self, prompt, temperature=0.8, task="", model="", media=None, **kw):
         seen.update(task=task, media=media)
         return "{}"
 

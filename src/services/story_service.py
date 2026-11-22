@@ -46,8 +46,10 @@ from common.identity import LOCAL_APP_ENVS
 from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
+    CASTING_SYSTEM,
     LANGUAGES,
     SAME_TAKE_REF,
+    SCENARIO_SYSTEM,
     STYLE_BY_ID,
     Scene,
     StitchPlan,
@@ -58,9 +60,14 @@ from services.story_models import (
     clip_refs,
     frame_refs,
     frame_prompt,
+    regen_links,
+    scenario_media,
     scenario_prompt,
+    scenario_schema,
     scene_regen_prompt,
+    scene_schema,
     set_build_prompt,
+    set_schema,
     translation_prompt,
 )
 
@@ -141,7 +148,7 @@ def display_url(uri: str) -> str:
 class StoryBackend(Protocol):
     name: str
 
-    def write_scenario(self, story: Story, story_set=None) -> str: ...
+    def write_scenario(self, story: Story, story_set=None, note: str = "") -> str: ...
     def live_settings(self, idea: str) -> dict: ...
     def write_set(self, story: Story) -> str: ...
     def generate_set_image(
@@ -467,6 +474,41 @@ _MOCK_PLACES = [
 ]
 
 
+def _mock_cast(story: Story, hero: str, spoken: bool) -> dict:
+    """The demo scenario's cast: the hero and up to three of the places."""
+    look = story.character.strip() or (
+        f"the {hero}, early 30s, medium build, warm brown eyes, a small scar on "
+        "the chin"
+    )
+    places = min(3, max(1, story.scene_count))
+    return {
+        "characters": [
+            {
+                "key": "c1",
+                "name": hero.title(),
+                "description": look,
+                "outfit": "a weathered olive jacket over a grey shirt",
+                "voice": {
+                    "tts_voice": "Puck",
+                    "style": "warm, unhurried",
+                    "description": "a male voice, early 30s, warm and steady",
+                },
+            }
+        ],
+        "narrator": None if spoken else {"tts_voice": "Kore", "style": "warm"},
+        "locations": [
+            {
+                "key": f"l{i + 1}",
+                "name": _MOCK_PLACES[i % len(_MOCK_PLACES)].capitalize(),
+                "description": f"{_MOCK_PLACES[i % len(_MOCK_PLACES)]}, soft light",
+                "time_of_day": "golden hour",
+            }
+            for i in range(places)
+        ],
+        "props": [],
+    }
+
+
 def _hero_from_idea(idea: str) -> str:
     words = re.findall(r"[A-Za-z][A-Za-z'-]+", idea or "")
     stop = {
@@ -509,7 +551,7 @@ class MockStoryBackend:
         return LOCAL_SCHEME + rel, path
 
     # -- scenario --
-    def write_scenario(self, story: Story, story_set=None) -> str:
+    def write_scenario(self, story: Story, story_set=None, note: str = "") -> str:
         self._sleep(1.6, 2.6)
         hero = _hero_from_idea(story.idea)
         n = story.scene_count
@@ -554,6 +596,7 @@ class MockStoryBackend:
             f"about the {hero}, warm and hopeful in tone, with a clear beginning, "
             "middle and end, for a general audience."
         )
+        reply = {"brief": brief, "title": title, "voice": voice, "scenes": scenes}
         if story_set is not None:  # a saved set: cast it in every scene
             lead = story_set.on_screen()[:1]
             places = story_set.locations
@@ -563,9 +606,14 @@ class MockStoryBackend:
                 sc["speaker"] = lead[0].name if lead and sc["spoken"] else ""
                 if lead:
                     sc["visual"] = sc["visual"].replace(f"The {hero}", lead[0].name, 1)
-        return json.dumps(
-            {"brief": brief, "title": title, "voice": voice, "scenes": scenes}
-        )
+        else:  # demo stand-in for the writer casting the film itself
+            reply.update(_mock_cast(story, hero, spoken))
+            for i, sc in enumerate(scenes):
+                sc["cast"] = ["c1"]
+                sc["location"] = f"l{i % 3 + 1}" if n > 1 else "l1"
+                sc["props"] = []
+                sc["speaker"] = "c1" if sc["spoken"] else ""
+        return json.dumps(reply)
 
     def live_settings(self, idea: str) -> dict:
         """Demo stand-in for the live settings model: the rules pass."""
@@ -1441,17 +1489,25 @@ class VertexStoryBackend:
     def _json_text(
         self,
         prompt: str,
-        temperature: float = 0.8,
+        temperature: float | None = None,
         task: str = "story_scenario",
         model: str = "",
         media: list[str] | None = None,
+        schema: dict | None = None,
+        system: str = "",
+        thinking: bool = False,
     ) -> str:
         """One JSON Gemini call. `media`: GCS URIs (images, films) sent
-        before the prompt so the model can look at them."""
+        before the prompt so the model can look at them. `schema`: a JSON
+        schema the reply must follow. `system`: the system instruction.
+        `thinking`: let the model think first (models.thinking). With no
+        `temperature` the model's own default is used, as Google advises
+        for its reasoning models."""
         from google.genai import types
 
         from common.analytics import track_model_call
         from models.gemini import client
+        from models.thinking import dynamic_thinking
 
         model = model or self.cfg.STORY_SCENARIO_MODEL_ID
         parts = [
@@ -1459,21 +1515,33 @@ class VertexStoryBackend:
             for u in (media or [])
             if u
         ]
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=temperature,
+            response_json_schema=schema,
+            system_instruction=system or None,
+            thinking_config=dynamic_thinking(model) if thinking else None,
+        )
         with track_model_call(model_name=model, task=task):
             response = client.models.generate_content(
                 model=model,
                 contents=[*parts, prompt],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=temperature,
-                ),
+                config=config,
             )
         if not response.text:
             raise GenerationError("Gemini returned an empty scenario.")
         return response.text
 
-    def write_scenario(self, story: Story, story_set=None) -> str:
-        return self._json_text(scenario_prompt(story, story_set))
+    def write_scenario(self, story: Story, story_set=None, note: str = "") -> str:
+        """`note`: what went wrong in the last try, for the retry."""
+        prompt = scenario_prompt(story, story_set)
+        return self._json_text(
+            f"{prompt}\n\n{note}" if note else prompt,
+            media=scenario_media(story, story_set),
+            schema=scenario_schema(story, story_set),
+            system=SCENARIO_SYSTEM,
+            thinking=True,
+        )
 
     def live_settings(self, idea: str) -> dict:
         """Film settings a small Gemini model reads out of the idea (one
@@ -1497,7 +1565,11 @@ class VertexStoryBackend:
 
     def write_set(self, story: Story) -> str:
         return self._json_text(
-            set_build_prompt(story), temperature=0.6, task="story_set"
+            set_build_prompt(story),
+            task="story_set",
+            schema=set_schema(),
+            system=CASTING_SYSTEM,
+            thinking=True,
         )
 
     def generate_set_image(
@@ -1541,7 +1613,13 @@ class VertexStoryBackend:
         )
 
     def rewrite_scene(self, story: Story, index: int) -> str:
-        return self._json_text(scene_regen_prompt(story, index))
+        story_set = self._set(story)
+        return self._json_text(
+            scene_regen_prompt(story, index, story_set),
+            schema=scene_schema(with_links=regen_links(story, story_set)),
+            system=SCENARIO_SYSTEM,
+            thinking=True,
+        )
 
     def plan_fix(
         self, story: Story, request: str, scene: int, seconds: float | None
@@ -1555,6 +1633,7 @@ class VertexStoryBackend:
             temperature=0.2,
             task="story_fix",
             media=fix_media(story),
+            thinking=True,
         )
 
     def translate(self, story: Story) -> str:

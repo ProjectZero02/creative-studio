@@ -569,8 +569,8 @@ def test_set_build_prompt_lists_scenes_and_voices():
 
 def test_scenario_prompt_uses_saved_set():
     story = _three_scene_story()
-    plain = scenario_prompt(story)
-    assert "Use this cast" not in plain and '"cast"' not in plain
+    plain = scenario_prompt(story)  # no set yet: the writer casts the film
+    assert "Use this cast" not in plain and "Cast the film too" in plain
     with_set = scenario_prompt(story, _sample_set())
     assert (
         "Character Maya: Maya (woman in her 30s, short black hair, red coat)."

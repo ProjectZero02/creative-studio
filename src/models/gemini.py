@@ -40,6 +40,7 @@ from models.character_consistency_models import (
     FacialCompositeProfile,
     GeneratedPrompts,
 )
+from models.thinking import dynamic_thinking
 from models.model_setup import (
     GeminiModelSetup,
 )
@@ -876,7 +877,7 @@ def select_best_image(
     """
     model = cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL
     config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=-1),
+        thinking_config=dynamic_thinking(cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL),
         response_mime_type="application/json",
         response_schema=BestImage.model_json_schema(),
         temperature=cfg.TEMP_BEST_IMAGE_SELECTION,
@@ -923,7 +924,7 @@ def select_best_image_with_description(
     """
     model = cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL
     config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=-1),
+        thinking_config=dynamic_thinking(cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL),
         response_mime_type="application/json",
         response_schema=BestImageAccuracy.model_json_schema(),
         temperature=cfg.TEMP_BEST_IMAGE_SELECTION,
@@ -968,7 +969,7 @@ def final_image_critic(
     """
     model = cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL
     config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=-1),
+        thinking_config=dynamic_thinking(cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL),
         response_mime_type="application/json",
         response_schema=GeneratedImageAccuracyWrapper.model_json_schema(),
         temperature=cfg.TEMP_BEST_IMAGE_SELECTION,
@@ -1010,7 +1011,7 @@ def describe_images_and_look(
     each article seperately.
     """
     config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=-1),
+        thinking_config=dynamic_thinking(cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL),
         response_mime_type="application/json",
         response_schema=ArticleDescriptionWrapper.model_json_schema(),
         temperature=cfg.TEMP_BEST_IMAGE_SELECTION,

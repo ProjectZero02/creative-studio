@@ -60,6 +60,7 @@ def page():
 
 
 NARRATIVE_MODEL_LABELS = {
+    "gemini-4-neon": "Gemini 4 Neon",
     "gemini-3.8-flash": "Gemini 3.8 Flash",
     "gemini-4-argon": "Gemini 4 Argon",
     "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite",

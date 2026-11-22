@@ -40,11 +40,12 @@ DEFAULTS = config_default.Default()
 
 def test_config_defaults():
     assert DEFAULTS.GEMINI_STORYBOARDER_NARRATIVE_MODELS == (
+        "gemini-4-neon",
         "gemini-3.8-flash",
         "gemini-4-argon",
         "gemini-3.5-flash-lite",
     )
-    assert DEFAULTS.GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID == "gemini-3.8-flash"
+    assert DEFAULTS.GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID == "gemini-4-neon"
 
 
 def test_state_default_matches_config():
@@ -56,7 +57,8 @@ def test_state_default_matches_config():
 
 def test_picker_offers_configured_models_with_default_label():
     assert storyboarder.narrative_model_options() == [
-        ("Gemini 3.8 Flash (Default)", "gemini-3.8-flash"),
+        ("Gemini 4 Neon (Default)", "gemini-4-neon"),
+        ("Gemini 3.8 Flash", "gemini-3.8-flash"),
         ("Gemini 4 Argon", "gemini-4-argon"),
         ("Gemini 3.5 Flash Lite", "gemini-3.5-flash-lite"),
     ]

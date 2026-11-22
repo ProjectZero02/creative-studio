@@ -345,6 +345,10 @@ class Story:
     # rendered with (0 = not rendered with a set yet).
     set_id: str = ""
     set_version: int = 0
+    # The cast, places and props the scenario call wrote (JSON, with each
+    # scene's links by scene id), kept until the Set step turns them into a
+    # set. "" when the story has a set or the writer gave no cast.
+    cast_json: str = ""
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 
@@ -509,6 +513,11 @@ def apply_caps(scene_count: int, duration: int, resolution: str | None = None) -
 # ---------------------------------------------------------------------------
 
 
+# A line may run this far past its scene's word budget before it counts as
+# too long (speech pace varies; a word or two over still fits).
+NARRATION_SLACK = 1.15
+
+
 class ScenarioError(ValueError):
     """The model's scenario could not be used."""
 
@@ -546,6 +555,50 @@ def normalize_camera(value: str | None, default: str = "static") -> str:
     return default
 
 
+class NarrationTooLong(ScenarioError):
+    """Narrated lines that cannot be spoken within their scene."""
+
+    def __init__(self, scenes: list[int]):
+        self.scenes = scenes
+        listed = ", ".join(str(n) for n in scenes)
+        super().__init__(f"The narration of scene {listed} is too long for its length.")
+
+    def note(self) -> str:
+        """What the writer is told on the retry."""
+        listed = " and ".join(str(n) for n in self.scenes)
+        return (
+            f"In the last try the narration of scene {listed} was too long to "
+            "be spoken in its scene. Keep every line within its word limit."
+        )
+
+
+def _words(text: str) -> int:
+    return len(text.split())
+
+
+def fits_narration(words: int, seconds: int | float) -> bool:
+    """`words` can be spoken within a scene of `seconds`."""
+    return words <= max_words(seconds) * NARRATION_SLACK + 1
+
+
+def _fit_lengths(scenes: list[Scene]) -> list[int]:
+    """Stretch spoken scenes whose line is too long to the shortest length
+    that fits (spoken scenes may run longer). Returns the 1-based numbers
+    of narrated scenes that still do not fit."""
+    long: list[int] = []
+    lengths = supported_durations()
+    for n, sc in enumerate(scenes, start=1):
+        words = _words(sc.narration)
+        if not words or fits_narration(words, sc.duration):
+            continue
+        if sc.spoken:
+            fits = [d for d in lengths if d >= sc.duration and fits_narration(words, d)]
+            sc.duration = min(fits) if fits else max([sc.duration, *lengths])
+            continue
+        long.append(n)
+    return long
+
+
 def _strip_fences(text: str) -> str:
     text = (text or "").strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
@@ -563,6 +616,7 @@ def parse_scenario(
     duration: int,
     camera_preset: str = "auto",
     speech_mode: str = "auto",
+    strict_length: bool = False,
 ) -> tuple[str, list[Scene]]:
     """Parse and validate the model's scenario JSON.
 
@@ -571,6 +625,9 @@ def parse_scenario(
     ``speech_mode`` "narrator" or "on_camera" overrides each scene's "spoken".
     Extra scenes are dropped; too few or empty scenes raise ScenarioError.
     A fixed camera preset (not "auto") overrides each scene's camera.
+    A spoken scene whose line is too long is stretched to fit. With
+    ``strict_length`` a narrated line that is too long raises
+    NarrationTooLong (the caller retries with its note).
     """
     try:
         data = json.loads(_strip_fences(text))
@@ -616,6 +673,9 @@ def parse_scenario(
         )
     if len(scenes) < scene_count:
         raise ScenarioError(f"Expected {scene_count} scenes, got {len(scenes)}.")
+    long = _fit_lengths(scenes)
+    if long and strict_length:
+        raise NarrationTooLong(long)
     if sum(s.duration for s in scenes) > Default().STORY_MAX_FILM_SECONDS:
         for s in scenes:
             s.duration = duration
@@ -887,6 +947,128 @@ def parse_set_build(text: str, story: Story):
     return story_set
 
 
+_CAST_PARTS = ("characters", "narrator", "locations", "props")
+_LINK_FIELDS = ("cast", "location", "props", "speaker")
+
+
+def _json_dict(text: str) -> dict:
+    try:
+        data = json.loads(_strip_fences(text))
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def cast_from_scenario(text: str, story: Story) -> str:
+    """The cast the scenario call wrote, as the story's `cast_json`: its
+    characters, narrator, locations and props, and each scene's links by
+    scene id. "" when the reply has no usable cast (the Set step then casts
+    the film with its own call)."""
+    data = _json_dict(text)
+    rows = [r if isinstance(r, dict) else {} for r in _as_list(data.get("scenes"))]
+    if not data or len(rows) < len(story.scenes):
+        return ""
+    cast = {k: data[k] for k in _CAST_PARTS if data.get(k) is not None}
+    cast["scenes"] = {
+        sc.id: {k: rows[i][k] for k in _LINK_FIELDS if k in rows[i]}
+        for i, sc in enumerate(story.scenes)
+    }
+    out = json.dumps(cast)
+    try:
+        parse_set_build(set_text_from_cast(out, story.scenes), _copy_story(story))
+    except ScenarioError:
+        return ""
+    return out
+
+
+def _copy_story(story: Story) -> Story:
+    """A throwaway copy, so trial parses never tag the real scenes."""
+    return Story.from_dict(story.to_dict())
+
+
+def set_text_from_cast(cast_json: str, scenes: list[Scene]) -> str:
+    """The Set step's casting JSON rebuilt from a story's `cast_json`, with
+    the scene rows in the scenes' current order. "" when some scene has no
+    row (it was added later), so the film is cast afresh."""
+    data = _json_dict(cast_json)
+    links = data.get("scenes")
+    if not isinstance(links, dict) or any(sc.id not in links for sc in scenes):
+        return ""
+    body = {k: v for k, v in data.items() if k != "scenes"}
+    return json.dumps({**body, "scenes": [links[sc.id] for sc in scenes]})
+
+
+def _keyed(data: dict, part: str) -> dict[str, dict]:
+    """A cast part's items by lower-case key and name."""
+    out: dict[str, dict] = {}
+    for item in _as_list(data.get(part)):
+        if isinstance(item, dict):
+            for alias in (item.get("key"), item.get("name")):
+                if alias:
+                    out.setdefault(str(alias).strip().lower(), item)
+    return out
+
+
+def _item_look(item: dict) -> str:
+    """One cast item in the words a set asset's look() would use."""
+    name = _text(item.get("name"), 60)
+    bits = [_text(item.get("description")), _text(item.get("outfit"), 200)]
+    bits = [b for b in bits if b]
+    return f"{name} ({', '.join(bits)})" if bits else name
+
+
+def cast_looks(story: Story, scene: Scene) -> tuple[str, str]:
+    """(who is on screen, the place) for a scene from the story's
+    `cast_json`, before the Set step has made a set. ("", "") if unknown."""
+    data = _json_dict(story.cast_json)
+    row = (data.get("scenes") or {}).get(scene.id) if data else None
+    if not isinstance(row, dict):
+        return "", ""
+    people = _keyed(data, "characters")
+    who = [
+        _item_look(people[str(c).strip().lower()])
+        for c in _as_list(row.get("cast"))
+        if str(c).strip().lower() in people
+    ]
+    places = _keyed(data, "locations")
+    place = places.get(str(row.get("location") or "").strip().lower())
+    where = ""
+    if place:
+        where = _item_look(place)
+        if _text(place.get("time_of_day"), 40):
+            where += f", {_text(place.get('time_of_day'), 40)}"
+    return "; ".join(who), where
+
+
+def cast_names(story: Story) -> str:
+    """The cast's keys and names from `cast_json`, for a scene rewrite."""
+    data = _json_dict(story.cast_json)
+    lines = []
+    parts = (("characters", "Character"), ("locations", "Location"), ("props", "Prop"))
+    for part, label in parts:
+        for item in _as_list(data.get(part)):
+            if isinstance(item, dict) and item.get("name"):
+                lines.append(f"  {label} {item.get('key', '')}: {_item_look(item)}.")
+    return "\n".join(lines)
+
+
+def relink_scene(story: Story, scene: Scene, text: str, story_set=None) -> None:
+    """After a scene rewrite: point the scene at the cast its new JSON
+    names, in the set (scene links) or in the story's `cast_json` (its row).
+    Leaves the links alone when the reply names nobody."""
+    data = _json_dict(text)
+    row = {k: data[k] for k in _LINK_FIELDS if k in data}
+    if not row:
+        return
+    if story_set is not None:
+        parse_scene_links(json.dumps({"scenes": [row]}), story_set, [scene])
+        return
+    cast = _json_dict(story.cast_json)
+    if isinstance(cast.get("scenes"), dict):
+        cast["scenes"][scene.id] = row
+        story.cast_json = json.dumps(cast)
+
+
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
@@ -957,7 +1139,10 @@ def _set_cast_rules(story_set) -> str:
     """Scenario rules that make the story use a saved set's cast and places."""
     if story_set is None:
         return ""
-    lines = ["- Use this cast and these places. Describe them as written here."]
+    lines = [
+        "- Use this cast and these places. Their looks are fixed here: call "
+        "them by name in the visuals."
+    ]
     for c in story_set.on_screen():
         lines.append(f"  Character {c.name}: {c.look()}.")
     for loc in story_set.locations:
@@ -990,6 +1175,31 @@ def _brand_rule(story: Story) -> str:
     )
 
 
+REFERENCE_PHOTO_NOTE = (
+    "The attached image is a photo of the main character: match their face, "
+    "hair, build and look."
+)
+
+
+def scenario_media(story: Story, story_set=None) -> list[str]:
+    """Images sent with the scenario call: the Create step's reference photo
+    of the main character (a saved set already fixes the cast's looks)."""
+    return [story.reference_uri] if story.reference_uri and story_set is None else []
+
+
+def _main_character(story: Story, story_set) -> str:
+    """The Create step's main character text and reference photo, so the
+    writer builds the film around that person instead of inventing one."""
+    if story_set is not None:
+        return ""
+    lines = []
+    if story.character.strip():
+        lines.append(f"Main character (keep this look): {story.character.strip()}")
+    if scenario_media(story):
+        lines.append(REFERENCE_PHOTO_NOTE)
+    return "\n" + "\n".join(lines) if lines else ""
+
+
 def scenario_prompt(story: Story, story_set=None) -> str:
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cams = ", ".join(CAMERA_IDS)
@@ -998,21 +1208,22 @@ def scenario_prompt(story: Story, story_set=None) -> str:
         if story.camera in CAMERA_IDS
         else f"Pick the best camera move for each scene from: {cams}."
     )
+    casting = scenario_casts(story_set)
     links = (
         ', "cast": [str], "location": str, "props": [str], "speaker": str'
-        if story_set is not None
+        if story_set is not None or casting
         else ""
     )
+    cast_shape = f", {CAST_JSON_SHAPE}" if casting else ""
     brief = (
         f'\nBrief (from an earlier pass; improve it, keep what the user edited): """{story.brief.strip()}"""'
         if story.brief.strip()
         else ""
     )
-    return f"""You are a film director and screenwriter.
-Turn the idea below into a short film of exactly {story.scene_count} scenes,
+    return f"""Turn the idea below into a short film of exactly {story.scene_count} scenes,
 each about {story.duration} seconds long. Visual style: {style["label"]}.
 
-Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}
+Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}{_main_character(story, story_set)}
 
 Rules:
 - Write the title and every narration line in {story.language}.
@@ -1022,45 +1233,185 @@ Rules:
   its "seconds" for a longer spoken scene.
 {_speech_rules(story)}
 - Visual: a detailed, self-contained description of what the camera sees
-  (subject, action, setting, lighting). Keep the main character's look
-  identical in every scene and describe it each time. Every person is
-  {NOT_FAMOUS}: give them one or two distinctive details (for example
-  greying temples, freckles, glasses, a small scar). Write visuals in English.
+  (subject, action, expression, framing, setting details, lighting). Call
+  each person and place by their name from the cast and do not describe
+  their face, hair, build or clothes there: the cast holds their looks, the
+  same in every shot. Every person is {NOT_FAMOUS}. Write visuals in English.
 - {cam_rule}
-- Build a clear beginning, middle and end.{_set_cast_rules(story_set)}{_brand_rule(story)}
+- Build a clear beginning, middle and end.{_set_cast_rules(story_set)}{_scenario_cast_rules(casting)}{_brand_rule(story)}
 - "brief": first, rewrite the idea as a clear, vivid film brief in English
   (3 to 5 sentences: subject, audience, tone, arc, setting and look). Keep
   everything the idea asks for and add nothing that contradicts it. Then
   write the scenes from the brief.
 
-Return only JSON: {{"brief": str, "title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str{links}}}]}}"""
+Return only JSON: {{"brief": str, "title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str{links}}}]{cast_shape}}}"""
 
 
-def set_build_prompt(story: Story) -> str:
-    """Ask Gemini for the story's cast, places and props, with a fixed look
-    and voice for each, and which of them appear in every scene."""
-    style = STYLE_BY_ID.get(story.style, STYLES[0])
+# System instructions: the role and the craft rules that never change. The
+# story's own settings and the idea go in the user message.
+SCENARIO_SYSTEM = (
+    "You are a film director and screenwriter. You turn a short idea into a "
+    "short film that image and video models shoot one scene at a time, so "
+    "every scene's visual must stand on its own as a shot description, and "
+    "the scenes together must tell one story with a clear beginning, middle "
+    "and end. Follow the user's rules and settings exactly, keep everything "
+    "the idea asks for, and never add anything that contradicts it."
+)
+CASTING_SYSTEM = (
+    "You are a casting director and production designer. You fix how every "
+    "person, place and object in a short film looks and sounds, in plain, "
+    "fixed wording that an image model can paint the same way every time."
+)
+
+
+def _str() -> dict:
+    return {"type": "string"}
+
+
+def _str_list() -> dict:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+def _links_schema() -> dict:
+    """Per-scene links to the set: keys (or names) of who, where and what."""
+    return {
+        "cast": _str_list(),
+        "location": _str(),
+        "props": _str_list(),
+        "speaker": _str(),
+    }
+
+
+def cast_schema() -> dict:
+    """JSON-schema properties for a film's cast, places and props."""
+    voice = {
+        "type": "object",
+        "properties": {
+            "tts_voice": {"type": "string", "enum": list(VOICES)},
+            "style": _str(),
+            "description": _str(),
+        },
+        "required": ["tts_voice", "style", "description"],
+    }
+    item = {"key": _str(), "name": _str(), "description": _str()}
+    return {
+        "characters": {
+            "type": "array",
+            "maxItems": SET_MAX_CHARACTERS,
+            "items": {
+                "type": "object",
+                "properties": {**item, "outfit": _str(), "voice": voice},
+                "required": ["key", "name", "description", "outfit", "voice"],
+            },
+        },
+        "narrator": {
+            "type": "object",
+            "properties": {
+                "tts_voice": {"type": "string", "enum": list(VOICES)},
+                "style": _str(),
+            },
+        },
+        "locations": {
+            "type": "array",
+            "maxItems": SET_MAX_LOCATIONS,
+            "items": {
+                "type": "object",
+                "properties": {**item, "time_of_day": _str()},
+                "required": ["key", "name", "description"],
+            },
+        },
+        "props": {
+            "type": "array",
+            "maxItems": SET_MAX_PROPS,
+            "items": {
+                "type": "object",
+                "properties": item,
+                "required": ["key", "name", "description"],
+            },
+        },
+    }
+
+
+def scene_schema(with_links: bool = False) -> dict:
+    """JSON schema for one scene of the scenario."""
+    props = {
+        "narration": _str(),
+        "spoken": {"type": "boolean"},
+        "seconds": {"type": "integer"},
+        "visual": _str(),
+        "camera": {"type": "string", "enum": list(CAMERA_IDS)},
+    }
+    required = ["narration", "spoken", "visual", "camera"]
+    if with_links:
+        props.update(_links_schema())
+        required += ["cast", "location", "props", "speaker"]
+    return {"type": "object", "properties": props, "required": required}
+
+
+def scenario_schema(story: Story, story_set=None) -> dict:
+    """Response schema for the scenario call: exactly `scene_count` scenes,
+    a camera move from the presets, and the cast when there is no saved set
+    (scenario_casts)."""
+    casting = scenario_casts(story_set)
+    props = {
+        "brief": _str(),
+        "title": _str(),
+        "voice": _str(),
+        "scenes": {
+            "type": "array",
+            "minItems": story.scene_count,
+            "maxItems": story.scene_count,
+            "items": scene_schema(with_links=story_set is not None or casting),
+        },
+    }
+    required = ["brief", "title", "voice", "scenes"]
+    if casting:
+        props.update(cast_schema())
+        required += ["characters", "locations", "props"]
+    return {"type": "object", "properties": props, "required": required}
+
+
+def set_schema() -> dict:
+    """Response schema for the Set step's casting call."""
+    return {
+        "type": "object",
+        "properties": {
+            "name": _str(),
+            **cast_schema(),
+            "scenes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": _links_schema(),
+                    "required": ["cast", "location", "props", "speaker"],
+                },
+            },
+        },
+        "required": ["name", "characters", "locations", "props", "scenes"],
+    }
+
+
+def scenario_casts(story_set) -> bool:
+    """The scenario call also casts the film (no saved set yet)."""
+    return story_set is None
+
+
+# The cast part of the scenario and set JSON (as written in the prompts).
+CAST_JSON_SHAPE = (
+    '"characters": [{"key": str, "name": str, "description": str, '
+    '"outfit": str, "voice": {"tts_voice": str, "style": str, '
+    '"description": str}}], "narrator": {"tts_voice": str, "style": str} | '
+    'null, "locations": [{"key": str, "name": str, "description": str, '
+    '"time_of_day": str}], "props": [{"key": str, "name": str, '
+    '"description": str}]'
+)
+
+
+def _cast_item_rules() -> str:
+    """How to write the cast: the same rules for the scenario and the Set
+    step's casting call."""
     voices = ", ".join(f"{v} ({VOICE_GENDER.get(v, '')})" for v in VOICES)
-    scenes = "\n".join(
-        f"{i + 1}. [{'spoken on camera' if sc.spoken else 'narrator'}] "
-        f"{sc.visual} | Line: {sc.narration}"
-        for i, sc in enumerate(story.scenes)
-    )
-    lead = (
-        f"\nMain character (keep this look, list them first): {story.character.strip()}"
-        if story.character.strip()
-        else ""
-    )
-    return f"""You are a casting director and production designer.
-Read this short film and list everything that must look and sound the same
-in every shot. Visual style: {style["label"]}.
-
-Idea: \"\"\"{story.idea.strip()}\"\"\"{lead}
-Scenes:
-{scenes}
-
-Rules:
-- Characters: the people (or creatures) who appear on screen, at most
+    return f"""- Characters: the people (or creatures) who appear on screen, at most
   {SET_MAX_CHARACTERS}. "description": age, build, face, skin, hair; fixed
   wording, no actions. "outfit": what they wear in every scene. Each person
   is {NOT_FAMOUS}: avoid stock "handsome leading man" or "model" wording and
@@ -1077,15 +1428,76 @@ Rules:
   "description": the empty place (no people), materials, light, colours.
 - Props: objects that matter to the story and recur, at most
   {SET_MAX_PROPS}. Often none.
-- Give every item a short "key" (c1, c2, l1, p1 ...). In "scenes", one entry
-  per scene in order: "cast" (keys on screen), "location" (key or ""),
+- Give every item a short "key" (c1, c2, l1, p1 ...)."""
+
+
+def _scenario_cast_rules(casting: bool) -> str:
+    """Scenario rules that make the writer cast the film in the same call,
+    so each look is written once and every scene points at it."""
+    if not casting:
+        return ""
+    return f"""
+- Cast the film too: list everyone and everything that must look and sound
+  the same in every shot. List the main character first. Write the cast in
+  English.
+{_cast_item_rules()}
+- For each scene also give "cast" (keys of the characters on screen),
+  "location" (a location key or ""), "props" (prop keys) and "speaker" (key
+  of who says a spoken line, or "")."""
+
+
+def set_build_prompt(story: Story) -> str:
+    """Ask Gemini for the story's cast, places and props, with a fixed look
+    and voice for each, and which of them appear in every scene."""
+    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    scenes = "\n".join(
+        f"{i + 1}. [{'spoken on camera' if sc.spoken else 'narrator'}] "
+        f"{sc.visual} | Line: {sc.narration}"
+        for i, sc in enumerate(story.scenes)
+    )
+    lead = (
+        f"\nMain character (keep this look, list them first): {story.character.strip()}"
+        if story.character.strip()
+        else ""
+    )
+    return f"""Read this short film and list everything that must look and sound the same
+in every shot. Visual style: {style["label"]}.
+
+Idea: \"\"\"{story.idea.strip()}\"\"\"{lead}
+Scenes:
+{scenes}
+
+Rules:
+{_cast_item_rules()}
+- In "scenes", one entry per scene in order: "cast" (keys on screen), "location" (key or ""),
   "props" (keys), "speaker" (key of who says a spoken line, else "").
 - Write everything in English.
 
 Return only JSON: {{"name": str, "characters": [{{"key": str, "name": str, "description": str, "outfit": str, "voice": {{"tts_voice": str, "style": str, "description": str}}}}], "narrator": {{"tts_voice": str, "style": str}} | null, "locations": [{{"key": str, "name": str, "description": str, "time_of_day": str}}], "props": [{{"key": str, "name": str, "description": str}}], "scenes": [{{"cast": [str], "location": str, "props": [str], "speaker": str}}]}}"""
 
 
-def scene_regen_prompt(story: Story, index: int) -> str:
+def _regen_cast_rules(story: Story, story_set) -> str:
+    """The cast a rewritten scene must reuse: the set's, or the cast the
+    scenario wrote before there is a set."""
+    if story_set is not None:
+        return _set_cast_rules(story_set)
+    names = cast_names(story)
+    if not names:
+        return ""
+    return (
+        "\n- Use this cast and these places. Their looks are fixed here: call "
+        "them by name in the visual.\n" + names + '\n- Also give "cast" (keys of '
+        'the characters on screen), "location" (a location key or ""), "props" '
+        '(prop keys) and "speaker" (key of who says a spoken line, or "").'
+    )
+
+
+def regen_links(story: Story, story_set) -> bool:
+    """A scene rewrite also says who and where the scene is."""
+    return story_set is not None or bool(cast_names(story))
+
+
+def scene_regen_prompt(story: Story, index: int, story_set=None) -> str:
     before = (
         story.scenes[index - 1].visual if index > 0 else "(this is the first scene)"
     )
@@ -1095,7 +1507,12 @@ def scene_regen_prompt(story: Story, index: int) -> str:
         else "(this is the last scene)"
     )
     current = story.scenes[index]
-    return f"""You are a film director. Rewrite scene {index + 1} of the film
+    links = (
+        ', "cast": [str], "location": str, "props": [str], "speaker": str'
+        if regen_links(story, story_set)
+        else ""
+    )
+    return f"""Rewrite scene {index + 1} of the film
 "{story.title}" with a fresh idea that still fits between its neighbours.
 Idea of the film: {story.idea}
 Previous scene: {before}
@@ -1103,8 +1520,8 @@ Next scene: {after}
 Current scene (replace it): {current.visual}
 Narration in {story.language} (at most {max_words(current.duration)} words),
 visual in English, one camera move from: {", ".join(CAMERA_IDS)}.
-{_scene_speech_rule(story, current)}
-Return only JSON: {{"narration": str, "spoken": bool, "visual": str, "camera": str}}"""
+{_scene_speech_rule(story, current)}{_regen_cast_rules(story, story_set)}
+Return only JSON: {{"narration": str, "spoken": bool, "visual": str, "camera": str{links}}}"""
 
 
 def _scene_speech_rule(story: Story, current: Scene) -> str:
@@ -1240,11 +1657,24 @@ def refs_sentence(labels: list[str]) -> str:
 
 
 def _cast_text(story: Story, scene: Scene, story_set) -> str:
-    """Who is on screen: the scene's cast looks, else the story's character."""
+    """Who is on screen: the scene's cast looks, else the cast the scenario
+    wrote (no set yet), else the story's character."""
     cast = scene_cast(story_set, scene)
     if cast:
         return "; ".join(c.look() for c in cast)
+    if story_set is None:
+        who, _ = cast_looks(story, scene)
+        if who:
+            return who
     return story.character
+
+
+def _names_cast(story: Story, scene: Scene, story_set) -> bool:
+    """The scene's people come from a cast (a set, or the scenario's own),
+    not from the story's one-line character."""
+    if scene_cast(story_set, scene):
+        return True
+    return story_set is None and bool(cast_looks(story, scene)[0])
 
 
 # How frame_prompt names the take's first frame among the reference images.
@@ -1281,7 +1711,7 @@ def frame_prompt(
             "screen or board, and the same people in the same places. Only "
             "the camera framing and the action change, as described."
         )
-    cast = scene_cast(story_set, scene)
+    cast = _names_cast(story, scene, story_set)
     who = _cast_text(story, scene, story_set)
     character = f" {'On screen' if cast else 'Main character'}: {who}." if who else ""
     loc = (
@@ -1289,7 +1719,10 @@ def frame_prompt(
         if story_set and scene.location_id
         else None
     )
-    place = f" Place: {loc.look()}." if loc else ""
+    where = loc.look() if loc else ""
+    if story_set is None and not where:
+        where = cast_looks(story, scene)[1]
+    place = f" Place: {where}." if where else ""
     people = ""
     if who:
         people = f" Every person is {NOT_FAMOUS}."
@@ -1344,7 +1777,7 @@ def clip_prompt(
     cam = CAMERA_PRESETS.get(scene.camera, CAMERA_PRESETS["static"])["prompt"]
     cast_text = _cast_text(story, scene, story_set)
     base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
-    if scene_cast(story_set, scene):
+    if _names_cast(story, scene, story_set):
         base += f" On screen: {cast_text}."
     base += refs_sentence(ref_labels or [])
     if continuing:

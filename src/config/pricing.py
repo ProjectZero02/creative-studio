@@ -46,6 +46,7 @@ SPEECH_PER_MILLION_CHARS = (
 # Gemini text: (input, output) dollars per million tokens.
 TOKENS_PER_MILLION = (
     ("pro", (1.25, 10.0)),
+    ("neon", (3.0, 15.0)),  # Gemini 4 Neon
     ("flash-lite", (0.10, 0.40)),
     ("flash", (0.30, 2.50)),
     ("live", (0.50, 2.00)),

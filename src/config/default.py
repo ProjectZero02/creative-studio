@@ -120,8 +120,8 @@ class Default:
     LIVE_AGENT_OFFLINE: bool = (
         os.environ.get("LIVE_AGENT_OFFLINE", "false").lower() == "true"
     )
-    # Newest Flash-tier Gemini (3.8 Flash; served from GEMINI_LOCATION=global).
-    MODEL_ID: str = os.environ.get("MODEL_ID", "gemini-3.8-flash")
+    # Newest Gemini text model (Gemini 4 Neon; served from GEMINI_LOCATION=global).
+    MODEL_ID: str = os.environ.get("MODEL_ID", "gemini-4-neon")
     INIT_VERTEX: bool = True
     GEMINI_IMAGE_GEN_MODEL: str = os.environ.get(
         "GEMINI_IMAGE_GEN_MODEL",
@@ -137,33 +137,38 @@ class Default:
 
     GEMINI_AUDIO_ANALYSIS_MODEL_ID: str = os.environ.get(
         "GEMINI_AUDIO_ANALYSIS_MODEL_ID",
-        "gemini-3.5-flash-lite",  # newest Flash-Lite; takes audio input
+        "gemini-4-neon",  # newest Gemini; takes audio input
     )
     # Gemini Writers Workshop: the model picker offers exactly these models, and
     # GEMINI_WRITERS_WORKSHOP_MODEL_ID is the one preselected (it is added to the
     # picker if it is not already listed).
     GEMINI_WRITERS_WORKSHOP_MODELS: tuple[str, ...] = _csv_env(
         "GEMINI_WRITERS_WORKSHOP_MODELS",
-        ("gemini-4-argon", "gemini-3.8-flash"),
+        ("gemini-4-neon", "gemini-4-argon", "gemini-3.8-flash"),
     )
     GEMINI_WRITERS_WORKSHOP_MODEL_ID: str = os.environ.get(
         "GEMINI_WRITERS_WORKSHOP_MODEL_ID",
-        "gemini-4-argon",
+        "gemini-4-neon",
     )
     # Storyboarder Narrative Writer: the model picker offers exactly these
     # models, and GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID is the one preselected
     # (it is added to the picker if it is not already listed).
     GEMINI_STORYBOARDER_NARRATIVE_MODELS: tuple[str, ...] = _csv_env(
         "GEMINI_STORYBOARDER_NARRATIVE_MODELS",
-        ("gemini-3.8-flash", "gemini-4-argon", "gemini-3.5-flash-lite"),
+        (
+            "gemini-4-neon",
+            "gemini-3.8-flash",
+            "gemini-4-argon",
+            "gemini-3.5-flash-lite",
+        ),
     )
     GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID: str = os.environ.get(
         "GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID",
-        "gemini-3.8-flash",
+        "gemini-4-neon",
     )
     GEMINI_CRITIQUE_MODEL_ID: str = os.environ.get(
         "GEMINI_CRITIQUE_MODEL_ID",
-        "gemini-3.8-flash",
+        "gemini-4-neon",
     )
     GEMINI_CRITIQUE_LOCATION: str = os.environ.get(
         "GEMINI_CRITIQUE_LOCATION",
@@ -387,9 +392,7 @@ class Default:
     STORY_LIVE_SETTINGS_MODEL: str = os.environ.get(
         "STORY_LIVE_SETTINGS_MODEL", "gemini-3.5-flash-lite"
     )
-    STORY_SCENARIO_MODEL_ID: str = os.environ.get(
-        "STORY_SCENARIO_MODEL_ID", os.environ.get("MODEL_ID", "gemini-3.5-flash")
-    )
+    STORY_SCENARIO_MODEL_ID: str = os.environ.get("STORY_SCENARIO_MODEL_ID", MODEL_ID)
     STORY_TTS_MODEL: str = os.environ.get("STORY_TTS_MODEL", "gemini-2.5-flash-tts")
     STORY_CROSSFADE_SECONDS: float = float(
         os.environ.get("STORY_CROSSFADE_SECONDS", 0.5)

@@ -29,6 +29,8 @@ def test_estimates_follow_the_billing_units():
     assert pricing.estimate("chirp-3-hd", {"characters_synthesized": 1_000_000}) == pytest.approx(30)
     text = pricing.estimate("gemini-3.5-flash", {"prompt_tokens": 1_000_000, "candidates_tokens": 1_000_000})
     assert text == pytest.approx(2.8)
+    neon = pricing.estimate("gemini-4-neon", {"prompt_tokens": 1_000_000, "candidates_tokens": 1_000_000})
+    assert neon == pytest.approx(18.0)
     assert pricing.estimate("veo-3.1", {"video_seconds_generated": 8}, "failure") == 0
 
 

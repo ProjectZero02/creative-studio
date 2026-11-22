@@ -62,9 +62,12 @@ def _request(**overrides) -> VideoGenerationRequest:
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("MODEL_ID", "gemini-3.8-flash"),
-        ("GEMINI_CRITIQUE_MODEL_ID", "gemini-3.8-flash"),
-        ("GEMINI_AUDIO_ANALYSIS_MODEL_ID", "gemini-3.5-flash-lite"),
+        ("MODEL_ID", "gemini-4-neon"),
+        ("GEMINI_CRITIQUE_MODEL_ID", "gemini-4-neon"),
+        ("GEMINI_AUDIO_ANALYSIS_MODEL_ID", "gemini-4-neon"),
+        ("GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID", "gemini-4-neon"),
+        ("STORY_SCENARIO_MODEL_ID", "gemini-4-neon"),
+        ("STORY_LIVE_SETTINGS_MODEL", "gemini-3.5-flash-lite"),
         ("GEMINI_IMAGE_GEN_MODEL", "gemini-nano-banana-2.1"),
         ("LIVE_MODEL", "gemini-3.8-live"),
         ("OMNI_MODEL_ID", OMNI),
@@ -281,3 +284,23 @@ def test_character_consistency_routes_omni_through_workflow_video() -> None:
         cc.generate_workflow_image_to_video
         is workflow_video.generate_workflow_image_to_video
     )
+
+
+# --- thinking settings -------------------------------------------------------
+
+
+def test_gemini_4_models_get_no_thinking_budget() -> None:
+    from models.thinking import dynamic_thinking, uses_thinking_level
+
+    # A thinking budget is a 400 error on Gemini 4; they think by default.
+    assert uses_thinking_level("gemini-4-neon") and uses_thinking_level("gemini-4-argon")
+    assert dynamic_thinking("gemini-4-neon") is None
+    assert dynamic_thinking("gemini-3.8-flash").thinking_budget == -1
+
+
+def test_default_text_model_gets_a_thinking_setting_it_accepts() -> None:
+    from models.thinking import dynamic_thinking
+
+    model = _default("CHARACTER_CONSISTENCY_GEMINI_MODEL")
+    config = dynamic_thinking(model)
+    assert config is None or config.thinking_budget is None
