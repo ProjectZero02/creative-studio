@@ -253,18 +253,30 @@ def _fix_starter(job: LiveJob):
     return lambda story_id, owner: story_fix.start_fix(story_id, owner, plan)
 
 
-def run_story_job(job: LiveJob) -> RunResult:
-    """LiveJobs runner for kind='story': starts one story_jobs step and waits."""
-    story_id = str(job.params.get("story_id") or "")
-    action = str(job.params.get("story_action") or "")
-    starter = _STARTERS.get(action)
-    if action == "fix":
-        starter = _fix_starter(job)
-    if not story_id or starter is None:
-        raise ValueError(f"Invalid story job action: {action or 'missing'}")
+# The Story Studio page that shows each action while it runs.
+_STEP_PAGE = {
+    "scenario": "scenario",
+    "approve": "set",
+    "set": "set",
+    "storyboard": "storyboard",
+    "video": "video",
+    "music": "video",
+    "export": "video",
+    "fix": "video",
+}
 
+
+def step_page(action: str) -> str:
+    """The Story Studio step to show while `action` runs."""
+    return _STEP_PAGE.get(action, "scenario")
+
+
+def _run_step(job: LiveJob, story_id: str, action: str, starter) -> None:
+    """Start one story_jobs step, show its page, and wait for it to finish."""
     sjob = starter(story_id, job.owner)
     job.params["story_job_id"] = sjob.id
+    job.params["story_step"] = step_page(action)
+    job.progress()
 
     deadline = time.time() + MAX_WAIT_S
     while time.time() < deadline:
@@ -279,6 +291,43 @@ def run_story_job(job: LiveJob) -> RunResult:
         raise RuntimeError("The story step timed out.")
     if sjob.status == story_jobs.FAILED:
         raise RuntimeError(sjob.message or f"Story {action} failed.")
+
+
+def _run_all(job: LiveJob, story_id: str) -> None:
+    """Every remaining step in turn (approve, set, storyboard, film), each
+    shown on its page as it runs."""
+    for _ in range(len(_STARTERS) + 2):  # each pass moves at least one step
+        story = story_jobs.get_store().get(story_id, job.owner)
+        if story is None:
+            raise RuntimeError("Story not found.")
+        action = next_step_action(story)
+        if action == "done":
+            return
+        if action == "approve":
+            approve_story(story_id, job.owner)
+            job.params["story_job_id"] = ""
+            job.params["story_step"] = step_page(action)
+            job.progress()
+            continue
+        _run_step(job, story_id, action, _STARTERS[action])
+    raise RuntimeError("The film did not finish its steps.")
+
+
+def run_story_job(job: LiveJob) -> RunResult:
+    """LiveJobs runner for kind='story': runs one story_jobs step (or, for
+    the action "all", every remaining step) and waits."""
+    story_id = str(job.params.get("story_id") or "")
+    action = str(job.params.get("story_action") or "")
+    starter = _STARTERS.get(action)
+    if action == "fix":
+        starter = _fix_starter(job)
+    if not story_id or (starter is None and action != "all"):
+        raise ValueError(f"Invalid story job action: {action or 'missing'}")
+
+    if action == "all":
+        _run_all(job, story_id)
+    else:
+        _run_step(job, story_id, action, starter)
 
     story = story_jobs.get_store().get(story_id, job.owner)
     if story is None:
