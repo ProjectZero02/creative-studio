@@ -31,6 +31,7 @@ from common.analytics import get_logger
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common.prompt_prefill import prefill_prompt
+from common.studio_history import hydrate_studio_history
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
@@ -90,6 +91,15 @@ def on_voice_load(e: me.LoadEvent):  # pylint: disable=unused-argument
     # The sample scripts count as empty; the user's own script never does.
     if prefill_prompt(state, "text", empty_values=(DEFAULT_SCRIPT, DEFAULT_DIALOGUE)):
         state.text_key += 1  # redraw the script box with the idea
+    owner = getattr(me.state(AppState), "user_email", "")
+    hydrate_studio_history(
+        state,
+        owner,
+        "voice",
+        prompt_field="history_texts",
+        include_aspect=False,
+        skip_if_populated=mock_enabled(),
+    )
     yield
 
 
@@ -795,7 +805,17 @@ def legacy_on_load(engine: str):
     """on_load for an old route: preselect its engine on the Voice page."""
 
     def on_load(e: me.LoadEvent):  # pylint: disable=unused-argument
-        _set_engine(me.state(VoiceState), engine)
+        state = me.state(VoiceState)
+        _set_engine(state, engine)
+        owner = getattr(me.state(AppState), "user_email", "")
+        hydrate_studio_history(
+            state,
+            owner,
+            "voice",
+            prompt_field="history_texts",
+            include_aspect=False,
+            skip_if_populated=mock_enabled(),
+        )
         yield
 
     return on_load

@@ -266,3 +266,24 @@ def apply_recent_assets(
     state.history_meta = [a.meta for a in assets]
     if include_aspect:
         state.history_aspects = [a.aspect for a in assets]
+
+
+def hydrate_studio_history(
+    state: object,
+    owner: str,
+    studio: str,
+    *,
+    prompt_field: str = "history_prompts",
+    include_aspect: bool = True,
+    skip_if_populated: bool = False,
+) -> None:
+    """Load recent Library assets for ``studio`` into ``state``."""
+    if skip_if_populated and getattr(state, "history_urls", None):
+        return
+    assets = load_recent_assets(owner, studio)
+    apply_recent_assets(
+        state,
+        assets,
+        prompt_field=prompt_field,
+        include_aspect=include_aspect,
+    )

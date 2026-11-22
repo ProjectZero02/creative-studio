@@ -25,6 +25,7 @@ from common.i18n import t, tr
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, placeholder_image
 from common.prompt_prefill import prefill_prompt
+from common.studio_history import hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
@@ -1573,6 +1574,13 @@ def on_load(e: me.LoadEvent):
             )
     if prefill_prompt(state, "prompt"):
         state.prompt_key += 1  # redraw the composer with the idea
+    owner = getattr(me.state(AppState), "user_email", "")
+    hydrate_studio_history(
+        state,
+        owner,
+        "gemini_image_generation",
+        skip_if_populated=mock_enabled(),
+    )
     yield
 
 

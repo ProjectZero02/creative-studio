@@ -40,6 +40,7 @@ from common.utils import (
 from common.veo_utils import start_async_veo_job
 from common.mock_generation import fake_wait, mock_enabled, sample_video
 from common.prompt_prefill import prefill_prompt
+from common.studio_history import hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
@@ -136,6 +137,13 @@ def on_veo_load(e: me.LoadEvent):
     # ?prompt= from the home page wins over the image default, never over the
     # user's own text.
     prefill_prompt(state, "veo_prompt_input", empty_values=(_I2V_DEFAULT_PROMPT,))
+    owner = getattr(me.state(AppState), "user_email", "")
+    hydrate_studio_history(
+        state,
+        owner,
+        "veo",
+        skip_if_populated=mock_enabled(),
+    )
     yield
 
 

@@ -24,6 +24,7 @@ from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common import prompt_settings
 from common.i18n import t, tr
 from common.prompt_prefill import prefill_prompt
+from common.studio_history import hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
@@ -78,6 +79,14 @@ def on_lyria_load(e: me.LoadEvent):  # pylint: disable=unused-argument
         # The composer shows music_prompt_placeholder; keep both in step.
         state.music_prompt_placeholder = state.music_prompt_input
         state.music_prompt_textarea_key += 1  # redraw the prompt box
+    owner = getattr(me.state(AppState), "user_email", "")
+    hydrate_studio_history(
+        state,
+        owner,
+        "lyria",
+        include_aspect=False,
+        skip_if_populated=mock_enabled(),
+    )
     yield
 
 

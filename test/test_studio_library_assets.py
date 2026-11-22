@@ -344,3 +344,130 @@ def test_apply_recent_assets_preserves_existing_state_when_empty():
     assert state.history_meta == ["model"]
     assert state.history_aspects == ["16:9"]
 
+
+# --- Studio page on_load wiring ----------------------------------------------
+
+
+def _run_page_load(handler, page_state, app_state, params=None):
+    from state.state import AppState
+
+    def fake_state(cls):
+        return app_state if cls is AppState else page_state
+
+    with (
+        patch("mesop.query_params", params or {}),
+        patch("mesop.state", side_effect=fake_state),
+    ):
+        list(handler(MagicMock()))
+
+
+def test_image_studio_on_load_pulls_recent_library_assets(monkeypatch):
+    from pages import gemini_image_generation as img_page
+
+    page_state = SimpleNamespace(
+        uploaded_image_gcs_uris=[],
+        uploaded_image_display_urls=[],
+        prompt="",
+        prompt_prefill_seen="",
+        prompt_key=0,
+        history_urls=[],
+        history_prompts=[],
+        history_meta=[],
+        history_aspects=[],
+    )
+    app_state = SimpleNamespace(user_email="alice@example.com")
+    sample = [
+        studio_history.RecentAsset(
+            "/media/b/img1.png", "A fox", "Nano Banana 2.1 · 1:1", "1:1"
+        )
+    ]
+    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "gemini_image_generation") else [])
+
+    _run_page_load(img_page.on_load, page_state, app_state)
+
+    assert page_state.history_urls == ["/media/b/img1.png"]
+    assert page_state.history_prompts == ["A fox"]
+    assert page_state.history_meta == ["Nano Banana 2.1 · 1:1"]
+    assert page_state.history_aspects == ["1:1"]
+
+
+def test_video_studio_on_load_pulls_recent_library_assets(monkeypatch):
+    from pages import veo as veo_page
+
+    page_state = SimpleNamespace(
+        veo_prompt_input="",
+        prompt_prefill_seen="",
+        history_urls=[],
+        history_prompts=[],
+        history_meta=[],
+        history_aspects=[],
+    )
+    app_state = SimpleNamespace(user_email="alice@example.com")
+    sample = [
+        studio_history.RecentAsset(
+            "/media/b/vid1.mp4", "Waves", "Veo 3.1 · 720p · 8s", "16:9"
+        )
+    ]
+    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "veo") else [])
+
+    _run_page_load(veo_page.on_veo_load, page_state, app_state)
+
+    assert page_state.history_urls == ["/media/b/vid1.mp4"]
+    assert page_state.history_prompts == ["Waves"]
+    assert page_state.history_aspects == ["16:9"]
+
+
+def test_music_studio_on_load_pulls_recent_library_assets(monkeypatch):
+    from pages import lyria as lyria_page
+
+    page_state = SimpleNamespace(
+        music_prompt_input="",
+        music_prompt_placeholder="",
+        music_prompt_textarea_key=0,
+        prompt_prefill_seen="",
+        history_urls=[],
+        history_prompts=[],
+        history_meta=[],
+    )
+    app_state = SimpleNamespace(user_email="alice@example.com")
+    sample = [
+        studio_history.RecentAsset(
+            "/media/b/music1.wav", "Warm lo-fi", "lyria-3-pro-preview", ""
+        )
+    ]
+    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "lyria") else [])
+
+    _run_page_load(lyria_page.on_lyria_load, page_state, app_state)
+
+    assert page_state.history_urls == ["/media/b/music1.wav"]
+    assert page_state.history_prompts == ["Warm lo-fi"]
+    assert page_state.history_meta == ["lyria-3-pro-preview"]
+
+
+def test_voice_studio_on_load_pulls_recent_library_assets(monkeypatch):
+    from pages import voice as voice_page
+
+    page_state = SimpleNamespace(
+        engine="gemini-3.8-tts",
+        text="",
+        text_key=0,
+        prompt_prefill_seen="",
+        history_urls=[],
+        history_texts=[],
+        history_meta=[],
+    )
+    app_state = SimpleNamespace(user_email="alice@example.com")
+    sample = [
+        studio_history.RecentAsset(
+            "/media/b/voice1.wav", "Hello world", "Gemini 3.8 TTS · Kore", ""
+        )
+    ]
+    monkeypatch.setattr(studio_history, "load_recent_assets", lambda owner, studio: sample if (owner == "alice@example.com" and studio == "voice") else [])
+
+    _run_page_load(voice_page.on_voice_load, page_state, app_state)
+
+    assert page_state.history_urls == ["/media/b/voice1.wav"]
+    assert page_state.history_texts == ["Hello world"]
+    assert page_state.history_meta == ["Gemini 3.8 TTS · Kore"]
+
+
