@@ -48,6 +48,8 @@ from google.genai import types
 
 from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE, VOICES as VOICE_NAMES
 from services.live_jobs import DONE, FAILED, JobLimitError, LiveJob, LiveJobs
+from services.story_models import ASPECT_RATIOS as STORY_ASPECTS
+from services.story_models import STEP_IDS, STYLES
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,28 @@ JOB_PAGE = {
     "story": "/story",
 }
 UI_TIMEOUT_S = 10.0
+# How long a story tool waits for its background step to start before it
+# opens the page, so the page can follow that step's progress.
+STORY_START_WAIT_S = 3.0
+
+IMAGE_ASPECTS = ("1:1", "16:9", "9:16", "4:3", "3:4")
+VIDEO_ASPECTS = ("16:9", "9:16")
+STORY_STYLES = tuple(s["id"] for s in STYLES)
+STORY_STEPS = tuple(s for s in STEP_IDS if s != "stories")
+# Tools the model keeps talking through (Behavior.NON_BLOCKING): media jobs,
+# and the fix planner, which watches the whole film with Gemini.
+NON_BLOCKING_TOOLS = {
+    "generate_image",
+    "edit_image",
+    "generate_video",
+    "generate_music",
+    "generate_voice",
+    "create_story",
+    "continue_story",
+    "render_film",
+    "plan_film_fix",
+    "run_film_fix",
+}
 
 SYSTEM_PROMPT = """You are the voice of GenMedia Studio, a creative studio built on Google's media models. You run the app for the presenter while an audience watches the screen.
 
@@ -95,8 +119,8 @@ How you work:
 - Use generate_image, edit_image, generate_video, generate_music, generate_voice and the Story Studio tools (create_story, continue_story, render_film, story_status, open_story). Job tools run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
 - Write rich prompts for the models from what the presenter says: subject, style, lighting, camera, or genre, instruments, mood. Keep their words and intent.
 - Jobs have short names: "image 1", "video 1", "music 1", "voice 1", "story 1". "The image" or "the story" means the latest one unless the presenter says otherwise. Say which one you act on.
-- When the presenter dislikes something in a finished film, call plan_film_fix with their words (and the moment in seconds if they name one). Say in one sentence what will change and whether it costs a new render, then wait for a yes before run_film_fix.
-- For Story Studio, move one step at a time with continue_story (approve scenario, build set, paint storyboard, then render film) so the presenter stays in control.
+- When the presenter dislikes something in a finished film, call plan_film_fix with their words (and the moment in seconds if they name one). Planning takes a little while: say you are watching the film, and keep talking if they speak. When the plan arrives, say in one sentence what will change and whether it costs a new render, then wait for a yes before run_film_fix.
+- For Story Studio, move one step at a time with continue_story (approve scenario, build set, paint storyboard, then render film) so the presenter stays in control. When they ask for the whole film in one go, call continue_story with all_steps true. The screen moves through each Story Studio page as the steps run; say which step is on screen.
 - edit_image needs a finished image. If it is still rendering, say so and offer to edit it once it is ready.
 - Use show_job to bring a result on screen, open_page to move between studios, download to save a file to the presenter's computer, and end_call when they say goodbye.
 - If a job fails, say why in plain words and offer to retry.
@@ -139,13 +163,21 @@ def _resolve_voice(voice: str) -> str:
     return DEFAULT_VOICE
 
 
-def _schema(props: dict[str, tuple[str, str]], required: list[str]) -> types.Schema:
+def _prop(
+    kind: str, desc: str, choices: list[str] | tuple[str, ...] = ()
+) -> types.Schema:
+    """One parameter. `choices` become a schema enum, so the model can only
+    send an allowed value."""
+    if choices:
+        return types.Schema(type=kind, description=desc, enum=list(choices))
+    return types.Schema(type=kind, description=desc)
+
+
+def _schema(props: dict[str, tuple], required: list[str]) -> types.Schema:
+    """`props` maps a name to (type, description) or (type, description, choices)."""
     return types.Schema(
         type="OBJECT",
-        properties={
-            name: types.Schema(type=kind, description=desc)
-            for name, (kind, desc) in props.items()
-        },
+        properties={name: _prop(*spec) for name, spec in props.items()},
         required=required,
     )
 
@@ -179,10 +211,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                     "Start an image job in Image Studio. Runs in the background; the result arrives later.",
                     {
                         "prompt": ("STRING", "A detailed image prompt."),
-                        "aspect_ratio": (
-                            "STRING",
-                            "1:1, 16:9, 9:16, 4:3 or 3:4. Default 1:1.",
-                        ),
+                        "aspect_ratio": ("STRING", "Default 1:1.", IMAGE_ASPECTS),
                     },
                     ["prompt"],
                     job,
@@ -215,7 +244,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                             "STRING",
                             "Optional: animate this finished image, e.g. 'image 1'.",
                         ),
-                        "aspect_ratio": ("STRING", "16:9 or 9:16. Default 16:9."),
+                        "aspect_ratio": ("STRING", "Default 16:9.", VIDEO_ASPECTS),
                     },
                     ["prompt"],
                     job,
@@ -246,6 +275,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                             f"Optional voice name (default {DEFAULT_VOICE}). Allowed: "
                             + ", ".join(VOICE_NAMES)
                             + ".",
+                            VOICE_NAMES,
                         ),
                         "language": (
                             "STRING",
@@ -267,14 +297,8 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                             "STRING",
                             "Optional total film length, e.g. '30 seconds' or '1 minute'.",
                         ),
-                        "aspect_ratio": (
-                            "STRING",
-                            "Optional: '16:9' or '9:16'.",
-                        ),
-                        "style": (
-                            "STRING",
-                            "Optional visual style: photographic, 2d, 3d, anime, or claymation.",
-                        ),
+                        "aspect_ratio": ("STRING", "Optional.", STORY_ASPECTS),
+                        "style": ("STRING", "Optional visual style.", STORY_STYLES),
                         "language": (
                             "STRING",
                             "Optional language name or code, e.g. 'English', 'Arabic', 'en-US'.",
@@ -285,12 +309,16 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "continue_story",
-                    "Advance a Story Studio film by one step (approve scenario, build set, paint storyboard, or render film).",
+                    "Advance a Story Studio film by one step (approve scenario, build set, paint storyboard, or render film), or with all_steps through every remaining step to the finished film. The screen follows each step.",
                     {
                         "story": (
                             "STRING",
                             "Optional story title or id. Empty means the latest story.",
-                        )
+                        ),
+                        "all_steps": (
+                            "BOOLEAN",
+                            "True to run every remaining step in turn (approve, set, storyboard, film) when the presenter asks for the whole film.",
+                        ),
                     },
                     [],
                     job,
@@ -309,14 +337,23 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "plan_film_fix",
-                    "Plan a Fix with AI for a finished Story Studio film: Gemini watches the film and decides what to change (lines, pictures, the set, music, cuts, or the story). Changes nothing yet.",
+                    "Plan a Fix with AI for a finished Story Studio film: Gemini watches the film and decides what to change (lines, pictures, the set, music, cuts, or the story). Changes nothing yet. Takes a little while; the plan arrives when it is ready.",
                     {
-                        "request": ("STRING", "What the presenter dislikes or wants changed, in their words."),
-                        "at_seconds": ("STRING", "Optional moment of the film in seconds, e.g. 12.5."),
-                        "story": ("STRING", "Optional story title or id. Empty means the latest story."),
+                        "request": (
+                            "STRING",
+                            "What the presenter dislikes or wants changed, in their words.",
+                        ),
+                        "at_seconds": (
+                            "NUMBER",
+                            "Optional moment of the film in seconds, e.g. 12.5.",
+                        ),
+                        "story": (
+                            "STRING",
+                            "Optional story title or id. Empty means the latest story.",
+                        ),
                     },
                     ["request"],
-                    screen,
+                    job,
                 ),
                 fd(
                     "run_film_fix",
@@ -344,7 +381,8 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                         ),
                         "step": (
                             "STRING",
-                            "Optional step: create, scenario, set, storyboard, editor, or video.",
+                            "Optional step to open (editor is Scenes, video is Edit).",
+                            STORY_STEPS,
                         ),
                     },
                     [],
@@ -369,7 +407,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 fd(
                     "open_page",
                     "Go to a page of the app.",
-                    {"page": ("STRING", "One of: " + ", ".join(PAGES))},
+                    {"page": ("STRING", "The page to open.", tuple(PAGES))},
                     ["page"],
                     screen,
                 ),
@@ -462,10 +500,13 @@ class LiveCall:
         self.mode = mode if mode in MODES else FILL
         # (story_id, FixPlan) waiting for the presenter's yes.
         self.pending_fix = None
+        self.planning = False  # plan_film_fix is running
         self.screen = "/home"
         self.ended = False
         self.latest_story_id = ""
         self._waiters: dict[str, asyncio.Future] = {}
+        # Story job id -> (story_jobs id, step) last put on screen.
+        self._story_view: dict[str, tuple[str, str]] = {}
 
     # -- browser round trips ----------------------------------------------
 
@@ -597,13 +638,34 @@ class LiveCall:
                 **(extra or {}),
             },
         )
+        # Open the page once the step runs, so it shows that step's progress
+        # (opened earlier, it finds no running job to follow).
+        end = asyncio.get_running_loop().time() + STORY_START_WAIT_S
+        while (
+            not job.params.get("story_job_id")
+            and job.status not in (DONE, FAILED)
+            and asyncio.get_running_loop().time() < end
+        ):
+            await asyncio.sleep(0.05)
+        await self.show_story(job, step)
+        return Deferred(job)
+
+    async def show_story(self, job: LiveJob, step: str = "") -> None:
+        """Put a story job's current step on screen, once per step."""
+        story_id = str(job.params.get("story_id") or "")
+        if not story_id:
+            return
+        step = str(job.params.get("story_step") or step or "scenario")
+        key = (str(job.params.get("story_job_id") or ""), step)
+        if self._story_view.get(job.id) == key:
+            return
+        self._story_view[job.id] = key
         await self.ui(
             "navigate",
-            {"page": "/story", "params": {"id": story.id, "step": step}},
+            {"page": "/story", "params": {"id": story_id, "step": step}},
             wait=False,
         )
         self.screen = "/story"
-        return Deferred(job)
 
     async def _tool_create_story(
         self,
@@ -625,7 +687,9 @@ class LiveCall:
         )
         return await self._start_story(story, "scenario", "scenario", story.idea)
 
-    async def _tool_continue_story(self, story: str = "") -> dict | Deferred:
+    async def _tool_continue_story(
+        self, story: str = "", all_steps: bool = False
+    ) -> dict | Deferred:
         from services import live_story
 
         found = live_story.resolve_story(self.owner, story, self.latest_story_id)
@@ -633,6 +697,11 @@ class LiveCall:
             return {"error": "There is no story yet. Create one first."}
         self.latest_story_id = found.id
         action = live_story.next_step_action(found)
+        if action != "done" and all_steps:
+            label = found.title or found.idea[:60]
+            return await self._start_story(
+                found, "all", live_story.step_page(action), f"whole film: {label}"
+            )
         if action == "done":
             return {
                 "story_id": found.id,
@@ -718,6 +787,8 @@ class LiveCall:
             seconds = float(at_seconds) if str(at_seconds).strip() else None
         except ValueError:
             seconds = None
+        self.pending_fix = None
+        self.planning = True
         try:
             plan = await asyncio.to_thread(
                 story_fix.plan_fix, found.id, self.owner, request, -1, seconds
@@ -725,6 +796,8 @@ class LiveCall:
         except Exception as exc:  # a planner failure is said, not raised
             logger.exception("Live: fix planning failed")
             return {"error": f"Could not plan the fix: {str(exc)[:160]}"}
+        finally:
+            self.planning = False
         if not plan.runnable:
             self.pending_fix = None
             return {"question": plan.question or "What exactly should change?"}
@@ -749,6 +822,10 @@ class LiveCall:
         import json
 
         if self.pending_fix is None:
+            if self.planning:
+                return {
+                    "error": "The fix plan is still being made. Wait for it, then ask."
+                }
             return {"error": "Plan the fix first with plan_film_fix."}
         story_id, plan = self.pending_fix
         self.pending_fix = None
@@ -931,6 +1008,12 @@ class ScriptedAgent:
                     else f"next: {out['next_action']}"
                 )
                 await self.say(f"{out['title']} is at {out['step']} ({film}).")
+        elif any(p in low for p in ("whole film", "all the steps", "finish the film")):
+            out = await self.call.run_tool("continue_story", {"all_steps": True})
+            if isinstance(out, Deferred):
+                await self.say(f"Making the whole film: {out.job.handle}.")
+            else:
+                await self.say(out.get("error") or out.get("note") or "Done.")
         elif any(p in low for p in ("render the film", "render film")):
             out = await self.call.run_tool("render_film", {})
             await self._started(out, "Rendering the film")
@@ -1018,7 +1101,7 @@ class ScriptedAgent:
         else:
             await self.say(
                 "Offline mode understands: image of…, video of…, music of…, say …, "
-                "make a story about …, next step, render the film, story status, "
+                "make a story about …, next step, the whole film, render the film, story status, "
                 "edit…, show image 1, download, open video."
             )
 
