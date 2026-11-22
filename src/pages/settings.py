@@ -1,0 +1,287 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Settings: one page for your preferences, brand, usage and account.
+
+Sections are listed on the left (a row of pills on phones), like the
+settings in Linear, Vercel and ChatGPT. General holds the switches; My
+brand, Usage and Account reuse those pages' bodies; admins also get links
+to Users and the system details (/config). Open a section directly with
+``/settings?section=usage``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import mesop as me
+
+from common.i18n import apply_lang, tr
+from common.identity import ANONYMOUS_USER_EMAIL
+from common.verified_identity import AUTH_MODE_SESSION, auth_mode
+from components.demo_flow.demo_flow import demo_mode_switch, mode_switch_value
+from components.header import header
+from components.page_scaffold import page_frame, page_scaffold
+from state.state import AppState
+
+
+@dataclass(frozen=True)
+class Section:
+    key: str
+    label: str
+    icon: str
+    admin: bool = False
+    signed_in: bool = False
+
+
+SECTIONS = [
+    Section("general", "General", "tune"),
+    Section("brand", "My brand", "palette"),
+    Section("usage", "Usage", "monitoring"),
+    Section("account", "Account", "lock", signed_in=True),
+    Section("admin", "Admin", "admin_panel_settings", admin=True),
+]
+
+
+@me.stateclass
+class SettingsState:
+    section: str = "general"
+
+
+def _session() -> bool:
+    return auth_mode() == AUTH_MODE_SESSION
+
+
+def _is_admin() -> bool:
+    # Without session sign-in (local runs, IAP) the old Settings page was
+    # open to everyone, so the admin section is too.
+    return (not _session()) or me.state(AppState).user_role == "admin"
+
+
+def _signed_in() -> bool:
+    email = me.state(AppState).user_email
+    return _session() and bool(email) and email != ANONYMOUS_USER_EMAIL
+
+
+def visible_sections() -> list[Section]:
+    return [
+        s
+        for s in SECTIONS
+        if (not s.admin or _is_admin()) and (not s.signed_in or _signed_in())
+    ]
+
+
+def _open(key: str):
+    """Show a section and load what it needs (generator)."""
+    keys = {s.key for s in visible_sections()}
+    key = key if key in keys else "general"
+    me.state(SettingsState).section = key
+    if key == "usage":
+        from pages import usage
+
+        yield from usage.on_load(None)
+    elif key == "brand":
+        from pages import brand
+
+        brand.on_load(None)
+        yield
+    elif key == "account":
+        from pages import account
+
+        yield from account.on_load(None)
+    else:
+        yield
+
+
+def on_load(e: me.LoadEvent):  # pylint: disable=unused-argument
+    yield from _open(me.query_params.get("section", "general"))
+
+
+def on_section(e: me.ClickEvent):
+    yield from _open((e.key or "").removeprefix("settings-nav-"))
+
+
+def on_theme_pick(e: me.ClickEvent):
+    s = me.state(AppState)
+    mode = "dark" if mode_switch_value(e) == "dark" else "light"
+    me.set_theme_mode(mode)
+    s.theme_mode = mode
+    s.theme_chosen = True
+    yield
+
+
+def on_lang_pick(e: me.ClickEvent):
+    apply_lang(me.state(AppState), mode_switch_value(e))
+    yield
+
+
+def on_auto_enhance(e: me.SlideToggleChangeEvent):  # pylint: disable=unused-argument
+    s = me.state(AppState)
+    s.auto_enhance = not s.auto_enhance
+    yield
+
+
+@me.page(
+    path="/settings",
+    title="Settings | GenMedia Studio",
+    on_load=on_load,
+    security_policy=me.SecurityPolicy(dangerously_disable_trusted_types=True),
+)
+def page():
+    with page_scaffold(page_name="settings"):  # pylint: disable=not-context-manager
+        settings_content()
+
+
+def _text(text: str, cls: str) -> None:
+    with me.box(classes=cls):
+        me.text(text)
+
+
+def _general() -> None:
+    app = me.state(AppState)
+    dark = me.theme_brightness() == "dark"
+    with me.box(classes="gm-set-card"):
+        with me.box(classes="gm-set-row"):
+            with me.box(classes="gm-set-row-text"):
+                _text(tr("settings.theme", "Appearance"), "gm-set-row-title")
+                _text(
+                    tr("settings.theme_desc", "Light or dark screens. Also in the top bar."),
+                    "gm-set-row-desc",
+                )
+            demo_mode_switch(
+                value="dark" if dark else "light",
+                options=[
+                    ("light", "Light", "Bright backgrounds"),
+                    ("dark", "Dark", "Dark backgrounds, easier at night"),
+                ],
+                on_click=on_theme_pick,
+                key="settings-theme",
+            )
+        with me.box(classes="gm-set-row"):
+            with me.box(classes="gm-set-row-text"):
+                _text(tr("settings.lang", "Language"), "gm-set-row-title")
+                _text(
+                    tr("settings.lang_desc", "The language of menus and buttons."),
+                    "gm-set-row-desc",
+                )
+            demo_mode_switch(
+                value=app.lang,
+                options=[("en", "English", ""), ("ar", "العربية", "")],
+                on_click=on_lang_pick,
+                key="settings-lang",
+            )
+        with me.box(classes="gm-set-row"):
+            with me.box(classes="gm-set-row-text"):
+                _text(tr("settings.enhance", "Improve my prompts"), "gm-set-row-title")
+                _text(
+                    tr(
+                        "settings.enhance_desc",
+                        "Short prompts get more detail from Gemini when you send them. "
+                        "Your own words stay in the box.",
+                    ),
+                    "gm-set-row-desc",
+                )
+            me.slide_toggle(
+                checked=app.auto_enhance,
+                on_change=on_auto_enhance,
+                key="settings-enhance",
+            )
+
+
+def _admin() -> None:
+    links = [
+        (
+            "/admin/users",
+            "group",
+            tr("settings.users", "Users"),
+            tr("settings.users_desc", "Add people, set roles and reset passwords."),
+        ),
+        (
+            "/config",
+            "dns",
+            tr("settings.system", "System details"),
+            tr(
+                "settings.system_desc",
+                "Project, storage, models and prompt templates for this deployment.",
+            ),
+        ),
+    ]
+    with me.box(classes="gm-set-card"):
+        for route, icon, title, desc in links:
+            if route == "/admin/users" and not _session():
+                continue
+            with me.box(classes="gm-set-row"):
+                with me.box(classes="gm-set-row-icon"):
+                    me.icon(icon)
+                with me.box(classes="gm-set-row-text"):
+                    _text(title, "gm-set-row-title")
+                    _text(desc, "gm-set-row-desc")
+                me.button(
+                    tr("settings.open", "Open"),
+                    key=f"settings-open-{route}",
+                    on_click=on_open_link,
+                    type="flat",
+                )
+
+
+def on_open_link(e: me.ClickEvent):
+    me.navigate((e.key or "").removeprefix("settings-open-") or "/settings")
+    yield
+
+
+def settings_content() -> None:
+    state = me.state(SettingsState)
+    sections = visible_sections()
+    current = state.section if state.section in {s.key for s in sections} else "general"
+    with page_frame():  # pylint: disable=not-context-manager
+        header(
+            tr("settings.title", "Settings"),
+            "settings",
+            description=tr(
+                "settings.purpose", "Your preferences, brand, usage and account."
+            ),
+            centered=True,
+        )
+        with me.box(classes="gm-settings"):
+            with me.box(classes="gm-set-nav"):
+                for s in sections:
+                    label = tr(f"settings.nav.{s.key}", s.label)
+                    with me.box(
+                        classes="gm-set-nav-item is-on"
+                        if s.key == current
+                        else "gm-set-nav-item"
+                    ):
+                        with me.content_button(
+                            key=f"settings-nav-{s.key}", on_click=on_section
+                        ):
+                            me.icon(s.icon)
+                            me.text(label)
+            with me.box(classes="gm-set-body"):
+                label = next(x.label for x in sections if x.key == current)
+                _text(tr(f"settings.nav.{current}", label), "gm-set-heading")
+                if current == "brand":
+                    from pages.brand import brand_content
+
+                    brand_content(embedded=True)
+                elif current == "usage":
+                    from pages.usage import usage_content
+
+                    usage_content(embedded=True)
+                elif current == "account":
+                    from pages.account import account_content
+
+                    account_content(embedded=True)
+                elif current == "admin":
+                    _admin()
+                else:
+                    _general()

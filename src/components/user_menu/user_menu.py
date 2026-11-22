@@ -11,7 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Avatar menu at the top right of every page (rendered by page_scaffold)."""
+"""Light/dark, language and the account menu.
+
+On wider screens they sit at the bottom of the side rail (rail_user_menu,
+rendered by components/side_nav); on phones in the top bar (user_menu_bar,
+rendered by page_scaffold).
+"""
 
 import json
 import typing
@@ -37,6 +42,8 @@ def _user_menu(
     show_account: bool = False,
     lang: str = "en",
     labels: str = "{}",
+    rail: bool = False,
+    expanded: bool = False,
     on_theme: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     on_lang: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     key: str | None = None,
@@ -55,6 +62,8 @@ def _user_menu(
             "showAccount": show_account,
             "lang": lang,
             "labels": labels,
+            "rail": rail,
+            "expanded": expanded,
         },
         events={"themeEvent": on_theme, "langEvent": on_lang},
     )
@@ -66,7 +75,11 @@ _MENU_KEYS = (
     "menu.admin",
     "menu.user",
     "menu.dark_mode",
+    "nav.light_mode",
     "menu.notify",
+    "menu.brand",
+    "menu.theme_to_dark",
+    "menu.theme_to_light",
     "menu.users",
     "menu.settings",
     "menu.account_settings",
@@ -104,12 +117,42 @@ def on_theme(e: me.WebEvent):
     yield
 
 
-@me.component
-def user_menu_bar():
-    """A slim row that holds the avatar menu on the right."""
+def _menu(*, key: str, rail: bool = False, expanded: bool = False):
     s = me.state(AppState)
     session_mode = auth_mode() == AUTH_MODE_SESSION
     email = "" if s.user_email == ANONYMOUS_USER_EMAIL else s.user_email
+    _user_menu(
+        key=key,
+        name=s.user_name or (t("menu.guest") if not email else ""),
+        email=email or t("menu.not_signed_in"),
+        role=s.user_role if session_mode else "",
+        dark=me.theme_brightness() == "dark",
+        show_sign_out=session_mode,
+        show_users=session_mode and s.user_role == "admin",
+        # Everyone has a Settings page (/settings); the system details in
+        # it are admin-only. Account (password) lives there too.
+        show_settings=True,
+        show_account=False,
+        lang=s.lang,
+        labels=menu_labels(s.lang),
+        rail=rail,
+        expanded=expanded,
+        on_theme=on_theme,
+        on_lang=on_lang,
+    )
+
+
+def rail_user_menu(expanded: bool):
+    """Theme, language and account at the bottom of the side rail."""
+    _menu(key="rail-user-menu", rail=True, expanded=expanded)
+
+
+@me.component
+def user_menu_bar():
+    """The phone top bar: theme, language and avatar on the right.
+
+    Hidden on wider screens (studio.src.css), where they sit in the rail.
+    """
     with me.box(
         classes="gm-topbar",
         style=me.Style(
@@ -120,20 +163,4 @@ def user_menu_bar():
             min_height=52,
         ),
     ):
-        _user_menu(
-            key="user-menu",
-            name=s.user_name or (t("menu.guest") if not email else ""),
-            email=email or t("menu.not_signed_in"),
-            role=s.user_role if session_mode else "",
-            dark=me.theme_brightness() == "dark",
-            show_sign_out=session_mode,
-            show_users=session_mode and s.user_role == "admin",
-            show_settings=(not session_mode) or s.user_role == "admin",
-            # Regular users change their own password there; admins use the
-            # Users page, which can reset anyone's password.
-            show_account=session_mode and bool(email) and s.user_role != "admin",
-            lang=s.lang,
-            labels=menu_labels(s.lang),
-            on_theme=on_theme,
-            on_lang=on_lang,
-        )
+        _menu(key="user-menu")

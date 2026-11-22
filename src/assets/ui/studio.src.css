@@ -281,6 +281,54 @@ html body img, html body video { border-radius: inherit; }
 
 /* ---------- Shell helpers (used by side_nav / page_scaffold) ---------- */
 html body .gm-nav-item:hover { background: var(--gm-hover); }
+/* Rail: pages scroll on short screens with no visible bar; Settings stays at the bottom. */
+html body .gm-nav-pages { scrollbar-width: none; }
+html body .gm-nav-pages::-webkit-scrollbar { display: none; }
+/* Opening and closing the rail: the same elements in both states. The width
+   animates (side_nav.py), labels and the wordmark fade, group headings grow
+   from a gap, and icons stay where they are. */
+html body .gm-nav-label {
+  display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  opacity: 1; transition: opacity 160ms ease 70ms;
+}
+html body .gm-nav-brand { min-width: 0; overflow: hidden; opacity: 1; transition: opacity 160ms ease 70ms; }
+html body .gm-nav-collapsed .gm-nav-label,
+html body .gm-nav-collapsed .gm-nav-brand { opacity: 0; transition: opacity 70ms ease; pointer-events: none; }
+html body .gm-nav-group {
+  height: 30px; padding: 12px 10px 0; box-sizing: border-box; overflow: hidden;
+  transition: height 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+html body .gm-nav-group .gm-nav-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--sys-on-surface-variant);
+}
+html body .gm-nav-collapsed .gm-nav-group { height: 12px; }
+/* Short screens: slightly tighter rows so every page fits without scrolling. */
+@media (max-height: 720px) {
+  html body .gm-nav .gm-nav-pages .mat-mdc-button-base,
+  html body .gm-nav > :last-child .mat-mdc-button-base { height: 36px !important; }
+  html body .gm-nav-group { height: 24px; padding-top: 8px; }
+  html body .gm-nav-collapsed .gm-nav-group { height: 8px; }
+}
+/* Rail buttons show a fill only on hover (no lingering focus or ripple circle);
+   keyboard focus still gets an outline. */
+html body .gm-nav .mat-mdc-button-persistent-ripple::before,
+html body .gm-nav .mat-mdc-button-ripple { opacity: 0 !important; }
+html body .gm-nav .mat-mdc-button-base:hover { background-color: var(--gm-hover); }
+/* Only real keyboard focus gets the ring (the drawer focuses its first button on load). */
+html body .gm-nav button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: 1px; }
+html body .gm-nav button:focus-visible:not(.cdk-keyboard-focused) { outline: none; }
+@media (prefers-reduced-motion: reduce) {
+  html body .gm-nav-label, html body .gm-nav-brand, html body .gm-nav-group { transition: none; }
+}
+/* Theme, language and account live at the bottom of the rail on wider
+   screens; the top bar holds them only on phones, where the rail folds away. */
+@media (min-width: 601px) {
+  html body .gm-topbar { display: none !important; }
+}
+@media (max-width: 600px) {
+  html body .gm-nav-account { display: none; }
+}
 
 /* ---------- Motion: gentle by default, off when asked ---------- */
 @keyframes gm-fade-up {
@@ -309,7 +357,7 @@ html body .gm-sr-only {
 
 /* ---------- Page frame: content sits next to the nav rail ---------- */
 html body {
-  --gm-rail: 72px;      /* components/styles.py SIDENAV_MIN_WIDTH */
+  --gm-rail: 64px;      /* components/styles.py SIDENAV_MIN_WIDTH */
   --gm-nav-open: 248px; /* components/styles.py SIDENAV_MAX_WIDTH */
 }
 html body .gm-content {
@@ -436,9 +484,7 @@ html body .gm-title p { margin: 0; }
   html body .gm-nav-collapsed { padding: 8px !important; overflow: visible !important; background: transparent; }
   html body .gm-nav-collapsed > :not(:first-child) { display: none !important; }
   html body .gm-nav-collapsed > :first-child .mdc-icon-button,
-  html body .gm-nav-collapsed > :first-child button {
-    background: var(--sys-surface-container-high); border-radius: 50%;
-  }
+  html body .gm-nav-collapsed > :first-child button { border-radius: 50%; }
   html body .gm-content:not(.gm-nav-open),
   html body .gm-content.gm-nav-open { margin-left: 0; }
   /* The avatar row (.gm-topbar) shares the line with the floating menu button. */
@@ -547,7 +593,8 @@ html body .gm-composer-tools {
 html body .gm-composer-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 html body .gm-composer-attach { display: flex; align-items: center; gap: 2px; }
 html body .gm-composer-add { flex: none; display: flex; align-items: center; align-self: flex-end; }
-html body .gm-composer-mic { display: flex; align-items: center; }
+html body .gm-composer-mic,
+html body .gm-composer-live { display: flex; align-items: center; }
 /* "+" add menu: opens while focus is inside it (no page state needed). The
    popover hides with visibility, not display, so the library dialog that
    lives inside it can still show. */
@@ -665,6 +712,34 @@ html body .gm-attach-remove .mat-icon { font-size: 18px; width: 18px; height: 18
 html body .gm-veo-refs { padding-bottom: 6px; }
 html body .gm-veo-refs > * { flex-wrap: wrap; }
 html body .gm-ref-slot { background: var(--sys-surface-container-low); }
+
+/* Mode switch with hover tips (demo_mode_switch; Settings, Fashion): a tonal pill group. */
+html body .gm-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--gm-tonal);
+  flex: none;
+}
+html body .gm-seg-opt .mdc-button,
+html body .gm-seg-opt .mat-mdc-button {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sys-on-surface-variant);
+  background: transparent;
+  white-space: nowrap;
+}
+html body .gm-seg-opt.is-on .mdc-button,
+html body .gm-seg-opt.is-on .mat-mdc-button {
+  background: var(--sys-surface-container-lowest);
+  color: var(--sys-on-surface);
+  box-shadow: var(--gm-card-shadow);
+}
 
 /* Segmented control (Veo modes) */
 html body .gm-segmented { display: flex; justify-content: center; }
@@ -803,11 +878,26 @@ html body .gm-empty-icon {
 /* Every page: the content column is centred, so wide monitors don't leave a
    big empty band on the right. */
 html body .gm-frame { margin-inline: auto; width: 100%; }
+/* ...and centred on the window, not on the space beside the nav rail: on wide
+   screens the frame gets extra padding on the far side equal to the rail, so
+   centred content (home hero, studio composers) lines up with the middle of
+   the screen. The open menu is wide, so only very wide screens do it then. */
+@media (min-width: 1100px) {
+  html body .gm-content:not(.gm-nav-open) .gm-frame {
+    padding-inline-end: calc(32px + var(--gm-rail)) !important;
+  }
+}
+@media (min-width: 1700px) {
+  html body .gm-content.gm-nav-open .gm-frame {
+    padding-inline-end: calc(32px + var(--gm-nav-open)) !important;
+  }
+}
 
 /* Glass tokens for every page (home, studios, web components). The border is
    the same width all round: no inset top highlight, which read as a thicker
    top edge. --gm-glass-highlight stays defined for older components. */
 html body {
+  --gm-panel: #eef2f8;
   --gm-glass-fill: rgba(255, 255, 255, 0.55);
   --gm-glass-solid: rgba(255, 255, 255, 0.95);
   --gm-glass-border: rgba(20, 24, 40, 0.08);
@@ -822,6 +912,7 @@ html body {
   --gm-accent-gradient: linear-gradient(135deg, #1a73e8 0%, #6a4cf0 100%);
 }
 html body.dark-theme {
+  --gm-panel: #1d1f25;
   --gm-glass-fill: rgba(30, 33, 48, 0.50);
   --gm-glass-solid: rgba(24, 26, 38, 0.94);
   --gm-glass-border: rgba(255, 255, 255, 0.10);
@@ -997,7 +1088,14 @@ html body .gm-next {
     }
   }
 }
-html body .gm-composer { border-radius: 28px; }
+/* The prompt box itself is solid, in the open rail's colour, like Home's. */
+html body .gm-composer {
+  border-radius: 28px;
+  background: var(--gm-panel);
+  border-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 html body .gm-composer.gm-busy { box-shadow: var(--gm-glass-shadow); }
 html body .gm-composer:focus-within { border-color: color-mix(in srgb, var(--sys-primary) 45%, var(--gm-glass-border)); }
 html body .gm-empty {
@@ -1068,3 +1166,93 @@ html:root body :is(.gm-demo-card, .gm-demo-settings, .gm-demo-result, .ss-card, 
     }
   }
 }
+
+/* ---------- Settings (/settings, pages/settings.py) ---------- */
+/* Sections on the left, the chosen section on the right; on phones the
+   sections become a scrolling row of pills above the content. */
+html body .gm-settings {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 28px;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  align-items: start;
+}
+html body .gm-set-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 8px; }
+html body .gm-set-nav-item .mat-mdc-button-base,
+html body .gm-set-nav-item button {
+  width: 100%;
+  justify-content: flex-start;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  color: var(--sys-on-surface-variant);
+  font-size: 14.5px;
+  font-weight: 500;
+}
+html body .gm-set-nav-item .mdc-button__label { display: flex; align-items: center; gap: 12px; }
+html body .gm-set-nav-item .mat-icon { font-size: 20px; width: 20px; height: 20px; }
+html body .gm-set-nav-item button:hover { background: var(--gm-tonal-hover); }
+html body .gm-set-nav-item.is-on button {
+  background: var(--sys-secondary-container);
+  color: var(--sys-on-secondary-container);
+}
+html body .gm-set-body { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+html body .gm-set-heading { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--sys-on-surface); }
+html body .gm-set-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--gm-radius-xl);
+  background: var(--gm-glass-fill);
+  border: 1px solid var(--gm-glass-border);
+  backdrop-filter: var(--gm-glass-blur);
+  -webkit-backdrop-filter: var(--gm-glass-blur);
+  overflow: hidden;
+}
+html body .gm-set-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px;
+  min-height: 72px;
+  box-sizing: border-box;
+}
+html body .gm-set-row + .gm-set-row { border-top: 1px solid var(--gm-glass-border); }
+html body .gm-set-row-text { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; min-width: 0; }
+html body .gm-set-row-title { font-size: 15px; font-weight: 500; color: var(--sys-on-surface); }
+html body .gm-set-row-desc { font-size: 13.5px; line-height: 1.45; color: var(--sys-on-surface-variant); }
+html body .gm-set-row-icon {
+  flex: none; width: 40px; height: 40px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--gm-tonal); color: var(--sys-on-surface-variant);
+}
+html body .gm-set-body .gm-usage,
+html body .gm-set-body .gm-brand { width: 100%; max-width: none; }
+@media (max-width: 760px) {
+  html body .gm-settings { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  html body .gm-set-nav {
+    flex-direction: row; position: static; overflow-x: auto; scrollbar-width: none;
+    gap: 6px; padding-bottom: 2px;
+  }
+  html body .gm-set-nav-item button { width: auto; white-space: nowrap; border-radius: 999px; }
+  html body .gm-set-row { flex-wrap: wrap; padding: 16px; }
+}
+
+/* ---------- Home chat (components/home_chat) ---------- */
+/* The headline gradient, read inside the chat's shadow DOM. */
+html body {
+  --gm-home-title-grad: linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 38%, #1a5fd8 72%, #7b3fe4 100%);
+}
+html body.dark-theme {
+  --gm-home-title-grad: linear-gradient(100deg, #fff 0%, #fff 38%, #8ab4f8 72%, #c58af9 100%);
+}
+/* The chat sizes itself to the screen, so the frame adds no bottom gap. */
+html body .gm-home-chat { gap: 0; }
+/* Home fits the window with no scroll bar: drop the page's bottom padding and
+   tell <gm-home-chat> how much height is left under the top bar. */
+html body .gm-page:has(.gm-home-chat),
+html body .gm-frame:has(.gm-home-chat),
+html body .gm-home.gm-home-chat { padding-bottom: 0 !important; }
+html body gm-home-chat { --gm-home-fit: calc(100dvh - 36px); }
+@media (max-width: 760px) { html body gm-home-chat { --gm-home-fit: calc(100dvh - 72px); } }

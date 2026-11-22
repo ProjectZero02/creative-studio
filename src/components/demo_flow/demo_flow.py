@@ -23,6 +23,8 @@ import typing
 
 import mesop as me
 
+from common.i18n import tx
+
 from components.generation_progress.generation_progress import (
     generation_progress_card,
 )
@@ -128,6 +130,32 @@ def demo_segmented(
             hide_selection_indicator=True,
             on_change=on_change,
         )
+
+
+@me.component
+def demo_mode_switch(
+    value: str,
+    options: list[tuple[str, str, str]],
+    on_click: typing.Callable[[me.ClickEvent], typing.Any],
+    key: str,
+):
+    """A pill switch whose options say what they do on hover.
+
+    `options` are (value, label, tip). Each option's key is
+    f"{key}--{value}", so the page reads the picked value with
+    ``mode_switch_value(e)``.
+    """
+    with me.box(classes="gm-seg"):
+        for opt_value, label, tip in options:
+            on = opt_value == value
+            with me.box(classes="gm-seg-opt is-on" if on else "gm-seg-opt"):
+                with me.tooltip(message=tx(tip), position="below", show_delay_ms=300):
+                    me.button(tx(label), key=f"{key}--{opt_value}", on_click=on_click)
+
+
+def mode_switch_value(e: me.ClickEvent) -> str:
+    """The option value picked in a demo_mode_switch."""
+    return (e.key or "").rsplit("--", 1)[-1]
 
 
 @me.component

@@ -20,6 +20,7 @@ import mesop as me
 from common.i18n import current_lang, is_rtl, route_key, t, tr
 from components.styles import SIDENAV_MAX_WIDTH, SIDENAV_MIN_WIDTH
 from components.svg_icon.svg_icon import svg_icon
+from components.user_menu.user_menu import rail_user_menu
 from config.default import Default, get_welcome_page_config
 from state.state import AppState
 
@@ -47,6 +48,14 @@ _PAGE_ALIASES = {
 
 # Icons drawn by the svg_icon component instead of the Material icon font.
 CUSTOM_ICONS = ["spark", "style", "scene"]
+
+ICON_SIZE = 20
+ITEM_SIZE = 40
+
+# System items pinned to the bottom of the rail, below the pages.
+SYSTEM_ITEMS = [
+    {"id": "settings", "display": "Settings", "icon": "settings", "route": "/settings", "label_key": "menu.settings"},
+]
 
 
 def _norm(value: str) -> str:
@@ -90,25 +99,40 @@ def sr_only(text: str):
 
 
 def _render_icon(icon_name: str, active: bool = False):
-    color = me.theme_var("primary") if active else me.theme_var("on-surface-variant")
+    color = me.theme_var("on-surface") if active else me.theme_var("on-surface-variant")
     if icon_name in CUSTOM_ICONS:
-        with me.box(style=me.Style(width=22, height=22, color=color, flex_shrink=0)):
+        with me.box(style=me.Style(width=ICON_SIZE, height=ICON_SIZE, color=color, flex_shrink=0)):
             svg_icon(icon_name=icon_name)
     else:
         me.icon(
             icon=icon_name,
-            style=me.Style(color=color, font_size=22, width=22, height=22, flex_shrink=0),
+            style=me.Style(color=color, font_size=ICON_SIZE, width=ICON_SIZE, height=ICON_SIZE, flex_shrink=0),
         )
 
 
 @me.component
 def sidenav(current_page: Optional[str]):
-    """Render side navigation."""
+    """Render side navigation.
+
+    Like Gemini's rail: pages from the top (they scroll on short screens, with
+    no visible bar); Settings, light/dark, language and the account at the
+    bottom. Closed, the rail sits on the page background; open, it becomes a
+    panel.
+
+    Open and closed render the same elements, so opening only animates the
+    width and fades the labels in (studio.src.css, .gm-nav-*): icons never
+    move or redraw.
+    """
     app_state = me.state(AppState)
     current = current_page or app_state.current_page
     opened = app_state.sidenav_open
 
-    pages = [p for p in get_welcome_page_config() if p.get("route")]
+    # align "menu" pages (My brand, Usage) live in the avatar menu and Settings.
+    pages = [
+        p
+        for p in get_welcome_page_config()
+        if p.get("route") and p.get("align") != "menu"
+    ]
     top_items = [p for p in pages if p.get("align") != "bottom"]
     bottom_items = [p for p in pages if p.get("align") == "bottom"]
 
@@ -124,9 +148,9 @@ def sidenav(current_page: Optional[str]):
         opened=True,
         style=me.Style(
             width=SIDENAV_MAX_WIDTH if opened else SIDENAV_MIN_WIDTH,
-            background=me.theme_var("surface-container-low"),
-            border=me.Border(right=me.BorderSide(width=1, style="solid", color="var(--gm-border)")),
-            transition="width 200ms cubic-bezier(0.2, 0, 0, 1)",
+            background="var(--gm-panel)" if opened else "transparent",
+            border=me.Border(right=me.BorderSide(width=0, style="none")),
+            transition="width 220ms cubic-bezier(0.2, 0, 0, 1), background-color 220ms ease",
             box_shadow="none",
             z_index=20,
         ),
@@ -137,30 +161,30 @@ def sidenav(current_page: Optional[str]):
                 display="flex",
                 flex_direction="column",
                 height="100%",
-                padding=me.Padding(top=12, bottom=12, left=12, right=12),
+                padding=me.Padding.all(12),
                 box_sizing="border-box",
-                overflow_x="hidden",
-                overflow_y="auto",
+                overflow="hidden",
             ),
         ):
-            # Brand row: menu toggle + wordmark.
+            # Brand row: menu toggle + wordmark (the wordmark fades in when open).
             with me.box(
                 style=me.Style(
                     display="flex",
                     align_items="center",
                     gap=8,
-                    height=48,
-                    margin=me.Margin(bottom=8),
+                    height=ITEM_SIZE,
+                    margin=me.Margin(bottom=12),
+                    flex_shrink=0,
                 ),
             ):
                 with me.content_button(
                     type="icon",
                     on_click=on_sidenav_menu_click,
-                    style=me.Style(width=48, height=48, padding=me.Padding.all(12)),
+                    style=me.Style(width=ITEM_SIZE, height=ITEM_SIZE, padding=me.Padding.all(8), flex_shrink=0),
                 ):
-                    me.icon(icon="menu_open" if opened else "menu")
+                    me.icon(icon="menu")
                     sr_only(t("nav.close_menu") if opened else t("nav.open_menu"))
-                if opened:
+                with me.box(classes="gm-nav-brand"):
                     with me.content_button(
                         on_click=on_click_title,
                         style=me.Style(padding=me.Padding.symmetric(horizontal=4)),
@@ -175,51 +199,48 @@ def sidenav(current_page: Optional[str]):
                                 style=me.Style(font_size=11, color=me.theme_var("on-surface-variant"), white_space="nowrap"),
                             )
 
-            for group, items in sections:
-                label = (
-                    tr(f"nav.group.{group}", GROUP_LABELS[group])
-                    if group in GROUP_LABELS
-                    else ""
-                )
-                if label:
-                    if opened:
-                        me.text(
-                            label,
-                            style=me.Style(
-                                font_size=11,
-                                font_weight=600,
-                                letter_spacing="0.06em",
-                                text_transform="uppercase",
-                                color=me.theme_var("on-surface-variant"),
-                                padding=me.Padding(left=12, right=12, top=14, bottom=6),
-                                white_space="nowrap",
-                            ),
-                        )
-                    else:
-                        me.box(
-                            style=me.Style(
-                                height=1,
-                                background="var(--gm-border)",
-                                margin=me.Margin(top=10, bottom=10, left=8, right=8),
-                            )
-                        )
-                for page in items:
-                    _nav_item(page, current, minimized=not opened)
+            # Pages, from the top.
+            with me.box(
+                classes="gm-nav-pages",
+                style=me.Style(flex_grow=1, min_height=0, overflow_y="auto", overflow_x="hidden"),
+            ):
+                for group, items in sections:
+                    label = (
+                        tr(f"nav.group.{group}", GROUP_LABELS[group])
+                        if group in GROUP_LABELS
+                        else ""
+                    )
+                    if label:
+                        # A gap when closed, a small heading when open (CSS).
+                        with me.box(classes="gm-nav-group"):
+                            with me.box(classes="gm-nav-label"):
+                                me.text(label)
+                    for page in items:
+                        _nav_item(page, current, minimized=not opened)
 
-            # Bottom: settings, about, theme.
+            # Bottom: align "bottom" pages, Settings, then light/dark, language
+            # and the account (the top bar holds these only on phones).
             with me.box(
                 style=me.Style(
-                    margin=me.Margin(top="auto"),
-                    padding=me.Padding(top=12),
+                    padding=me.Padding(top=8),
                     display="flex",
                     flex_direction="column",
-                    gap=2,
-                    border=me.Border(top=me.BorderSide(width=1, style="solid", color="var(--gm-border)")),
+                    flex_shrink=0,
                 ),
             ):
                 for page in bottom_items:
                     _nav_item(page, current, minimized=not opened)
-                theme_toggle_icon(9, "light_mode", "Theme", not opened)
+                for item in SYSTEM_ITEMS:
+                    menu_item(
+                        item_id=item["id"],
+                        icon=item["icon"],
+                        text=t(item["label_key"], item["display"]),
+                        route=item["route"],
+                        minimized=not opened,
+                        active=is_active(item["route"], current),
+                    )
+                with me.box(classes="gm-nav-account"):
+                    rail_user_menu(expanded=opened)
 
 
 def _nav_item(page: dict, current: Optional[str], minimized: bool):
@@ -233,18 +254,20 @@ def _nav_item(page: dict, current: Optional[str], minimized: bool):
     )
 
 
-def _item_style(active: bool, minimized: bool) -> me.Style:
+def _item_style(active: bool, minimized: bool) -> me.Style:  # pylint: disable=unused-argument
+    """One style open or closed: the icon keeps its place, the label is clipped."""
     return me.Style(
-        width="100%" if not minimized else 48,
+        width="100%",
         min_width=0,
-        height=44,
-        padding=me.Padding.symmetric(horizontal=12 if not minimized else 0),
-        border_radius=10,
-        justify_content="flex-start" if not minimized else "center",
+        height=ITEM_SIZE,
+        padding=me.Padding.symmetric(horizontal=10),
+        border_radius=ITEM_SIZE // 2,
+        justify_content="flex-start",
         background=("var(--gm-active-nav)" if active else "transparent"),
-        color=me.theme_var("primary") if active else me.theme_var("on-surface"),
-        font_weight=600 if active else 500,
+        color=me.theme_var("on-surface"),
+        font_weight=600 if active else 400,
         margin=me.Margin(bottom=2),
+        overflow="hidden",
     )
 
 
@@ -257,41 +280,24 @@ def menu_item(
     content_style: Optional[me.Style] = None,  # pylint: disable=unused-argument
     active: bool = False,
 ):
-    """Render one menu item (icon only when minimized)."""
+    """Render one menu item. The label is always there; closed, it is clipped
+    and faded (CSS), and the tooltip names the item instead."""
     is_clickable = bool(route)
     button_key = route if is_clickable else f"item_{item_id}"
 
-    if minimized:
-        with me.tooltip(message=text, position=_tooltip_side()):
-            with me.content_button(
-                key=button_key,
-                on_click=navigate_to if is_clickable else None,
-                disabled=not is_clickable,
-                style=_item_style(active, True),
-            ):
-                _render_icon(icon, active)
-                sr_only(text)
-    else:
+    with me.tooltip(message=text, position=_tooltip_side(), disabled=not minimized):
         with me.content_button(
             key=button_key,
             on_click=navigate_to if is_clickable else None,
             disabled=not is_clickable,
-            style=_item_style(active, False),
+            style=_item_style(active, minimized),
         ):
             with me.box(
-                style=me.Style(display="flex", align_items="center", gap=12, width="100%"),
+                style=me.Style(display="flex", align_items="center", gap=14, width="100%"),
             ):
                 _render_icon(icon, active)
-                me.text(
-                    text,
-                    style=me.Style(
-                        text_align="start",
-                        font_size=14,
-                        white_space="nowrap",
-                        overflow="hidden",
-                        text_overflow="ellipsis",
-                    ),
-                )
+                with me.box(classes="gm-nav-label"):
+                    me.text(text, style=me.Style(text_align="start", font_size=14, white_space="nowrap"))
 
 
 def toggle_theme(e: me.ClickEvent):  # pylint: disable=unused-argument

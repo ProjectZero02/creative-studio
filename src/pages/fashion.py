@@ -40,9 +40,10 @@ from components.demo_flow.demo_flow import (
     ctext,
     demo_alert,
     demo_card_head,
-    demo_segmented,
+    demo_mode_switch,
     demo_steps,
     demo_upload_button,
+    mode_switch_value,
 )
 from components.edit_button.edit_button import edit_button
 from components.generation_progress.generation_progress import (
@@ -171,15 +172,6 @@ def fashion_content():
                 centered=True,
             )
             with me.box(classes="gm-studio gm-demo"):
-                demo_segmented(
-                    value=state.mode,
-                    options=[
-                        me.ButtonToggleButton(label="Try on", value=TAB_TRY_ON),
-                        me.ButtonToggleButton(label="Shop the look", value=TAB_LOOK),
-                    ],
-                    on_change=on_mode_change,
-                    key="fashion_mode",
-                )
                 if state.mode == TAB_LOOK:
                     _shop_the_look_flow()
                 else:
@@ -188,9 +180,24 @@ def fashion_content():
         snackbar(is_visible=vto_state.show_snackbar, label=vto_state.snackbar_message)
 
 
-def on_mode_change(e: me.ButtonToggleChangeEvent):
+MODES = [
+    (TAB_TRY_ON, "Try on", "Put one garment on your own model photo"),
+    (TAB_LOOK, "Shop the look", "Pick a model and style a full outfit from the catalog"),
+]
+
+
+def _top_row(mode: str, current_step: int) -> None:
+    """The mode switch on the left of the 1-2-3 steps, in one row."""
+    with me.box(classes="gm-demo-toprow"):
+        demo_mode_switch(
+            value=mode, options=MODES, on_click=on_mode_change, key="fashion_mode"
+        )
+        demo_steps(steps=STEPS, current=current_step)
+
+
+def on_mode_change(e: me.ClickEvent):
     state = me.state(FashionState)
-    state.mode = e.value or TAB_TRY_ON
+    state.mode = mode_switch_value(e) or TAB_TRY_ON
     state.alert = ""
     yield
 
@@ -213,7 +220,7 @@ def _try_on_flow():
     vs = me.state(vto.PageState)
     busy = state.progress_status == "running"
 
-    demo_steps(steps=STEPS, current=_try_on_step(vs))
+    _top_row(TAB_TRY_ON, _try_on_step(vs))
     if state.alert:
         demo_alert(message=state.alert, on_dismiss=on_dismiss_alert)
 
@@ -594,7 +601,7 @@ def _shop_the_look_flow():
     ls = me.state(LookState)
     _load_look_data(state, ls)
 
-    demo_steps(steps=STEPS, current=_look_step(ls))
+    _top_row(TAB_LOOK, _look_step(ls))
 
     if state.look_error:
         with me.box(classes="gm-empty"):

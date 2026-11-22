@@ -15,7 +15,7 @@
 import mesop as me
 
 
-SIDENAV_MIN_WIDTH = 72  # Collapsed icon rail
+SIDENAV_MIN_WIDTH = 64  # Collapsed icon rail
 SIDENAV_MAX_WIDTH = 248  # Expanded menu with labels
 
 DEFAULT_MENU_STYLE = me.Style(align_content="left")

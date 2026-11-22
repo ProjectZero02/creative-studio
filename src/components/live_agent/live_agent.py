@@ -120,13 +120,13 @@ def _strings() -> dict:
         "download": t("live.download", "Download"),
         "close": t("live.close", "Close"),
         "nomic": t("live.nomic", "No microphone access. You can still type."),
-        "fill": t("live.fill", "Fill only"),
-        "act": t("live.act", "Do it for me"),
-        "modeHint": t(
-            "live.mode_hint",
-            "Fill only: the agent fills the page and you press Generate. "
-            "Do it for me: it also runs the jobs.",
-        ),
+        "minimize": t("live.minimize", "Minimize"),
+        "expand": t("live.expand", "Expand"),
+        "restore": t("live.restore", "Restore"),
+        "keyboard": t("live.keyboard", "Type instead"),
+        "noJobs": t("live.no_jobs", "Things you ask for show up here."),
+        "avatarOn": t("live.avatar_on", "Turn the avatar off"),
+        "avatarOff": t("live.avatar_off", "Turn the avatar on"),
         "avatar": t("live.avatar", "Avatar"),
         "avatarHint": t(
             "live.avatar_hint",
@@ -163,10 +163,10 @@ def live_agent_bridge(
 
 
 @me.web_component(path="./live_agent.js")
-def live_call_button(*, key: str | None = "live-call-button"):
-    """Large call button for the home page hero."""
+def live_call_button(*, key: str | None = "live-call-button", compact: bool = False):
+    """Call button: labelled on Home, a round icon in the studios' prompt box."""
     return me.insert_web_component(
         key=key,
         name="live-call-button",
-        properties={"stringsJson": json.dumps(_strings())},
+        properties={"stringsJson": json.dumps(_strings()), "compact": compact},
     )

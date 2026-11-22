@@ -82,6 +82,20 @@ html body .gm-step.is-done .gm-step-num {
 /* ---------- Switch (segmented control) ---------- */
 html body .gm-demo-switch .mat-button-toggle-label-content { padding: 0 22px !important; }
 
+/* Mode switch on the left, steps beside it, in one row; stacks on phones. */
+html body .gm-demo-toprow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+}
+html body .gm-demo-toprow .gm-steps-wrap { flex: 1 1 auto; justify-content: flex-end; }
+@media (max-width: 760px) {
+  html body .gm-demo-toprow { justify-content: center; }
+  html body .gm-demo-toprow .gm-steps-wrap { justify-content: center; }
+}
+
 /* ---------- Inline alert and status ---------- */
 html body .gm-demo-alert {
   display: flex;

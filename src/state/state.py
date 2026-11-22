@@ -47,6 +47,9 @@ class AppState:
     current_page: str = ""
     user_role: str = ""
     user_name: str = ""
+    # Settings > General: improve short prompts with Gemini when sent
+    # (common/auto_enhance.py). Saved in the browser like the theme.
+    auto_enhance: bool = True
 
     def __init__(self):
         """Initializes the AppState from the middleware-verified identity.
