@@ -51,12 +51,13 @@ def test_csv_env_parses_trims_and_falls_back(monkeypatch):
     assert config_default._csv_env("X_MODELS", ("z",)) == ("z",)
 
 
-def test_writers_workshop_defaults_to_argon_with_two_models():
+def test_writers_workshop_defaults_to_neon_and_keeps_older_models():
     assert DEFAULTS.GEMINI_WRITERS_WORKSHOP_MODELS == (
+        "gemini-4-neon",
         "gemini-4-argon",
         "gemini-3.8-flash",
     )
-    assert DEFAULTS.GEMINI_WRITERS_WORKSHOP_MODEL_ID == "gemini-4-argon"
+    assert DEFAULTS.GEMINI_WRITERS_WORKSHOP_MODEL_ID == "gemini-4-neon"
 
 
 def test_interior_design_and_object_rotation_use_nano_banana_2_1():

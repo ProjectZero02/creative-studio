@@ -60,8 +60,8 @@ PROJECT_ID=
 # ==============================================================================
 
 # [OPTIONAL] The primary Gemini model used for general text and reasoning tasks.
-# Default: gemini-3.8-flash
-# MODEL_ID=gemini-3.8-flash
+# Default: gemini-4-neon
+# MODEL_ID=gemini-4-neon
 
 # [OPTIONAL] The endpoint used for Gemini text/multimodal calls. Gemini 3.x models
 # are NOT served from single regions such as us-central1 (requests 404); keep this
@@ -83,16 +83,16 @@ PROJECT_ID=
 # GEMINI_IMAGE_GEN_API_BASE_URL=
 
 # [OPTIONAL] The model used specifically for analyzing audio content.
-# Default: gemini-3.5-flash-lite
-# GEMINI_AUDIO_ANALYSIS_MODEL_ID=gemini-3.5-flash-lite
+# Default: gemini-4-neon
+# GEMINI_AUDIO_ANALYSIS_MODEL_ID=gemini-4-neon
 
 # [OPTIONAL] Comma-separated models offered in the Gemini Writers Workshop picker.
-# Default: gemini-4-argon,gemini-3.8-flash
-# GEMINI_WRITERS_WORKSHOP_MODELS=gemini-4-argon,gemini-3.8-flash
+# Default: gemini-4-neon,gemini-4-argon,gemini-3.8-flash
+# GEMINI_WRITERS_WORKSHOP_MODELS=gemini-4-neon,gemini-4-argon,gemini-3.8-flash
 
 # [OPTIONAL] The model preselected in the Gemini Writers Workshop picker.
-# Default: gemini-4-argon
-# GEMINI_WRITERS_WORKSHOP_MODEL_ID=gemini-4-argon
+# Default: gemini-4-neon
+# GEMINI_WRITERS_WORKSHOP_MODEL_ID=gemini-4-neon
 
 # ==============================================================================
 # 🎥 Veo (Video Generation)

@@ -62,9 +62,12 @@ def _request(**overrides) -> VideoGenerationRequest:
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("MODEL_ID", "gemini-3.8-flash"),
-        ("GEMINI_CRITIQUE_MODEL_ID", "gemini-3.8-flash"),
-        ("GEMINI_AUDIO_ANALYSIS_MODEL_ID", "gemini-3.5-flash-lite"),
+        ("MODEL_ID", "gemini-4-neon"),
+        ("GEMINI_CRITIQUE_MODEL_ID", "gemini-4-neon"),
+        ("GEMINI_AUDIO_ANALYSIS_MODEL_ID", "gemini-4-neon"),
+        ("GEMINI_STORYBOARDER_NARRATIVE_MODEL_ID", "gemini-4-neon"),
+        ("STORY_SCENARIO_MODEL_ID", "gemini-4-neon"),
+        ("STORY_LIVE_SETTINGS_MODEL", "gemini-3.5-flash-lite"),
         ("GEMINI_IMAGE_GEN_MODEL", "gemini-nano-banana-2.1"),
         ("LIVE_MODEL", "gemini-3.8-live"),
         ("OMNI_MODEL_ID", OMNI),
