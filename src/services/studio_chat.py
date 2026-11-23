@@ -155,6 +155,74 @@ def load_history(
     return len(s.history)
 
 
+def make(
+    owner: str,
+    kind: str,
+    prompt: str,
+    settings: Any = None,
+    source: str = "",
+    jobs: LiveJobs | None = None,
+) -> dict:
+    """Start one job straight from the Home box's type controls.
+
+    No model call: the person picked Image, Video, Music or Voice and its
+    settings, so the job starts with exactly those (checked by
+    services.studio_options). ``source`` is the handle of a finished picture
+    ("image 2") to edit or animate. The exchange is added to the chat's
+    history so later messages can say "animate it". Returns {"reply", "job",
+    "settings", "summary"}. Raises ValueError for a bad request and
+    live_jobs.JobLimitError when too many jobs run.
+    """
+    from common.i18n import tr
+    from services.studio_options import KINDS, clean, summary
+
+    if kind not in KINDS:
+        raise ValueError("Pick Image, Video, Music or Voice.")
+    prompt = (prompt or "").strip()[:MAX_MESSAGE]
+    if not prompt:
+        raise ValueError(tr("home.chat.need_prompt", "Write what to make first."))
+    s = session_for(owner, jobs)
+    picked = clean(kind, settings)
+    src = None
+    if source and kind in ("image", "video"):
+        handle = str(source).strip().lower()
+        src = next(
+            (
+                j
+                for j in s.call.jobs.list(owner)
+                if j.handle == handle and j.kind == "image" and j.status == "done"
+            ),
+            None,
+        )
+        if src is None:
+            raise ValueError(tr("home.chat.source_gone", "That picture is gone. Add it again."))
+    job = s.call.jobs.submit(
+        owner,
+        kind,
+        prompt,
+        aspect_ratio=picked.get("aspect", ""),
+        source=src,
+        params={"settings": picked, "from": "controls"},
+    )
+    line = summary(kind, picked)
+    reply = tr("home.chat.making_job", "Making {job}.").format(job=job.handle)
+    if src is not None:
+        reply = tr("home.chat.making_from", "Making {job} from {source}.").format(
+            job=job.handle, source=src.handle
+        )
+    said = f"[{kind}{': ' + line if line else ''}{', from ' + src.handle if src else ''}] {prompt}"
+    with s.lock:
+        s.job_ids.append(job.id)
+        s.history = (
+            s.history
+            + [
+                types.Content(role="user", parts=[types.Part.from_text(text=said)]),
+                types.Content(role="model", parts=[types.Part.from_text(text=reply)]),
+            ]
+        )[-MAX_HISTORY:]
+    return {"reply": reply, "job": job.public(), "settings": picked, "summary": line}
+
+
 def chat_jobs(owner: str, jobs: LiveJobs | None = None) -> list[dict]:
     """The jobs this person started from the chat, oldest first."""
     s = _sessions.get(owner)

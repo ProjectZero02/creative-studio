@@ -22,6 +22,7 @@ the box with a sample prompt; sending it then opens that studio with
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import mesop as me
@@ -181,11 +182,26 @@ _STRINGS = {
     "error": ("home.chat.error", "Something went wrong. Please try again."),
     "lost": ("home.chat.lost", "This job was lost. Please try again."),
     "thread": ("home.chat.thread", "Conversation"),
+    "auto": ("home.chat.auto", "Auto"),
+    "auto_tip": ("home.chat.auto_tip", "The chat picks what to make"),
+    "settings": ("home.chat.settings", "Settings"),
+    "need_prompt": ("home.chat.need_prompt", "Write what to make first."),
 }
 
 
 def strings() -> dict:
     return {k: tr(key, english) for k, (key, english) in _STRINGS.items()}
+
+
+def _options() -> dict:
+    """The type controls (services/studio_options.py); {} if they can't load."""
+    try:
+        from services.studio_options import all_fields
+
+        return all_fields()
+    except Exception:  # pylint: disable=broad-except
+        logging.getLogger(__name__).exception("Home: type controls unavailable")
+        return {}
 
 
 ALLOWED_HOME_ROUTES = frozenset(
@@ -223,6 +239,7 @@ def home_chat(*, live: bool = False, key: str | None = "home-chat"):
         properties={
             "stringsJson": json.dumps(strings(), ensure_ascii=False),
             "kindsJson": json.dumps(kinds(), ensure_ascii=False),
+            "optionsJson": json.dumps(_options(), ensure_ascii=False),
             "talkJson": json.dumps({**live_strings(), "talk": t("live.talk", "Talk to the studio")}, ensure_ascii=False),
             "live": live,
         },

@@ -44,6 +44,7 @@
 import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const STORE = 'gm-home-chat';
+const SETTINGS = 'gm-home-settings';
 const HISTORY = 'gm-prompts:home';
 const POLL_MS = 2000;
 const MAX_FILES = 3;
@@ -80,6 +81,9 @@ function load(key, fallback) {
 function save(key, value) {
   try { sessionStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* ignore */ }
 }
+function readSettings() {
+  try { const v = JSON.parse(localStorage.getItem(SETTINGS) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (_) { return {}; }
+}
 function readHistory() {
   try { const l = JSON.parse(localStorage.getItem(HISTORY) || '[]'); return Array.isArray(l) ? l : []; } catch (_) { return []; }
 }
@@ -95,6 +99,7 @@ class GmHomeChat extends LitElement {
   static properties = {
     stringsJson: { type: String },
     kindsJson: { type: String },
+    optionsJson: { type: String },
     talkJson: { type: String },
     live: { type: Boolean, reflect: true },
     navEvent: { type: String },
@@ -107,6 +112,7 @@ class GmHomeChat extends LitElement {
     _kind: { state: true },
     _enhancing: { state: true },
     _panel: { state: true },
+    _settings: { state: true },
     _dragOver: { state: true },
     panelOpen: { type: Boolean, reflect: true, attribute: 'panel' },
   };
@@ -115,6 +121,9 @@ class GmHomeChat extends LitElement {
     super();
     this.stringsJson = '{}';
     this.kindsJson = '[]';
+    this.optionsJson = '{}';
+    // Settings picked in the type controls, per type; kept between visits.
+    this._settings = readSettings();
     this.talkJson = '{}';
     this.live = false;
     this.navEvent = '';
@@ -148,6 +157,38 @@ class GmHomeChat extends LitElement {
 
   get _kinds() {
     try { return JSON.parse(this.kindsJson || '[]'); } catch (_) { return []; }
+  }
+
+  /** The type controls' fields: {image: [field], video: [...], ...}. */
+  get _options() {
+    try { return JSON.parse(this.optionsJson || '{}') || {}; } catch (_) { return {}; }
+  }
+
+  /** The fields shown for a type, each with its current value and choices. */
+  _fields(kind) {
+    const list = this._options[kind] || [];
+    const mine = this._settings[kind] || {};
+    const out = [];
+    const picked = {};
+    list.forEach((f) => {
+      const choice = (f.by_model && f.by_model[picked.model]) || f;
+      const values = (choice.options || []).map((o) => o.value);
+      const value = values.includes(mine[f.name]) ? mine[f.name] : choice.default;
+      picked[f.name] = value;
+      out.push({ ...f, options: choice.options || [], value });
+    });
+    return out;
+  }
+
+  _values(kind) {
+    const out = {};
+    this._fields(kind).forEach((f) => { out[f.name] = f.value; });
+    return out;
+  }
+
+  _setField(kind, name, value) {
+    this._settings = { ...this._settings, [kind]: { ...(this._settings[kind] || {}), [name]: value } };
+    try { localStorage.setItem(SETTINGS, JSON.stringify(this._settings)); } catch (_) { /* ignore */ }
   }
 
   get _s() {
@@ -203,6 +244,10 @@ class GmHomeChat extends LitElement {
     if ((!typed && !files.length) || this._busy || this._files.some((f) => f.busy)) return;
     if (typed) remember(typed);
     const kind = this._kinds.find((k) => k.kind === this._kind);
+    if (kind && this._options[kind.kind]) {
+      await this._make(kind, typed, files);
+      return;
+    }
     if (kind && typed && !files.length) {
       // Type chip: open that studio with the prompt; ?go=1 starts it there.
       this._busy = true;
@@ -245,6 +290,53 @@ class GmHomeChat extends LitElement {
     if (jobs.length && !this._panelClosed && !this._phone()) this._panel = true;
     if (jobs.length) this._poll();
     this.updateComplete.then(() => this._ta && this._ta.focus());
+  }
+
+  /** Type controls: start the job with exactly these settings (no chat model). */
+  async _make(kind, typed, files) {
+    const S = this._s;
+    if (!typed) {
+      this._flash(S.need_prompt || 'Write what to make first.');
+      return;
+    }
+    const settings = this._values(kind.kind);
+    const source = (kind.kind === 'image' || kind.kind === 'video') && files.length ? files[0].handle : '';
+    this._hist = -1;
+    if (this._ta) { this._ta.value = ''; this._fit(); }
+    this._hasText = false;
+    this._files = [];
+    this._msgs = [...this._msgs, { role: 'user', text: typed, images: files.map((f) => f.url) }];
+    this._busy = true;
+    let reply = '';
+    let meta = '';
+    let job = null;
+    try {
+      const r = await fetch('/api/chat/job', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: kind.kind, prompt: typed, settings, source }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || '');
+      reply = body.reply || '';
+      meta = [kind.label, body.summary].filter(Boolean).join(' · ');
+      job = body.job || null;
+    } catch (err) {
+      reply = (err && err.message) || S.error || 'Something went wrong. Please try again.';
+    }
+    if (job) this._jobs = { ...this._jobs, [job.id]: job };
+    this._msgs = [...this._msgs, { role: 'assistant', text: reply, jobs: job ? [job.id] : [], meta }];
+    this._busy = false;
+    if (job && !this._panelClosed && !this._phone()) this._panel = true;
+    if (job) this._poll();
+    this.updateComplete.then(() => this._ta && this._ta.focus());
+  }
+
+  _flash(text) {
+    this._note = text;
+    this.requestUpdate();
+    clearTimeout(this._noteTimer);
+    this._noteTimer = setTimeout(() => { this._note = ''; this.requestUpdate(); }, 2600);
   }
 
   _pending() {
@@ -333,7 +425,7 @@ class GmHomeChat extends LitElement {
     if (!this._msgs.length) return;
     const messages = this._msgs.map((m) => ({
       role: m.role, text: m.text || '', images: (m.images || []).filter((u) => u && !String(u).startsWith('blob:')),
-      jobs: (m.jobs || []).map((id) => this._snapshot(typeof id === 'string' ? id : id.id)), ask: m.ask || null,
+      jobs: (m.jobs || []).map((id) => this._snapshot(typeof id === 'string' ? id : id.id)), ask: m.ask || null, meta: m.meta || '',
     }));
     const job_ids = Object.keys(this._jobs);
     try {
@@ -380,7 +472,7 @@ class GmHomeChat extends LitElement {
         if (j && typeof j === 'object' && j.id) { jobs[j.id] = { ...j, params: j.params || {} }; return j.id; }
         return String(j);
       });
-      return { role: m.role, text: m.text, images: m.images || [], jobs: ids, ask: m.ask || undefined };
+      return { role: m.role, text: m.text, images: m.images || [], jobs: ids, ask: m.ask || undefined, meta: m.meta || '' };
     });
     this._chatId = chat.id;
     this._projectId = chat.project_id || '';
@@ -440,6 +532,9 @@ class GmHomeChat extends LitElement {
     const list = this._kinds;
     if (!list.length) return nothing;
     return html`<div class="kinds ${compact ? 'compact' : ''}" role="group" aria-label=${this._s.kinds || 'What to make'}>
+      ${compact ? html`<button type="button" class="kind k-auto" aria-pressed=${this._kind ? 'false' : 'true'}
+          title=${this._s.auto_tip || 'The chat picks what to make'} @click=${() => { this._kind = ''; this._ta?.focus(); }}>
+          <span class="kbody">${svg(ICON.spark, 20)}<span class="ktext"><b>${this._s.auto || 'Auto'}</b></span></span></button>` : nothing}
       ${list.map((k) => html`<button type="button" class="kind k-${k.kind}" aria-pressed=${this._kind === k.kind ? 'true' : 'false'}
           title=${k.desc || ''} @click=${() => this._pickKind(k)}>
           <span class="kmedia" aria-hidden="true">${k.kind === 'music' || k.kind === 'voice' ? html`<span class="eq">${EQ.map((h, i) => html`<i style="--h:${h};--d:${i * -97}ms"></i>`)}</span>` : nothing}</span>
@@ -680,7 +775,26 @@ class GmHomeChat extends LitElement {
             ${slot}
           </div>
         </div>
+        ${this._controls()}
+        ${this._note ? html`<div class="note" role="status">${this._note}</div>` : nothing}
       </div>`;
+  }
+
+  /** The picked type's settings, sliding open under the text. */
+  _controls() {
+    const kind = this._options[this._kind] ? this._kind : '';
+    const fields = kind ? this._fields(kind).filter((f) => f.options.length > 1) : [];
+    return html`<div class="ctl-wrap ${fields.length ? 'open' : ''}" aria-hidden=${fields.length ? 'false' : 'true'}>
+      <div class="ctl-in"><div class="controls" role="group" aria-label=${this._s.settings || 'Settings'}>
+        ${fields.map((f) => html`<label class="ctl" title=${f.label}>
+          <span class="ctl-l">${f.label}</span>
+          <select .value=${f.value} @change=${(e) => this._setField(kind, f.name, e.target.value)} ?disabled=${!fields.length}>
+            ${f.options.map((o) => html`<option value=${o.value} ?selected=${o.value === f.value}>${o.label}</option>`)}
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 10l5 5 5-5z"></path></svg>
+        </label>`)}
+      </div></div>
+    </div>`;
   }
 
   _media(j) {
@@ -833,7 +947,7 @@ class GmHomeChat extends LitElement {
             ${(m.images || []).length ? html`<div class="sent">${m.images.map((u) => html`<img src=${u} alt="">`)}</div>` : nothing}
             <div class="bubble">${m.text}</div></div></div>`
         : html`<div class="msg bot"><span class="avatar" aria-hidden="true">${svg(ICON.spark, 18)}</span>
-            <div class="bot-body"><div class="text">${m.text}</div>${(m.jobs || []).map((id) => this._job(id))}</div></div>`)}
+            <div class="bot-body"><div class="text">${m.text}</div>${m.meta ? html`<div class="meta">${m.meta}</div>` : nothing}${(m.jobs || []).map((id) => this._job(id))}</div></div>`)}
       ${this._busy ? html`<div class="msg bot"><span class="avatar" aria-hidden="true">${svg(ICON.spark, 18)}</span>
           <div class="typing" aria-label=${this._s.thinking || 'Thinking'}><i></i><i></i><i></i></div></div>` : nothing}
       <div class="end"></div>
@@ -1048,6 +1162,33 @@ class GmHomeChat extends LitElement {
       background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #15171c); text-decoration: none; font-size: 13.5px; font-weight: 500; cursor: pointer;
     }
     .act:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
+    /* Type controls: a row of settings that slides open under the text. */
+    .ctl-wrap { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 300ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease; }
+    .ctl-wrap.open { grid-template-rows: 1fr; opacity: 1; }
+    .ctl-in { overflow: hidden; min-height: 0; }
+    .controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 6px 4px 52px; }
+    .ctl { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 30px 0 12px; border-radius: 999px;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); font-size: 13px; cursor: pointer; max-width: 100%; }
+    .ctl:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.18)); }
+    .ctl:focus-within { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 1px; }
+    .ctl-l { color: var(--sys-on-surface-variant, #6b7280); white-space: nowrap; }
+    .ctl select { appearance: none; -webkit-appearance: none; border: 0; outline: 0; background: transparent; color: var(--sys-on-surface, #15171c);
+      font: inherit; font-weight: 500; cursor: pointer; padding: 0; max-width: 180px; text-overflow: ellipsis; }
+    .ctl select option { color: #15171c; background: #fff; }
+    .ctl .caret { position: absolute; inset-inline-end: 9px; fill: currentColor; opacity: 0.6; pointer-events: none; }
+    :host-context([dir='rtl']) .ctl { padding: 0 12px 0 30px; }
+    .note { margin: 0 12px 4px 52px; font-size: 13px; color: var(--sys-on-surface-variant, #6b7280); }
+    .meta { font-size: 13px; color: var(--sys-on-surface-variant, #6b7280); margin-top: -6px; }
+    @media (max-width: 600px) {
+      .controls { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-inline-start: 4px; }
+      .controls::-webkit-scrollbar { display: none; }
+      .ctl { flex: none; }
+      .note { margin-inline-start: 8px; }
+    }
+    /* The buttons above the box float over the thread: give them the box's fill. */
+    .dock-top .ghost, .dock-top .jobs-pill { background: var(--gm-panel, #1d1f25); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14); }
+    .dock-top .ghost:hover, .dock-top .jobs-pill:hover { filter: brightness(1.06); }
+    @media (prefers-reduced-motion: reduce) { .ctl-wrap { transition: none; } }
     /* In the thread, results stay small; the jobs panel holds the rest. */
     .job .media { max-height: 360px; }
 

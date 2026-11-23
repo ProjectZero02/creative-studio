@@ -114,6 +114,8 @@ def clean_message(raw: Any) -> dict | None:
         "images": images,
         "jobs": [_json_value(j, 1) for j in jobs[:MAX_JOBS]],
         "ask": _json_value(raw.get("ask"), 1),
+        # The settings line under a reply from the type controls.
+        "meta": _text(raw.get("meta"), 200),
     }
 
 
