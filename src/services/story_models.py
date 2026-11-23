@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass, field, replace
 
 from config.default import Default
 from config.omni_models import get_omni_model_config
+from config.veo_models import get_veo_model_config
 
 # ---------------------------------------------------------------------------
 # Presets
@@ -88,6 +89,30 @@ CAMERA_PRESETS: dict[str, dict[str, str]] = {
         "label": "Dolly in",
         "prompt": "slow smooth dolly in toward the subject",
     },
+    "dolly_out": {
+        "label": "Dolly out",
+        "prompt": "slow smooth dolly out revealing the surroundings",
+    },
+    "pan_left": {
+        "label": "Pan left",
+        "prompt": "smooth horizontal camera pan left across the scene",
+    },
+    "pan_right": {
+        "label": "Pan right",
+        "prompt": "smooth horizontal camera pan right across the scene",
+    },
+    "tilt_up": {
+        "label": "Tilt up",
+        "prompt": "gentle vertical tilt up to reveal height and scale",
+    },
+    "tilt_down": {
+        "label": "Tilt down",
+        "prompt": "gentle vertical tilt down onto the subject",
+    },
+    "tracking": {
+        "label": "Tracking",
+        "prompt": "smooth lateral tracking shot keeping pace with the subject",
+    },
     "orbit": {"label": "Orbit", "prompt": "camera orbits slowly around the subject"},
     "crane_up": {"label": "Crane up", "prompt": "camera cranes up to reveal the scene"},
     "handheld": {
@@ -96,6 +121,41 @@ CAMERA_PRESETS: dict[str, dict[str, str]] = {
     },
 }
 CAMERA_IDS = [k for k in CAMERA_PRESETS if k != "auto"]
+
+SHOT_SIZES: dict[str, str] = {
+    "extreme_wide": "Extreme wide shot",
+    "wide": "Wide shot",
+    "medium_wide": "Medium wide shot",
+    "medium": "Medium shot",
+    "medium_close": "Medium close-up",
+    "close_up": "Close-up",
+    "insert": "Insert detail shot",
+}
+SHOT_SIZE_IDS = list(SHOT_SIZES)
+
+TRANSITION_TYPES: dict[str, str] = {
+    "auto": "Smart (Director's choice)",
+    "cut": "Clean cut (J/L audio)",
+    "bridge": "Seamless bridge (First→Last frame)",
+    "extend": "Continuous take (Extend)",
+    "dissolve": "Cross-dissolve",
+    "fade_black": "Dip to black",
+}
+TRANSITION_IDS = list(TRANSITION_TYPES)
+
+PACING_MODES: dict[str, dict] = {
+    "dynamic": {"label": "Dynamic (4–6s shots)", "target_shot_seconds": 5},
+    "cinematic": {"label": "Cinematic (6–10s shots)", "target_shot_seconds": 8},
+    "documentary": {"label": "Documentary (8–12s shots)", "target_shot_seconds": 10},
+}
+PACING_IDS = list(PACING_MODES)
+
+STORY_VIDEO_ENGINES: dict[str, str] = {
+    "gemini-omni-1.2-flash": "Gemini Omni 1.2 Flash",
+    "hybrid": "Hybrid (Omni speech + Veo 3.1 visuals)",
+    "3.1-fast": "Veo 3.1 Fast",
+    "3.1": "Veo 3.1",
+}
 
 LANGUAGES: dict[str, str] = {
     # label -> BCP-47 code used for TTS
@@ -163,23 +223,83 @@ EXTEND_MIN_SECONDS = 3
 EXTEND_MAX_SECONDS = 10
 
 
-def single_clip_max() -> int:
+def _video_model_spec(model_id: str | None = None):
+    """Resolve Omni or Veo model configuration for Story Studio."""
+    mid = (model_id or "").strip() or Default().STORY_VIDEO_MODEL
+    if mid == "hybrid":
+        return get_omni_model_config("gemini-omni-1.2-flash"), True
+    omni = get_omni_model_config(mid)
+    if omni:
+        return omni, "extend" in omni.supported_modes
+    veo = get_veo_model_config(mid)
+    if not veo and mid.startswith("veo-"):
+        from config.veo_models import get_version_id_by_model_name
+
+        vid = get_version_id_by_model_name(mid)
+        veo = get_veo_model_config(vid) if vid else None
+    if veo:
+        return veo, bool(veo.supports_video_extension)
+    return None, False
+
+
+def single_clip_max(model_id: str | None = None) -> int:
     """Longest clip the story video model makes in one request."""
-    model = get_omni_model_config(Default().STORY_VIDEO_MODEL)
+    model, _ = _video_model_spec(model_id)
     return model.max_duration if model else 8
 
 
-def supported_durations() -> list[int]:
+def supported_durations(model_id: str | None = None) -> list[int]:
     """Scene lengths (seconds) the configured story video model can make:
     its own clip range, plus longer scenes up to STORY_MAX_SCENE_SECONDS when
     it can extend a clip."""
-    model = get_omni_model_config(Default().STORY_VIDEO_MODEL)
+    model, can_extend = _video_model_spec(model_id)
     if not model:
         return [4, 6, 8]
     top = model.max_duration
-    if "extend" in model.supported_modes:
+    if can_extend:
         top = max(top, Default().STORY_MAX_SCENE_SECONDS)
     return [d for d in SCENE_LENGTHS if model.min_duration <= d <= top]
+
+
+def split_narration_parts(text: str, parts: list[int]) -> list[str]:
+    """Split `text` across `parts` durations proportionally without repeating words.
+
+    Prefers sentence and clause boundaries so multi-part Omni/Veo extensions
+    deliver continuous dialogue instead of repeating the full line on every turn.
+    """
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if len(parts) <= 1:
+        return [cleaned]
+    words = cleaned.split(" ") if cleaned else []
+    if not words:
+        return ["" for _ in parts]
+    out: list[str] = []
+    idx = 0
+    for k, sec in enumerate(parts):
+        if k == len(parts) - 1:
+            out.append(" ".join(words[idx:]).strip())
+            break
+        remaining_words = len(words) - idx
+        if remaining_words <= 0:
+            out.append("")
+            continue
+        rem_sec = sum(max(1, int(p)) for p in parts[k:])
+        target = max(1, round(remaining_words * max(1, int(sec)) / max(1, rem_sec)))
+        end = min(len(words), idx + target)
+        # Prefer landing on a sentence or clause boundary within +/- 3 words.
+        best = end
+        for offset in range(-3, 4):
+            cand = end + offset
+            if idx < cand <= len(words):
+                w = words[cand - 1]
+                if w.endswith((".", "!", "?", "؟", "…")):
+                    best = cand
+                    break
+                if w.endswith((",", ";", ":", "،")) and best == end:
+                    best = cand
+        out.append(" ".join(words[idx:best]).strip())
+        idx = best
+    return out
 
 
 def clip_parts(seconds: int, single_max: int | None = None) -> list[int]:
@@ -254,10 +374,19 @@ class Scene:
     location_id: str = ""
     prop_ids: list[str] = field(default_factory=list)
     speaker_id: str = ""
+    # Director v3 cinematography & seamless join metadata.
+    sequence: str = ""
+    shot_size: str = "medium"
+    motion_prompt: str = ""
+    audio_cue: str = ""
+    transition: str = "auto"  # auto | cut | bridge | extend | dissolve | fade_black
+    bridged_to: str = ""  # frame_uri of next scene used as last_frame
+    video_model_used: str = ""
 
     def clear_clip(self) -> None:
         """Forget the clip and everything made from it (take, Omni thread)."""
         self.clip_uri = self.extends_from = self.interaction_id = ""
+        self.bridged_to = self.video_model_used = ""
         self.clip_in = 0.0
 
     def alt_clip_key(self) -> str:
@@ -351,6 +480,15 @@ class Story:
     # scene's links by scene id), kept until the Set step turns them into a
     # set. "" when the story has a set or the writer gave no cast.
     cast_json: str = ""
+    # Director v3 fields: script input, multi-minute targets, engine & visual lock.
+    input_mode: str = "idea"  # "idea" | "script"
+    raw_script: str = ""
+    target_seconds: int = 0  # 0 = scene_count * duration; >0 = target film runtime
+    pacing: str = "cinematic"  # "dynamic" | "cinematic" | "documentary"
+    video_model: str = ""  # "" = STORY_VIDEO_MODEL; else "hybrid", "3.1-fast", "3.1", ...
+    visual_grammar: str = ""  # global lens, lighting ratio, colour grade lock
+    sequences_json: str = ""  # JSON list of sequence outlines for long films
+    color_match: bool = True
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 
@@ -475,12 +613,17 @@ class Caps:
     notes: list[str] = field(default_factory=list)
 
 
-def nearest_duration(duration: int) -> int:
-    allowed = supported_durations()
+def nearest_duration(duration: int, model_id: str | None = None) -> int:
+    allowed = supported_durations(model_id)
     return min(allowed, key=lambda d: (abs(d - int(duration)), d))
 
 
-def apply_caps(scene_count: int, duration: int, resolution: str | None = None) -> Caps:
+def apply_caps(
+    scene_count: int,
+    duration: int,
+    resolution: str | None = None,
+    model_id: str | None = None,
+) -> Caps:
     """Clamp a film request to the configured guardrails.
 
     Scene count is clamped to [STORY_MIN_SCENES, STORY_MAX_SCENES], duration
@@ -493,15 +636,15 @@ def apply_caps(scene_count: int, duration: int, resolution: str | None = None) -
     n0 = max(cfg.STORY_MIN_SCENES, min(cfg.STORY_MAX_SCENES, int(scene_count)))
     if n0 != int(scene_count):
         notes.append(f"Scenes limited to {n0}.")
-    d0 = nearest_duration(duration)
+    d0 = nearest_duration(duration, model_id)
     if d0 != int(duration):
         notes.append(f"Scene length set to {d0}s (supported by the video model).")
     n, d = n0, d0
     while n * d > limit and n > cfg.STORY_MIN_SCENES:
         n -= 1
     if n * d > limit:
-        fitting = [x for x in supported_durations() if n * x <= limit]
-        d = max(fitting) if fitting else min(supported_durations())
+        fitting = [x for x in supported_durations(model_id) if n * x <= limit]
+        d = max(fitting) if fitting else min(supported_durations(model_id))
     if n != n0 or d != d0:
         notes.append(f"Film capped at {limit}s: {n} scenes of {d}s.")
     res = cfg.STORY_VIDEO_RESOLUTION
@@ -531,6 +674,18 @@ _CAMERA_ALIASES = {
     "push in": "dolly_in",
     "push-in": "dolly_in",
     "zoom in": "dolly_in",
+    "dolly out": "dolly_out",
+    "dolly-out": "dolly_out",
+    "pull out": "dolly_out",
+    "pull back": "dolly_out",
+    "zoom out": "dolly_out",
+    "pan left": "pan_left",
+    "pan right": "pan_right",
+    "tilt up": "tilt_up",
+    "tilt down": "tilt_down",
+    "tracking": "tracking",
+    "track": "tracking",
+    "follow": "tracking",
     "orbit": "orbit",
     "arc": "orbit",
     "crane": "crane_up",
@@ -662,6 +817,22 @@ def parse_scenario(
             )
         )
         spoken = _spoken(raw.get("spoken"), narration, speech_mode)
+        raw_shot = (
+            str(raw.get("shot_size") or "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
+        shot_size = raw_shot if raw_shot in SHOT_SIZE_IDS else "medium"
+        raw_trans = (
+            str(raw.get("transition") or "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
+        transition = raw_trans if raw_trans in TRANSITION_IDS else "auto"
         scenes.append(
             Scene(
                 narration=narration,
@@ -671,6 +842,11 @@ def parse_scenario(
                 if spoken
                 else duration,
                 spoken=spoken,
+                sequence=str(raw.get("sequence") or "").strip(),
+                shot_size=shot_size,
+                motion_prompt=str(raw.get("motion_prompt") or "").strip(),
+                audio_cue=str(raw.get("audio_cue") or "").strip(),
+                transition=transition,
             )
         )
     if len(scenes) < scene_count:
@@ -726,6 +902,22 @@ def parse_voice(text: str) -> str:
     if not isinstance(data, dict):
         return ""
     return str(data.get("voice") or "").strip()[:200]
+
+
+def parse_visual_grammar(text: str) -> str:
+    """The scenario's "visual_grammar" (lens, lighting, color grade), or "" if missing."""
+    data = _json_dict(text)
+    return str(data.get("visual_grammar") or "").strip()[:600]
+
+
+def parse_sequences(text: str) -> str:
+    """The scenario's "sequences" outline list serialized as JSON, or "" if missing."""
+    data = _json_dict(text)
+    seqs = data.get("sequences")
+    if not isinstance(seqs, list):
+        return ""
+    cleaned = [s for s in seqs if isinstance(s, dict)]
+    return json.dumps(cleaned) if cleaned else ""
 
 
 def parse_single_scene(
@@ -1747,8 +1939,12 @@ def frame_prompt(
     )
     brand = _brand_line(story)
     brand = f" {brand}" if brand else ""
+    shot = SHOT_SIZES.get(getattr(scene, "shot_size", ""), "")
+    shot_text = f" Framing: {shot}." if shot else ""
+    grammar = (getattr(story, "visual_grammar", "") or "").strip()
+    grammar_text = f" Visual grammar: {grammar}." if grammar else ""
     return (
-        f"{scene.visual}{character}{place}{facing} Style: {style['prompt']}.{brand} "
+        f"{scene.visual}{shot_text}{character}{place}{facing} Style: {style['prompt']}.{grammar_text}{brand} "
         f"Aspect ratio {story.aspect_ratio}, one single frame, no text, no captions."
         f"{people}{keep}{refs_sentence(ref_labels or [])}"
     )
@@ -1771,14 +1967,15 @@ def clip_prompt(
     story_set=None,
     ref_labels: list[str] | None = None,
     start_frame: bool = False,
+    part_narration: str | None = None,
+    bridge_to_next: bool = False,
 ) -> str:
     """Video prompt for a scene. ``continuing``: the clip continues the
     previous one (a continuous take), so it carries on the same person and
     voice. ``start_frame``: the scene's storyboard frame is attached, so the
-    clip opens on it. No clip is told to end on the next scene's frame: it
-    would spend its own line morphing into the next shot (the screen, the
-    angle), so every scene's picture arrived seconds before its words. Each
-    clip holds its own shot and the next one cuts in as its line starts.
+    clip opens on it. ``part_narration`` overrides the spoken text for a
+    multi-part extension (empty string produces an ambient-only prompt).
+    ``bridge_to_next`` appends first-to-last frame transition guidance.
 
     Every clip has its own sound. Narrated scenes ask for natural ambient
     sound only, because the narrator's voiceover and the music go on top.
@@ -1788,7 +1985,14 @@ def clip_prompt(
     style = STYLE_BY_ID.get(story.style, STYLES[0])
     cam = CAMERA_PRESETS.get(scene.camera, CAMERA_PRESETS["static"])["prompt"]
     cast_text = _cast_text(story, scene, story_set)
-    base = f"{scene.visual} Camera: {cam or 'natural camera movement'}. Style: {style['prompt']}."
+    motion = (getattr(scene, "motion_prompt", "") or "").strip()
+    grammar = (getattr(story, "visual_grammar", "") or "").strip()
+    base = f"{scene.visual} Camera: {cam or 'natural camera movement'}."
+    if motion:
+        base += f" Motion: {motion}."
+    base += f" Style: {style['prompt']}."
+    if grammar:
+        base += f" Visual grammar: {grammar}."
     if _names_cast(story, scene, story_set):
         base += f" On screen: {cast_text}."
     base += refs_sentence(ref_labels or [])
@@ -1814,10 +2018,24 @@ def clip_prompt(
             "frame) and hold that shot: no cut, and the screens and signs keep "
             "what they show."
         )
-    if not (scene.spoken and scene.narration.strip()):
+    bridge_note = (
+        " Use the first image as the opening frame and smoothly transition to the second image as the ending frame."
+        if bridge_to_next
+        else ""
+    )
+    spoken_line = (
+        scene.narration.strip() if part_narration is None else part_narration.strip()
+    )
+    audio_cue = (getattr(scene, "audio_cue", "") or "").strip()
+    if not (scene.spoken and spoken_line):
+        sound = (
+            f"Sound: {audio_cue}. Natural ambient sound and sound effects of the scene only."
+            if audio_cue
+            else "Sound: natural ambient sound and sound effects of the scene only."
+        )
         return (
-            f"{base} Sound: natural ambient sound and sound effects of the "
-            "scene only. No speech, dialogue, narration, singing or music."
+            f"{base} {sound} No speech, dialogue, narration, singing or music."
+            f"{bridge_note}"
         )
     voice = (
         speaker_voice(story, scene, story_set)
@@ -1837,11 +2055,11 @@ def clip_prompt(
         f"{base} The person on screen{who} speaks to whoever they are "
         "addressing (the audience in the scene; the camera only when nobody "
         "else is there) and says in "
-        f'{story.language}: "{scene.narration.strip()}" '
+        f'{story.language}: "{spoken_line}" '
         f"They speak in {voice}, the same voice in every scene. They are the only "
         "voice: no narrator, no other speakers, no voice-over. Clear, natural, "
         "lip-synced speech with light room sound. No music, no subtitles, no "
-        "on-screen text."
+        f"on-screen text.{bridge_note}"
     )
 
 
@@ -1993,6 +2211,7 @@ class Segment:
     # Seconds skipped at the start of the clip. A seamless join drops the
     # clip's first frame, which repeats the previous clip's last frame.
     trim_head: float = 0.0
+    join: str = "cut"
 
 
 @dataclass
@@ -2014,7 +2233,9 @@ def build_stitch_plan(
     seamless: bool = False,
     fps: int = 24,
 ) -> StitchPlan:
-    """Lay out clips on a timeline with overlapping crossfades.
+    """Lay out clips on a timeline with overlapping crossfades or explicit
+    scene transitions (``cut``, ``bridge``, ``extend``, ``dissolve``,
+    ``fade_black``, ``auto``).
 
     Each clip starts `crossfade` seconds before the previous one ends, so the
     film is sum(durations) - crossfade * (n - 1) long. The crossfade is
@@ -2039,7 +2260,7 @@ def build_stitch_plan(
     segments: list[Segment] = []
     t = 0.0
     head = 1.0 / fps if fps > 0 else 0.0
-    for k, ((i, s), d) in enumerate(zip(usable, durs)):
+    for k, ((i, s), d) in enumerate(zip(usable, durs, strict=True)):
         prev_i, prev = usable[k - 1] if k else (-1, None)
         cut = (
             seamless
@@ -2057,18 +2278,41 @@ def build_stitch_plan(
             and prev_i == i - 1
             and s.extends_from == prev.clip_uri
         )
+        bridged = (
+            prev is not None
+            and prev_i == i - 1
+            and bool(getattr(prev, "bridged_to", ""))
+            and bool(s.frame_uri)
+            and prev.bridged_to == s.frame_uri
+        )
+        trans = (getattr(s, "transition", "auto") or "auto").strip().lower()
         if k == 0:
-            start, fade, trim = 0.0, 0.0, base
+            start, fade, trim, join = 0.0, 0.0, base, "cut"
         elif extended:
             # Continuous take: a straight cut into the clip's new seconds.
-            start, fade, trim = t, 0.0, base
+            start, fade, trim, join = t, 0.0, base, "extend"
         elif cut and not base:
-            start, fade, trim = t, 0.0, head
+            start, fade, trim, join = t, 0.0, head, "cut"
+        elif bridged:
+            trim = head if (d > head and not base) else base
+            start, fade, join = t, 0.0, "bridge"
+        elif trans == "cut":
+            start, fade, trim, join = t, 0.0, base, "cut"
+        elif trans == "bridge":
+            trim = head if (seamless and d > head and not base) else base
+            start, fade, join = t, 0.0, "bridge"
+        elif trans == "extend":
+            start, fade, trim, join = t, 0.0, base, "extend"
+        elif trans == "fade_black":
+            start, fade, trim, join = t, xf, base, "fade_black"
+        elif trans == "dissolve":
+            start, fade, trim, join = t - xf, xf, base, "dissolve"
         elif s.spoken or prev.spoken:
             # A crossfade would overlap speech with the next shot: cut instead.
-            start, fade, trim = t, 0.0, base
+            start, fade, trim, join = t, 0.0, base, "cut"
         else:
             start, fade, trim = t - xf, xf, base
+            join = "dissolve" if xf > 0 else "cut"
         segments.append(
             Segment(
                 index=i,
@@ -2079,6 +2323,7 @@ def build_stitch_plan(
                 narration=s.narration,
                 spoken=bool(s.spoken and s.narration.strip()),
                 trim_head=round(trim, 4),
+                join=join,
             )
         )
         t = start + d - trim

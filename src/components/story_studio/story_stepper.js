@@ -15,12 +15,8 @@
  */
 
 /**
- * <story-stepper>: Stories → Create → Scenario → Set → Storyboard → Scenes → Edit.
- *
- * Each step is a real <button> (keyboard and screen reader friendly) with an
- * icon, a label and a connecting line. States: done, current, upcoming.
- * Upcoming steps that are not reachable yet are disabled. On narrow screens
- * only the current step keeps its label.
+ * <story-stepper>: 4-stage quiet tonal pill stepper:
+ *   Stories -> Setup -> Director's Desk -> Timeline & Export.
  */
 import { LitElement, css, html, svg } from '/ui/vendor/lit-3.2.1.js';
 
@@ -45,52 +41,63 @@ class StoryStepper extends LitElement {
     :host { display: block; width: 100%; font-family: var(--gm-font, inherit); }
     ol {
       list-style: none; margin: 0; padding: 0;
-      display: flex; align-items: flex-start; width: 100%;
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px; width: 100%; align-items: center;
     }
-    li { flex: 1 1 0; position: relative; display: flex; justify-content: center; min-width: 0; }
-    li + li::before {
-      content: ""; position: absolute; top: 22px; height: 2px;
-      left: calc(-50% + 30px); right: calc(50% + 30px);
-      background: var(--sys-outline-variant, #ccc); border-radius: 2px;
-      transition: background 220ms ease;
-    }
-    li.reached::before { background: var(--sys-primary, #1a5fd8); }
+    li { display: flex; min-width: 0; }
     button {
       all: unset; box-sizing: border-box; cursor: pointer;
-      display: flex; flex-direction: column; align-items: center; gap: 8px;
-      min-width: 44px; min-height: 44px; padding: 0 4px; border-radius: 12px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; height: var(--gm-control-h, 40px); min-width: 0;
+      padding: 0 14px; border-radius: 999px; border: 0;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.08));
       color: var(--sys-on-surface-variant, #555);
+      font-size: 13.5px; font-weight: 500;
+      transition: background-color 160ms ease, color 160ms ease, opacity 160ms ease;
       -webkit-tap-highlight-color: transparent;
     }
-    button:focus-visible { outline: 2px solid var(--gm-focus, var(--sys-primary)); outline-offset: 4px; }
-    button[disabled] { cursor: default; }
-    .dot {
-      width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
-      border: 2px solid var(--sys-outline-variant, #ccc);
-      background: var(--sys-surface-container-low, #f4f4f4);
-      transition: background 200ms ease, border-color 200ms ease, transform 200ms ease;
+    button:focus-visible { outline: 2px solid var(--gm-focus, var(--sys-primary)); outline-offset: 2px; }
+    button[disabled] { cursor: default; opacity: 0.45; }
+    button:not([disabled]):not(.current):hover {
+      background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14));
+      color: var(--sys-on-surface, #111);
     }
-    svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8;
-          stroke-linecap: round; stroke-linejoin: round; }
-    .label { font-size: 13px; line-height: 1.2; font-weight: 500; white-space: nowrap; }
-    .done .dot { background: var(--sys-primary, #1a5fd8); border-color: var(--sys-primary, #1a5fd8);
-                 color: var(--sys-on-primary, #fff); }
-    .done .label { color: var(--sys-on-surface, #111); }
-    .current .dot {
-      background: var(--sys-primary-container, #dce7fd); border-color: var(--sys-primary, #1a5fd8);
+    .badge {
+      width: 22px; height: 22px; border-radius: 50%; flex: none;
+      display: grid; place-items: center;
+      background: transparent;
+    }
+    svg {
+      width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+    .label {
+      line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .done {
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.08));
+      color: var(--sys-on-surface, #111);
+    }
+    .done .badge {
+      background: var(--sys-primary, #1a5fd8);
+      color: var(--sys-on-primary, #fff);
+    }
+    .done svg { width: 13px; height: 13px; stroke-width: 2.4; }
+    .current {
+      background: var(--sys-primary-container, #dce7fd);
       color: var(--sys-on-primary-container, #0a2a66);
-      box-shadow: 0 0 0 4px color-mix(in srgb, var(--sys-primary, #1a5fd8) 18%, transparent);
+      font-weight: 600;
     }
-    .current .label { color: var(--sys-on-surface, #111); font-weight: 700; }
-    .upcoming .dot { color: var(--sys-on-surface-variant, #555); }
-    button:not([disabled]):hover .dot { transform: translateY(-1px); border-color: var(--sys-primary, #1a5fd8); }
-    @media (max-width: 720px) {
-      .dot { width: 36px; height: 36px; }
-      svg { width: 18px; height: 18px; }
-      button { padding: 0; min-height: 44px; justify-content: flex-start; }
-      li + li::before { top: 18px; left: calc(-50% + 18px); right: calc(50% + 18px); }
-      .label { font-size: 12px; }
-      li:not(.is-current) .label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    @media (max-width: 640px) {
+      ol { display: flex; gap: 6px; }
+      li { flex: 0 0 auto; }
+      li.is-current { flex: 1 1 auto; min-width: 0; }
+      button { height: var(--gm-control-h, 44px); width: 44px; padding: 0; }
+      li.is-current button { width: 100%; padding: 0 14px; }
+      li:not(.is-current) .label {
+        position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+      }
     }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   `;
@@ -113,14 +120,13 @@ class StoryStepper extends LitElement {
     const steps = this._steps();
     return html`<nav aria-label="Story steps"><ol>
       ${steps.map((s, i) => {
-        const reached = s.state === 'done' || s.state === 'current';
         const icon = s.state === 'done' ? ICONS.done : (ICONS[s.id] || ICONS.stories);
-        return html`<li class="${reached && i > 0 ? 'reached' : ''} ${s.state === 'current' ? 'is-current' : ''}">
+        return html`<li class="${s.state === 'current' ? 'is-current' : ''}">
           <button class="${s.state}" ?disabled=${!s.enabled}
             aria-current=${s.state === 'current' ? 'step' : 'false'}
             aria-label="${`Step ${i + 1}: ${s.label}${s.state === 'done' ? ' (done)' : ''}`}"
             @click=${() => this._select(s.id)}>
-            <span class="dot"><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>
+            <span class="badge"><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>
             <span class="label">${s.label}</span>
           </button>
         </li>`;

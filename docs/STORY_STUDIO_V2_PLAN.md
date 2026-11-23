@@ -50,3 +50,17 @@ Date: 2026-11-18. Scope: `src/services/story_*`, `src/pages/story_studio.py`, `s
 - **Settings from the idea.** On the Create step, each typing pause (700 ms) reads the idea: a free rules pass at once ("one minute" becomes 6 scenes of 10 s, plus vertical, language, style, who speaks, camera), then `STORY_LIVE_SETTINGS_MODEL` (Gemini Flash-Lite) refines it. A setting picked by hand is pinned and kept; the scene count or length is planned around it. "Use auto" unpins everything.
 - **Brief.** The scenario call also returns a fuller brief of the idea, shown and editable on the Scenario step; Rewrite all scenes works from it. No extra model call.
 - **Scenes up to 30 s.** Omni makes up to 15 s per request; a longer scene is continued in the same Omni thread (3 to 10 s per turn) and joined into one clip (`STORY_MAX_SCENE_SECONDS`).
+
+## Story Studio v3: Multi-Minute Film Engine & Director's Desk (2026-11-23)
+
+- **Hierarchical Director Engine (`src/services/story_director.py`):**
+  - Scales cleanly to `30s`–`15m+` films (`STORY_MAX_SCENES=120`, `STORY_MAX_FILM_SECONDS=900`): plans `Act -> Sequence -> Shot` blueprints (`plan_film_blueprint`), runs two-stage outline + parallel sequence shot expansion (`STORY_SEQUENCE_THRESHOLD_SCENES=10`), and enforces 180°/30° shot-size continuity (`wide`, `medium`, `close_up`, `insert`) with separate static keyframe `visual`, temporal `motion_prompt`, and `audio_cue`.
+  - **From Script mode (`parse_user_script`):** deterministically parses pasted screenplays (`INT./EXT.` sluglines, `CHARACTER:` dialogue, `[Visual: ...]`) or plain voiceover paragraphs into timed shot beats.
+- **Dual-Engine Video & Parallel Keyframe Bridging (`src/services/story_service.py`, `src/services/story_jobs.py`, `src/models/omni.py`):**
+  - Supports **Gemini Omni 1.2 Flash**, **Veo 3.1 / 3.1 Fast**, and **Hybrid** routing (`resolve_video_engine`: Omni for on-camera dialogue or `>8s` shots, Veo 3.1 Fast for crisp B-roll/bridges).
+  - Supports **First+Last Frame Bridging** (`first_last` on Omni, `interpolation` on Veo 3.1) rendered in parallel (`_bridge_end_frame`), proportional multi-part dialogue splitting (`split_narration_parts`) to prevent repeated lines across extensions, `extend` continuity without snapping to stale frames, and bounded Omni inline video history (`max_inline_videos=2`).
+  - Adds per-shot on-demand rendering (`start_scene_clips`) and cooperative job cancellation (`cancel_job`).
+- **Glitch-Free FFmpeg Mastering (`src/services/story_timeline.py`):**
+  - Protects matched `bridge` and `extend` join frames from `clip_edges` still-trimming, auto-fits slightly overlong narrator lines up to `1.18x` (`atempo`) instead of truncating, adds equal-power `qsin` audio fades and `0.16s` L-cut ambient room-tone overlaps, supports `fade_black` transitions, optional boundary luminance matching (`compute_boundary_eq`), and equal-power cosine/sine crossfaded music loops (`loop_audio_crossfade`) for long films.
+- **4-Stage Workspace & 3-Decoder Timeline (`src/pages/story_studio.py`, `src/components/story_studio/`):**
+  - Consolidates the flow into `Stories -> Setup -> Director's Desk (Shots & Storyboard | Cast & Set | Animatic Preview) -> Timeline & Export` with sequence filter chips, interactive join-connector pills, and a bounded 3-decoder `<video>` pool in `<story-timeline>` so 40–120+ shot films play smoothly without hitting Chromium's `WebMediaPlayer` limit.

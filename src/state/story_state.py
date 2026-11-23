@@ -33,6 +33,11 @@ class StoryState:
     loaded: bool = False
 
     # Create form draft (copied into the story on "Generate scenario").
+    input_mode: str = "idea"  # "idea" | "script"
+    raw_script: str = ""
+    target_seconds: int = 0  # 0 = custom scenes x duration, else e.g. 30, 60, 180, 300, 600
+    pacing: str = "cinematic"
+    video_model: str = ""
     idea: str = ""
     character: str = ""
     language: str = "English"
@@ -48,6 +53,13 @@ class StoryState:
     # Auto settings read from the idea while typing (services/story_autoset).
     auto_json: str = ""  # what was found, for the note under the idea
     pinned_json: str = "[]"  # form fields the user set by hand (kept as is)
+
+    # Director's Desk UI state.
+    desk_tab: str = "shots"  # "shots" | "set" | "animatic"
+    seq_filter: str = "all"  # "all" or sequence title
+    soundtrack_open: bool = False
+    animatic_index: int = 0
+    expanded_shots_json: str = "[]"
 
     # Background job being watched.
     job_id: str = ""
