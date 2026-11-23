@@ -20,6 +20,7 @@
 - ``POST /api/chat/reset`` starts a new conversation.
 - ``GET /api/chat/options`` lists the type controls (services/studio_options.py)
   and ``POST /api/chat/job`` starts a job with those settings, no model call.
+- ``POST /api/chat/film`` runs a film's next step (or all of them).
 - ``POST /api/chat/load`` reopens a saved chat (routers/chats_router.py):
   the model gets its earlier turns and its jobs keep reporting.
 
@@ -126,6 +127,30 @@ async def make_job(request: Request) -> dict:
             str(body.get("prompt") or ""),
             body.get("settings"),
             str(body.get("source") or ""),
+        )
+    except JobLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/film")
+async def film(request: Request) -> dict:
+    """A film's next step: ``{"story_id": "...", "all": false}``."""
+    from services.live_jobs import JobLimitError
+
+    owner = _caller(request)
+    _same_site(request)
+    if "application/json" not in (request.headers.get("content-type") or ""):
+        raise HTTPException(status_code=415, detail="Send JSON")
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Bad JSON") from exc
+    body = body if isinstance(body, dict) else {}
+    try:
+        return await run_in_threadpool(
+            studio_chat.film_next, owner, str(body.get("story_id") or ""), bool(body.get("all"))
         )
     except JobLimitError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc

@@ -186,6 +186,14 @@ _STRINGS = {
     "auto_tip": ("home.chat.auto_tip", "The chat picks what to make"),
     "settings": ("home.chat.settings", "Settings"),
     "need_prompt": ("home.chat.need_prompt", "Write what to make first."),
+    "film_steps": ("home.chat.film_steps", "Film steps"),
+    "step_scenario": ("home.chat.step_scenario", "Scenario"),
+    "step_set": ("home.chat.step_set", "Set"),
+    "step_storyboard": ("home.chat.step_storyboard", "Storyboard"),
+    "step_film": ("home.chat.step_film", "Film"),
+    "next_step": ("home.chat.next_step", "Next step"),
+    "whole_film": ("home.chat.whole_film", "Whole film"),
+    "whole_film_tip": ("home.chat.whole_film_tip", "Run every remaining step"),
 }
 
 

@@ -332,6 +332,64 @@ class GmHomeChat extends LitElement {
     this.updateComplete.then(() => this._ta && this._ta.focus());
   }
 
+  // ---------------------------------------------------------------- films
+
+  /** Where a film is: Scenario, Set, Storyboard, Film, with this job's step lit. */
+  _storySteps(j) {
+    const S = this._s;
+    const p = j.params || {};
+    const steps = [['scenario', S.step_scenario || 'Scenario'], ['set', S.step_set || 'Set'],
+      ['storyboard', S.step_storyboard || 'Storyboard'], ['video', S.step_film || 'Film']];
+    const at = { editor: 'storyboard', stories: 'scenario', create: 'scenario' }[p.story_step] || p.story_step || 'scenario';
+    let idx = Math.max(0, steps.findIndex(([id]) => id === at));
+    const running = j.status !== 'done' && j.status !== 'failed';
+    if (p.has_film) idx = steps.length;
+    return html`<ol class="steps" aria-label=${S.film_steps || 'Film steps'}>
+      ${steps.map(([id, label], i) => {
+        const state = i < idx || (i === idx && j.status === 'done') ? 'done' : i === idx && running ? 'now' : i === idx && j.status === 'failed' ? 'bad' : '';
+        return html`<li class="step ${state}" aria-current=${state === 'now' ? 'step' : 'false'}><i aria-hidden="true"></i>${label}</li>`;
+      })}
+    </ol>`;
+  }
+
+  /** Next step and Whole film, on a finished step of a film that isn't done. */
+  _filmButtons(j, cls) {
+    const S = this._s;
+    const p = j.params || {};
+    if (j.status !== 'done' || p.has_film || !p.story_id) return nothing;
+    // Only the film's latest step offers the next one.
+    const same = Object.values(this._jobs).filter((x) => x.params && x.params.story_id === p.story_id);
+    if (same.length && same[same.length - 1].id !== j.id) return nothing;
+    return html`<button class="${cls}" type="button" ?disabled=${this._busy} @click=${() => this._filmNext(p.story_id, false)}>${svg(ICON.send, 16)}${S.next_step || 'Next step'}</button>
+      <button class="${cls}" type="button" ?disabled=${this._busy} @click=${() => this._filmNext(p.story_id, true)} title=${S.whole_film_tip || 'Run every remaining step'}>${svg(ICON.film, 16)}${S.whole_film || 'Whole film'}</button>`;
+  }
+
+  async _filmNext(storyId, all) {
+    if (this._busy) return;
+    const S = this._s;
+    this._busy = true;
+    let reply = '';
+    let job = null;
+    try {
+      const r = await fetch('/api/chat/film', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ story_id: storyId, all }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || '');
+      reply = body.reply || '';
+      job = body.job || null;
+    } catch (err) {
+      reply = (err && err.message) || S.error || 'Something went wrong. Please try again.';
+    }
+    if (job) this._jobs = { ...this._jobs, [job.id]: job };
+    this._msgs = [...this._msgs, { role: 'assistant', text: reply, jobs: job ? [job.id] : [] }];
+    this._busy = false;
+    if (job && !this._panelClosed && !this._phone()) this._panel = true;
+    if (job) this._poll();
+  }
+
   _flash(text) {
     this._note = text;
     this.requestUpdate();
@@ -849,9 +907,10 @@ class GmHomeChat extends LitElement {
         </div>
         ${running ? html`<div class="shimmer ${j.kind}" aria-hidden="true"></div>` : nothing}
         ${j.status === 'done' ? this._media(j) : nothing}
-        ${j.status === 'done' && isStory && !(j.params && j.params.has_film) ? html`<p class="job-note">${S.story_step || 'This step of your film is ready. Say "next step" to keep going, or open it in Story Studio.'}</p>` : nothing}
+        ${isStory ? this._storySteps(j) : nothing}
         ${j.status === 'failed' ? html`<p class="job-error">${j.error || ''}</p>` : nothing}
         ${j.status === 'done' || j.status === 'failed' ? html`<div class="job-actions">
+          ${isStory ? this._filmButtons(j, 'act') : nothing}
           ${j.status === 'done' && j.display_url && !isStory ? html`<a class="act" href=${j.display_url} download target="_blank" rel="noopener">${svg(ICON.download, 18)}${S.download || 'Download'}</a>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._prefill(`${S.edit_prefix || 'Edit'} ${j.handle}: `)}>${svg(ICON.edit, 18)}${S.edit || 'Edit'}</button>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._animate(j)}>${svg(ICON.spark, 18)}${S.animate || 'Animate'}</button>` : nothing}
@@ -897,8 +956,10 @@ class GmHomeChat extends LitElement {
         <div class="pj-media">${this._thumb(j)}</div>
         <div class="pj-head"><b>${name}</b><span class="pj-state">${running ? html`<i class="dot" aria-hidden="true"></i>` : nothing}${state}</span></div>
         ${j.prompt ? html`<p class="pj-prompt" title=${j.prompt}>${j.prompt}</p>` : nothing}
+        ${isStory ? this._storySteps(j) : nothing}
         ${j.status === 'failed' && j.error ? html`<p class="pj-error">${j.error}</p>` : nothing}
         ${done || j.status === 'failed' ? html`<div class="pj-acts">
+          ${isStory ? this._filmButtons(j, 'pa') : nothing}
           ${done && j.kind === 'image' ? html`<button class="pa" type="button" @click=${() => this._animate(j)}>${svg(ICON.spark, 16)}${S.animate || 'Animate'}</button>
             <button class="pa" type="button" @click=${() => this._useRef(j)} title=${S.reference_tip || 'Use as a reference in your next message'}>${svg(ICON.plus, 16)}${S.reference || 'Reference'}</button>` : nothing}
           ${done && j.display_url && !isStory ? html`<a class="pa icon" href=${j.display_url} download target="_blank" rel="noopener" aria-label=${S.download || 'Download'} title=${S.download || 'Download'}>${svg(ICON.download, 18)}</a>` : nothing}
@@ -1189,6 +1250,16 @@ class GmHomeChat extends LitElement {
     .dock-top .ghost, .dock-top .jobs-pill { background: var(--gm-panel, #1d1f25); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14); }
     .dock-top .ghost:hover, .dock-top .jobs-pill:hover { filter: brightness(1.06); }
     @media (prefers-reduced-motion: reduce) { .ctl-wrap { transition: none; } }
+    /* Film steps on a story job's card. */
+    .steps { list-style: none; margin: 0; padding: 0 4px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--sys-on-surface-variant, #6b7280); }
+    .step { display: inline-flex; align-items: center; gap: 6px; }
+    .step i { width: 8px; height: 8px; border-radius: 50%; background: rgba(127, 127, 127, 0.35); flex: none; }
+    .step.done { color: var(--sys-on-surface, #15171c); }
+    .step.done i { background: #1e8e3e; }
+    .step.now { color: var(--sys-on-surface, #15171c); font-weight: 500; }
+    .step.now i { background: var(--sys-primary, #1a73e8); animation: pulse 900ms ease-in-out infinite alternate; }
+    .step.bad i { background: #d93025; }
+    .act:disabled, .pa:disabled { opacity: 0.5; cursor: default; }
     /* In the thread, results stay small; the jobs panel holds the rest. */
     .job .media { max-height: 360px; }
 

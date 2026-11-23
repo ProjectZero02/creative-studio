@@ -177,12 +177,14 @@ def make(
     from services.studio_options import KINDS, clean, summary
 
     if kind not in KINDS:
-        raise ValueError("Pick Image, Video, Music or Voice.")
+        raise ValueError("Pick Image, Video, Music, Voice or Film.")
     prompt = (prompt or "").strip()[:MAX_MESSAGE]
     if not prompt:
         raise ValueError(tr("home.chat.need_prompt", "Write what to make first."))
     s = session_for(owner, jobs)
     picked = clean(kind, settings)
+    if kind == "film":
+        return _start_film(s, prompt, picked, summary(kind, picked))
     src = None
     if source and kind in ("image", "video"):
         handle = str(source).strip().lower()
@@ -221,6 +223,68 @@ def make(
             ]
         )[-MAX_HISTORY:]
     return {"reply": reply, "job": job.public(), "settings": picked, "summary": line}
+
+
+def _remember(s: ChatSession, said: str, reply: str, job: LiveJob | None) -> None:
+    with s.lock:
+        if job is not None:
+            s.job_ids.append(job.id)
+        s.history = (
+            s.history
+            + [
+                types.Content(role="user", parts=[types.Part.from_text(text=said)]),
+                types.Content(role="model", parts=[types.Part.from_text(text=reply)]),
+            ]
+        )[-MAX_HISTORY:]
+
+
+def _start_film(s: ChatSession, idea: str, picked: dict, line: str) -> dict:
+    """Film: write the scenario (the cheap first step) of a new Story Studio story."""
+    from common.i18n import tr
+
+    args = {"idea": idea}
+    for key, arg in (("length", "length"), ("aspect", "aspect_ratio"), ("style", "style"), ("language", "language")):
+        if picked.get(key, "auto") != "auto":
+            args[arg] = picked[key]
+    out = asyncio.run(s.call.run_tool("create_story", args))
+    if not isinstance(out, Deferred):
+        raise ValueError(str((out or {}).get("error") or "The film could not start."))
+    job = out.job
+    reply = tr(
+        "home.chat.film_started",
+        "Writing the scenario for {job}. Check it, then go to the next step.",
+    ).format(job=job.handle)
+    _remember(s, f"[film{': ' + line if line else ''}] {idea}", reply, job)
+    return {"reply": reply, "job": job.public(), "settings": picked, "summary": line}
+
+
+def film_next(owner: str, story_id: str, all_steps: bool = False, jobs: LiveJobs | None = None) -> dict:
+    """Run a film's next step (approving the scenario first), or all of them.
+
+    Returns {"reply", "job"}; job is None when the film is already done.
+    """
+    from common.i18n import tr
+
+    s = session_for(owner, jobs)
+    story_id = str(story_id or "").strip()[:64]
+    if not story_id:
+        raise ValueError("Which film?")
+    args = {"story": story_id, "all_steps": bool(all_steps)}
+    out = asyncio.run(s.call.run_tool("continue_story", args))
+    if isinstance(out, dict) and out.get("approved"):
+        # The scenario is approved; go straight on to building the set.
+        out = asyncio.run(s.call.run_tool("continue_story", {"story": story_id}))
+    if isinstance(out, Deferred):
+        job = out.job
+        key = "home.chat.film_all" if all_steps else "home.chat.film_next"
+        english = "Making the whole film: {job}." if all_steps else "Next step started: {job}."
+        reply = tr(key, english).format(job=job.handle)
+        _remember(s, "[film] whole film" if all_steps else "[film] next step", reply, job)
+        return {"reply": reply, "job": job.public()}
+    out = out if isinstance(out, dict) else {}
+    if out.get("error"):
+        raise ValueError(str(out["error"]))
+    return {"reply": tr("home.chat.film_done", "The film is already finished."), "job": None}
 
 
 def chat_jobs(owner: str, jobs: LiveJobs | None = None) -> list[dict]:

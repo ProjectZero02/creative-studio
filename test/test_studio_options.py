@@ -107,7 +107,7 @@ def test_make_animates_a_finished_picture(jobs):
 
 @pytest.mark.parametrize(
     "kind,prompt,source",
-    [("film", "x", ""), ("image", "   ", ""), ("video", "move", "image 9")],
+    [("story", "x", ""), ("image", "   ", ""), ("video", "move", "image 9")],
 )
 def test_make_refuses_bad_requests(jobs, kind, prompt, source):
     with pytest.raises(ValueError):
@@ -130,7 +130,7 @@ def test_job_route(monkeypatch, jobs):
     assert ok.status_code == 200, ok.text
     assert ok.json()["job"]["kind"] == "music"
     assert (
-        client.post("/api/chat/job", json={"kind": "film", "prompt": "x"}).status_code
+        client.post("/api/chat/job", json={"kind": "story", "prompt": "x"}).status_code
         == 400
     )
     assert (
@@ -156,3 +156,60 @@ def test_job_route(monkeypatch, jobs):
         client.post("/api/chat/job", json={"kind": "image", "prompt": "x"}).status_code
         == 429
     )
+
+
+@pytest.fixture
+def film_env(tmp_path, monkeypatch):
+    """Story Studio on temp stores with the fast mock backend (as test_live_story)."""
+    from test_live_story import _FastMock
+
+    from services import live_story, story_service, story_sets, story_store
+
+    story_store.set_store(story_store.LocalStoryStore(str(tmp_path / "stories.json")))
+    story_sets.set_set_store(story_sets.LocalSetStore(str(tmp_path / "sets.json")))
+    story_service.set_backend(_FastMock())
+    monkeypatch.setattr(live_story, "POLL_STEP_S", 0.05)
+    registry = LiveJobs({"story": live_story.run_story_job})
+    monkeypatch.setattr(studio_chat, "get_live_jobs", lambda: registry)
+    studio_chat.reset(OWNER)
+    yield registry
+    studio_chat.reset(OWNER)
+    story_service.set_backend(None)
+    story_store.set_store(None)
+    story_sets.set_set_store(None)
+
+
+def _wait(registry, timeout=30.0):
+    import time
+
+    end = time.time() + timeout
+    while any(j.status not in (DONE, "failed") for j in registry.list(OWNER)):
+        assert time.time() < end, "film step did not finish"
+        time.sleep(0.05)
+
+
+def test_film_writes_the_scenario_then_runs_the_next_step(film_env):
+    out = studio_chat.make(
+        OWNER, "film", "A red fox explores a lantern-lit forest at dusk", {"aspect": "9:16"}, jobs=film_env
+    )
+    assert out["job"]["kind"] == "story"
+    story_id = out["job"]["params"]["story_id"]
+    assert story_id and "scenario" in out["reply"]
+    _wait(film_env)
+    first = film_env.list(OWNER)[0]
+    assert first.status == DONE, first.error
+    # Next step approves the scenario and builds the set.
+    nxt = studio_chat.film_next(OWNER, story_id, jobs=film_env)
+    assert nxt["job"]["params"]["story_action"] == "set"
+    _wait(film_env)
+    from services import story_jobs
+
+    story = story_jobs.get_store().get(story_id, OWNER)
+    assert story.approved and story.set_id and story.aspect_ratio == "9:16"
+
+
+def test_film_needs_a_real_idea(film_env):
+    with pytest.raises(ValueError):
+        studio_chat.make(OWNER, "film", "short", {}, jobs=film_env)
+    with pytest.raises(ValueError):
+        studio_chat.film_next(OWNER, "", jobs=film_env)

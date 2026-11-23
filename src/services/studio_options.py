@@ -32,7 +32,7 @@ from typing import Any
 
 from common.i18n import tr
 
-KINDS = ("image", "video", "music", "voice")
+KINDS = ("image", "video", "music", "voice", "film")
 
 _LABELS = {
     "model": "Model",
@@ -45,6 +45,7 @@ _LABELS = {
     "language": "Language",
     "style": "Style",
     "pace": "Pace",
+    "length": "Length",
 }
 
 
@@ -224,11 +225,25 @@ def _voice_fields() -> list[dict]:
     ]
 
 
+def _film_fields() -> list[dict]:
+    """Story Studio's starting choices; "auto" lets it pick from the idea."""
+    from services.story_models import ASPECT_RATIOS, LANGUAGES, STYLES
+
+    auto = tr("studio.auto", "Auto")
+    return [
+        _field("length", "auto", _opts([("auto", auto)] + [(s, f"{s}s") for s in ("15", "30", "60")])),
+        _field("aspect", "auto", _opts([("auto", auto)] + [(a, a) for a in ASPECT_RATIOS])),
+        _field("style", "auto", _opts([("auto", auto)] + [(s["id"], s["label"]) for s in STYLES])),
+        _field("language", "auto", _opts([("auto", auto)] + [(name, name) for name in LANGUAGES])),
+    ]
+
+
 _BUILDERS = {
     "image": _image_fields,
     "video": _video_fields,
     "music": _music_fields,
     "voice": _voice_fields,
+    "film": _film_fields,
 }
 
 
@@ -258,7 +273,7 @@ def clean(kind: str, raw: Any) -> dict[str, str]:
 
 def summary(kind: str, settings: dict[str, str]) -> str:
     """A short line for the thread, e.g. "Gemini Omni · 16:9 · 8s"."""
-    quiet = {"audio", "language", "style", "pace"}  # named only when changed
+    quiet = {"audio", "language", "style", "pace", "length", "aspect"}  # named only when changed
     parts = []
     for f in fields(kind):
         value = settings.get(f["name"], "")
