@@ -11,7 +11,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
-    PORT=8080
+    PORT=8080 \
+    MESOP_STATE_SESSION_BACKEND=memory \
+    MESOP_HTTP_CACHE_JS_BUNDLE=true
 
 WORKDIR /app
 
@@ -46,4 +48,4 @@ EXPOSE 8080
 # per session in memory, so one worker plus threads (and session affinity on
 # the service) keeps a user on the same state. WEB_CONCURRENCY / THREADS can
 # be tuned per deploy.
-CMD ["sh", "-c", "exec gunicorn --bind :${PORT} --workers ${WEB_CONCURRENCY:-1} --threads ${THREADS:-8} --timeout 0 --forwarded-allow-ips='*' -k uvicorn.workers.UvicornWorker main:app"]
+CMD ["sh", "-c", "exec gunicorn --bind :${PORT} --workers ${WEB_CONCURRENCY:-1} --threads ${THREADS:-16} --timeout 0 --forwarded-allow-ips='*' -k uvicorn.workers.UvicornWorker main:app"]

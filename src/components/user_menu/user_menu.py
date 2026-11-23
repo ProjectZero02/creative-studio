@@ -18,6 +18,7 @@ rendered by components/side_nav); on phones in the top bar (user_menu_bar,
 rendered by page_scaffold).
 """
 
+import functools
 import json
 import typing
 
@@ -27,6 +28,10 @@ from common.i18n import apply_lang, other_lang, t, tl
 from common.identity import ANONYMOUS_USER_EMAIL
 from common.verified_identity import AUTH_MODE_SESSION, auth_mode
 from state.state import AppState
+
+ALLOWED_MENU_ROUTES = frozenset(
+    {"/brand", "/account", "/admin/users", "/settings", "/about"}
+)
 
 
 @me.web_component(path="./user_menu.js")
@@ -46,6 +51,7 @@ def _user_menu(
     expanded: bool = False,
     on_theme: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     on_lang: typing.Callable[[me.WebEvent], typing.Any] | None = None,
+    on_nav: typing.Callable[[me.WebEvent], typing.Any] | None = None,
     key: str | None = None,
 ):
     return me.insert_web_component(
@@ -65,7 +71,7 @@ def _user_menu(
             "rail": rail,
             "expanded": expanded,
         },
-        events={"themeEvent": on_theme, "langEvent": on_lang},
+        events={"themeEvent": on_theme, "langEvent": on_lang, "navEvent": on_nav},
     )
 
 
@@ -92,11 +98,21 @@ _MENU_KEYS = (
 )
 
 
+@functools.lru_cache(maxsize=8)
 def menu_labels(lang: str) -> str:
     """The menu's text in `lang`, as JSON for the web component."""
     return json.dumps(
         {k.split(".", 1)[1]: tl(lang, k) for k in _MENU_KEYS}, ensure_ascii=False
     )
+
+
+def on_nav(e: me.WebEvent):
+    """SPA navigation for account-menu links without reloading the tab."""
+    value = e.value if isinstance(e.value, dict) else {}
+    route = str(value.get("route") or "")
+    if route in ALLOWED_MENU_ROUTES:
+        me.state(AppState).current_page = route
+        me.navigate(route)
 
 
 def on_lang(e: me.WebEvent):
@@ -139,6 +155,7 @@ def _menu(*, key: str, rail: bool = False, expanded: bool = False):
         expanded=expanded,
         on_theme=on_theme,
         on_lang=on_lang,
+        on_nav=on_nav,
     )
 
 

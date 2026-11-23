@@ -19,7 +19,7 @@
  * scrubber, so the same moment of both is on screen. Sound comes from the
  * side the presenter picks (the other is muted).
  */
-import { LitElement, css, html } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 
 class GmFilmCompare extends LitElement {
   static properties = {

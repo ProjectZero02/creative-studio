@@ -85,26 +85,38 @@ def _with_theme(stylesheets: list[str] | None) -> list[str]:
 
 
 def apply_default_theme() -> None:
-    """Follow the system light/dark setting until the user picks one."""
+    """Apply saved light/dark cookie preference or follow the system setting."""
     from state.state import AppState  # pylint: disable=import-outside-toplevel
 
-    if not me.state(AppState).theme_chosen:
+    s = me.state(AppState)
+    if s.theme_chosen and s.theme_mode in ("light", "dark"):
+        me.set_theme_mode(s.theme_mode)
+    else:
         me.set_theme_mode("system")
 
 
 def _with_default_theme(on_load):
-    """Wrap a page's on_load so the theme is set first (pages without one get it too)."""
+    """Wrap a page's on_load so the theme is set first without forcing extra yields."""
+    if on_load is None:
 
-    def wrapped(e: me.LoadEvent):
+        def wrapped_empty(e: me.LoadEvent):  # pylint: disable=unused-argument
+            apply_default_theme()
+
+        return wrapped_empty
+
+    if inspect.isgeneratorfunction(on_load):
+
+        def wrapped_gen(e: me.LoadEvent):
+            apply_default_theme()
+            yield from on_load(e)
+
+        return wrapped_gen
+
+    def wrapped_fn(e: me.LoadEvent):
         apply_default_theme()
-        if on_load is not None:
-            result = on_load(e)
-            if inspect.isgenerator(result):
-                yield from result
-                return
-        yield
+        return on_load(e)
 
-    return wrapped
+    return wrapped_fn
 
 
 def themed_page(*args, stylesheets: list[str] | None = None, on_load=None, **kwargs):

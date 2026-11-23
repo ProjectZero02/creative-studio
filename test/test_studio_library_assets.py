@@ -503,3 +503,37 @@ def test_voice_studio_on_load_pulls_recent_library_assets(monkeypatch):
     assert page_state.history_meta == ["Gemini 3.8 TTS · Kore"]
 
 
+def test_studio_history_caches_owner_rows_and_invalidates(monkeypatch):
+    calls = 0
+
+    class _CountingDB(_FakeDB):
+        def collection(self, name):
+            nonlocal calls
+            calls += 1
+            return super().collection(name)
+
+    fake_db = _CountingDB(_sample_docs(), fail_composite=True)
+    monkeypatch.setattr(metadata, "db", fake_db)
+    monkeypatch.setattr(
+        studio_history, "create_display_url", lambda u: u.replace("gs://", "/media/")
+    )
+    monkeypatch.setattr(studio_history, "warm_display_urls", lambda _: None)
+    studio_history.invalidate_owner_history()
+
+    imgs = studio_history.load_recent_assets(
+        "alice@example.com", "gemini_image_generation"
+    )
+    vids = studio_history.load_recent_assets("alice@example.com", "veo")
+    assert len(imgs) == 1
+    assert len(vids) == 1
+    # First call fails ordered query -> falls back once (2 collection calls);
+    # second studio call hits the 60s cache (0 Firestore calls).
+    assert calls == 2
+
+    studio_history.invalidate_owner_history("alice@example.com")
+    assert not studio_history.has_cached_owner_rows("alice@example.com")
+    studio_history.load_recent_assets("alice@example.com", "gemini_image_generation")
+    # Remembers missing composite index -> goes straight to fallback (1 collection call).
+    assert calls == 3
+
+

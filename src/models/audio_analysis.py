@@ -17,10 +17,6 @@
 import os
 import tempfile
 
-import librosa
-import numpy as np
-import parselmouth
-from parselmouth.praat import call
 from pydantic import BaseModel
 
 from common.storage import download_from_gcs
@@ -40,6 +36,11 @@ def analyze_audio_file(gcs_uri: str) -> AudioMetrics:
     """
     Analyzes an audio file from GCS to extract technical metrics.
     """
+    import librosa
+    import numpy as np
+    import parselmouth
+    from parselmouth.praat import call
+
     # Download audio bytes from GCS
     audio_bytes = download_from_gcs(gcs_uri)
     

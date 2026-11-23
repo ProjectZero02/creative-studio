@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { LitElement, html } from 'https://cdn.jsdelivr.net/npm/lit/+esm';
+import { LitElement, html } from '/ui/vendor/lit-3.2.1.js';
 
 class WorsfoldEncoder extends LitElement {
   // --- Properties (Inputs from Mesop) ---

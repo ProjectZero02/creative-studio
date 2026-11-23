@@ -26,7 +26,7 @@
  * Access: the card is a real link (Enter works, focus ring shows); the click is
  * handed to Mesop so navigation stays inside the app.
  */
-import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const reduceMotion = () =>
   window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

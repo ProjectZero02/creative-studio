@@ -30,6 +30,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -199,25 +202,122 @@ def validate_serving_environment() -> None:
         )
 
 
-def _request_transport():
-    """Return the process-global google-auth HTTP transport.
+_DEFAULT_CERT_CACHE_TTL = 300
+_MIN_CERT_CACHE_TTL = 60
+_MAX_CERT_CACHE_TTL = 3600
+_MAX_AGE_RE = re.compile(r"max-age=(\d+)", re.IGNORECASE)
 
-    Reusing one transport shares google-auth's built-in IAP cert cache across
-    requests; on an unknown ``kid`` (post key-rotation) google-auth refetches
-    automatically, so no custom key store is needed.
+
+@dataclass(frozen=True)
+class _CachedResponse:
+    """Minimal google-auth transport Response snapshot."""
+
+    status: int
+    headers: Mapping[str, str]
+    data: bytes
+
+
+def _parse_cache_ttl(headers: Mapping[str, str] | None) -> int:
+    if not headers:
+        return _DEFAULT_CERT_CACHE_TTL
+    cache_control = ""
+    for k, v in headers.items():
+        if str(k).lower() == "cache-control":
+            cache_control = str(v)
+            break
+    match = _MAX_AGE_RE.search(cache_control)
+    if not match:
+        return _DEFAULT_CERT_CACHE_TTL
+    return max(_MIN_CERT_CACHE_TTL, min(_MAX_CERT_CACHE_TTL, int(match.group(1))))
+
+
+def _build_caching_transport():
+    """Return a thread-safe google-auth transport that caches GET cert responses."""
+    from google.auth import transport as google_transport
+    from google.auth.transport import requests as google_requests
+
+    class _CachingHttpRequest(google_transport.Request):
+        def __init__(self) -> None:
+            self._local = threading.local()
+            self._lock = threading.Lock()
+            self._cache: dict[str, tuple[float, _CachedResponse]] = {}
+
+        def _session_request(self):
+            req = getattr(self._local, "request", None)
+            if req is None:
+                req = google_requests.Request()
+                self._local.request = req
+            return req
+
+        def clear_cache(self) -> None:
+            with self._lock:
+                self._cache.clear()
+
+        def __call__(
+            self,
+            url,
+            method="GET",
+            body=None,
+            headers=None,
+            timeout=10,
+            **kwargs,
+        ):
+            is_cacheable = str(method).upper() == "GET" and body is None and not headers
+            now = time.monotonic()
+            if is_cacheable:
+                with self._lock:
+                    entry = self._cache.get(url)
+                    if entry and entry[0] > now:
+                        return entry[1]
+
+            resp = self._session_request()(
+                url,
+                method=method,
+                body=body,
+                headers=headers,
+                timeout=timeout,
+                **kwargs,
+            )
+            if is_cacheable and getattr(resp, "status", None) == 200:
+                resp_headers = dict(getattr(resp, "headers", {}) or {})
+                ttl = _parse_cache_ttl(resp_headers)
+                cached = _CachedResponse(
+                    status=resp.status,
+                    headers=resp_headers,
+                    data=bytes(resp.data),
+                )
+                with self._lock:
+                    self._cache[url] = (time.monotonic() + ttl, cached)
+                return cached
+            return resp
+
+    return _CachingHttpRequest()
+
+
+def _request_transport():
+    """Return the process-global thread-safe, caching google-auth HTTP transport.
+
+    ``google.auth.transport.requests.Request`` has no built-in cert cache and
+    is backed by a single non-thread-safe ``requests.Session``. Caching 200 GET
+    responses per Cache-Control (60s-3600s) avoids hitting ``gstatic.com`` on
+    every Cloud Run IAP request.
     """
     global _TRANSPORT
     if _TRANSPORT is None:
-        # Imported lazily so that merely importing this module (e.g. for the
-        # config resolution helpers, or in local mode) does not require the
-        # google-auth requests transport.
-        from google.auth.transport import requests as google_requests
-
-        _TRANSPORT = google_requests.Request()
+        with _TRANSPORT_LOCK:
+            if _TRANSPORT is None:
+                # Imported lazily so importing this module in local mode stays light.
+                _TRANSPORT = _build_caching_transport()
     return _TRANSPORT
 
 
+def _clear_cert_cache() -> None:
+    if _TRANSPORT is not None and hasattr(_TRANSPORT, "clear_cache"):
+        _TRANSPORT.clear_cache()
+
+
 _TRANSPORT = None
+_TRANSPORT_LOCK = threading.Lock()
 
 
 def verify_iap_assertion(assertion: str, audience: str) -> Mapping[str, object]:

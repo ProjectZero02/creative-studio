@@ -229,6 +229,10 @@ def add_media_item_to_firestore(item: MediaItem):
                 f"Successfully created MediaItem in Firestore with new ID: {item.id}",
             )
 
+        from common.studio_history import invalidate_owner_history
+
+        invalidate_owner_history(item.user_email or caller)
+
     except Exception as e:
         logger.error(f"CRITICAL: Failed to save MediaItem to Firestore. Error: {e}")
         raise e

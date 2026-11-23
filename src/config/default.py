@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import functools
 import json
 import os
@@ -467,10 +466,10 @@ def get_welcome_page_config():
     """Visible nav pages, sorted by id.
 
     Cached: the side nav calls this on every UI event, and the file and the
-    feature flags do not change while the server runs. Returns a fresh copy so
-    callers can't mutate the cache.
+    feature flags do not change while the server runs. Returns a shallow copy
+    of each item dict so callers can't mutate the cache.
     """
-    return copy.deepcopy(_load_welcome_page_config())
+    return [dict(item) for item in _load_welcome_page_config()]
 
 
 @functools.lru_cache(maxsize=1)

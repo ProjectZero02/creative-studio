@@ -22,7 +22,7 @@
  * on every keystroke. The page never writes back into the field, so typing
  * is never interrupted.
  */
-import { LitElement } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement } from '/ui/vendor/lit-3.2.1.js';
 
 class StoryIdeaWatch extends LitElement {
   static properties = {

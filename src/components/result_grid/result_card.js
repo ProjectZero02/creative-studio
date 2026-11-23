@@ -24,7 +24,7 @@
  * kind="audio" draws a compact card with a native player and an always-visible
  * action row (no thumbnail, nothing to open).
  */
-import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const P = {
   download: 'M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z',

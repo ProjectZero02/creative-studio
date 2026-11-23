@@ -35,7 +35,7 @@
  * and Send once you type. Enter sends, Shift+Enter adds a line, Up/Down
  * recall past prompts.
  */
-import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const STORE = 'gm-home-chat';
 const HISTORY = 'gm-prompts:home';
@@ -91,6 +91,7 @@ class GmHomeChat extends LitElement {
     kindsJson: { type: String },
     talkJson: { type: String },
     live: { type: Boolean, reflect: true },
+    navEvent: { type: String },
     _msgs: { state: true },
     _jobs: { state: true },
     _busy: { state: true },
@@ -107,6 +108,7 @@ class GmHomeChat extends LitElement {
     this.kindsJson = '[]';
     this.talkJson = '{}';
     this.live = false;
+    this.navEvent = '';
     this._msgs = load(STORE, { msgs: [] }).msgs || [];
     this._jobs = load(STORE, { jobs: {} }).jobs || {};
     this._busy = false;
@@ -170,7 +172,11 @@ class GmHomeChat extends LitElement {
     if (kind && typed && !files.length) {
       // Type chip: open that studio with the prompt; ?go=1 starts it there.
       this._busy = true;
-      window.location.assign(`${kind.href}?prompt=${encodeURIComponent(typed)}&go=1`);
+      if (this.navEvent) {
+        this.dispatchEvent(new MesopEvent(this.navEvent, { route: kind.href, params: { prompt: typed, go: '1' } }));
+      } else {
+        window.location.assign(`${kind.href}?prompt=${encodeURIComponent(typed)}&go=1`);
+      }
       return;
     }
     this._hist = -1;
@@ -495,6 +501,19 @@ class GmHomeChat extends LitElement {
     return '/library_v2';
   }
 
+  _openStudio(e, href) {
+    if (!this.navEvent || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+      return;
+    }
+    const [route, q] = href.split('?', 2);
+    const params = {};
+    if (q) {
+      new URLSearchParams(q).forEach((v, k) => { params[k] = v; });
+    }
+    e.preventDefault();
+    this.dispatchEvent(new MesopEvent(this.navEvent, { route, params }));
+  }
+
   _job(id) {
     const j = this._jobs[id];
     if (!j) return nothing;
@@ -516,7 +535,7 @@ class GmHomeChat extends LitElement {
           ${j.status === 'done' && j.display_url && !isStory ? html`<a class="act" href=${j.display_url} download target="_blank" rel="noopener">${svg(ICON.download, 18)}${S.download || 'Download'}</a>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._prefill(`${S.edit_prefix || 'Edit'} ${j.handle}: `)}>${svg(ICON.edit, 18)}${S.edit || 'Edit'}</button>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._prefill(`${S.animate_prefix || 'Make a video from'} ${j.handle}: `)}>${svg(ICON.spark, 18)}${S.animate || 'Animate'}</button>` : nothing}
-          ${j.status === 'done' ? html`<a class="act" href=${this._studio(j)}>${svg(ICON.open, 18)}${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}</a>` : nothing}
+          ${j.status === 'done' ? (() => { const href = this._studio(j); return html`<a class="act" href=${href} @click=${(e) => this._openStudio(e, href)}>${svg(ICON.open, 18)}${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}</a>`; })() : nothing}
           ${j.status === 'failed' ? html`<button class="act" type="button" @click=${() => this._send(j.prompt)}>${svg(ICON.retry, 18)}${S.retry || 'Try again'}</button>` : nothing}
         </div>` : nothing}
       </div>`;

@@ -726,3 +726,45 @@ def test_phase2_appstate_source_reads_only_bridged_identity() -> None:
         "HTTP_COOKIE",
     ):
         assert banned not in source, f"state.py must not read {banned!r}"
+
+
+def test_iap_cert_transport_caches_and_expires(
+    monkeypatch, mint_token, _cert_pem
+) -> None:
+    """_request_transport caches IAP cert GET responses within TTL and refetches after expiry."""
+    import json
+    from types import SimpleNamespace
+    from google.auth.transport import requests as google_requests
+    from common import verified_identity
+
+    calls = 0
+    now = [1000.0]
+
+    class FakeSessionRequest:
+        def __call__(self, url, method="GET", **kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                status=200,
+                headers={"Cache-Control": "public, max-age=120"},
+                data=json.dumps({TEST_KID: _cert_pem}).encode("utf-8"),
+            )
+
+    monkeypatch.setattr(verified_identity.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(verified_identity, "_TRANSPORT", None)
+    monkeypatch.setattr(google_requests, "Request", FakeSessionRequest)
+
+    token = mint_token()
+    claims1 = verify_iap_assertion(token, TEST_AUDIENCE)
+    claims2 = verify_iap_assertion(token, TEST_AUDIENCE)
+    assert claims1["email"] == REAL_USER
+    assert claims2["email"] == REAL_USER
+    assert calls == 1  # second verification reused cached certs
+
+    now[0] += 121.0
+    claims3 = verify_iap_assertion(token, TEST_AUDIENCE)
+    assert claims3["email"] == REAL_USER
+    assert calls == 2  # expired cache triggered one refresh
+
+    verified_identity._clear_cert_cache()
+    monkeypatch.setattr(verified_identity, "_TRANSPORT", None)

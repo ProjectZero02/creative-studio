@@ -32,7 +32,7 @@
  * "English" while in Arabic) so a speaker of that language can find it. The
  * panel has the same switch. Text comes from Python (`labels`, JSON).
  */
-import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const GLOBE = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4a14 14 0 0 1 1.9 4h-3.8A14 14 0 0 1 12 4zM4.3 14a8.2 8.2 0 0 1 0-4h3.4a16.5 16.5 0 0 0 0 4zm.8 2h2.9a15.7 15.7 0 0 0 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6A15.7 15.7 0 0 0 8 8zm4 12a14 14 0 0 1-1.9-4h3.8A14 14 0 0 1 12 20zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6a15.7 15.7 0 0 0 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.7-5.6a16.5 16.5 0 0 0 0-4h3.4a8.2 8.2 0 0 1 0 4z"/></svg>`;
 
@@ -53,6 +53,7 @@ class UserMenu extends LitElement {
     labels: { type: String },
     themeEvent: { type: String },
     langEvent: { type: String },
+    navEvent: { type: String },
     rail: { type: Boolean, reflect: true },
     expanded: { type: Boolean, reflect: true },
     _open: { state: true },
@@ -74,6 +75,7 @@ class UserMenu extends LitElement {
     this.labels = '{}';
     this.themeEvent = '';
     this.langEvent = '';
+    this.navEvent = '';
     this.rail = false;
     this.expanded = false;
     this._open = false;
@@ -370,7 +372,24 @@ class UserMenu extends LitElement {
 
   _theme() {
     if (!this.themeEvent) return;
-    this.dispatchEvent(new MesopEvent(this.themeEvent, { dark: !this.dark }));
+    const nextDark = !this.dark;
+    const mode = nextDark ? 'dark' : 'light';
+    // Apply optimistically so switching light/dark feels instant (<16ms).
+    this.dark = nextDark;
+    try { localStorage.setItem('theme', mode); } catch (_) { /* ignore */ }
+    try { document.cookie = `gm_theme=${mode}; Path=/; Max-Age=31536000; SameSite=Lax`; } catch (_) { /* ignore */ }
+    document.body?.classList.toggle('dark-theme', nextDark);
+    if (document.documentElement) document.documentElement.style.colorScheme = mode;
+    this.dispatchEvent(new MesopEvent(this.themeEvent, { dark: nextDark }));
+  }
+
+  _nav(e, route) {
+    if (!this.navEvent || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+      return;
+    }
+    e.preventDefault();
+    this._close(false);
+    this.dispatchEvent(new MesopEvent(this.navEvent, { route }));
   }
 
   _lang() {
@@ -455,26 +474,26 @@ class UserMenu extends LitElement {
               <span class="grow">${L.notify || 'Notify me when done'}</span>
               <span class="switch ${this._notifyOn() ? 'on' : ''}" aria-hidden="true"></span>
             </button>` : nothing}
-          <a class="item" href="/brand">
+          <a class="item" href="/brand" @click=${(e) => this._nav(e, '/brand')}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0 0 18 1.5 1.5 0 0 0 1.1-2.5 1.5 1.5 0 0 1 1.1-2.5H16a5 5 0 0 0 5-5c0-4.4-4-8-9-8zm-5.5 9A1.5 1.5 0 1 1 8 10.5 1.5 1.5 0 0 1 6.5 12zm3-4A1.5 1.5 0 1 1 11 6.5 1.5 1.5 0 0 1 9.5 8zm5 0A1.5 1.5 0 1 1 16 6.5 1.5 1.5 0 0 1 14.5 8zm3 4a1.5 1.5 0 1 1 1.5-1.5 1.5 1.5 0 0 1-1.5 1.5z"/></svg>
             <span class="grow">${L.brand || 'My brand'}</span>
           </a>
           ${this.showAccount ? html`
-            <a class="item" href="/account">
+            <a class="item" href="/account" @click=${(e) => this._nav(e, '/account')}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9zm3 11a2 2 0 1 1 2-2 2 2 0 0 1-2 2z"/></svg>
               <span class="grow">${L.account_settings || 'Account settings'}</span>
             </a>` : nothing}
           ${this.showUsers ? html`
-            <a class="item" href="/admin/users">
+            <a class="item" href="/admin/users" @click=${(e) => this._nav(e, '/admin/users')}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 1.9 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg>
               <span class="grow">${L.users || 'Users'}</span>
             </a>` : nothing}
           ${this.showSettings ? html`
-            <a class="item" href="/settings">
+            <a class="item" href="/settings" @click=${(e) => this._nav(e, '/settings')}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.9a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 3.5-3.5 3.5 3.5 0 0 1-3.5 3.5z"/></svg>
               <span class="grow">${L.settings || 'Settings'}</span>
             </a>` : nothing}
-          <a class="item" href="/about">
+          <a class="item" href="/about" @click=${(e) => this._nav(e, '/about')}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17h2v-6h-2zm1-15a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm-1-11h2V7h-2z"/></svg>
             <span class="grow">${L.about || 'About'}</span>
           </a>

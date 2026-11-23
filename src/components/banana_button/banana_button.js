@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit/+esm';
+import { LitElement, html, css } from '/ui/vendor/lit-3.2.1.js';
 
 export class BananaButton extends LitElement {
   static properties = {

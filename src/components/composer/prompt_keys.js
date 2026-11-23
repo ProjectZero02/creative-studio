@@ -28,7 +28,7 @@
  *   `input` and `blur`, so Mesop stores the text like a normal edit (the same
  *   path as dictation.js).
  */
-import { LitElement } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement } from '/ui/vendor/lit-3.2.1.js';
 
 const MAX = 40;
 
@@ -52,19 +52,48 @@ function remember(page, text) {
 }
 
 class GmPromptKeys extends LitElement {
-  static properties = { page: { type: String } };
+  static properties = {
+    page: { type: String },
+    value: { type: String },
+    sendEvent: { type: String },
+  };
 
   constructor() {
     super();
     this.page = '';
+    this.value = '';
+    this.sendEvent = '';
+    this._synced = '';
     this._index = -1; // -1 = the draft you are typing
     this._draft = '';
     this._list = null;
     this._server = null;
     this._ta = null;
     this._onKey = (e) => this._key(e);
+    this._onBlur = (e) => {
+      if (!this._ta) return;
+      if (this._ta.value === this._synced) {
+        e.stopImmediatePropagation();
+        return;
+      }
+      this._synced = this._ta.value;
+    };
+    this._onPointerDown = (e) => {
+      if (e.button === 0 && this.sendEvent && e.target.closest?.('.gm-composer-send, [data-prompt-send]') && !e.target.closest?.('.gm-composer-wait')) {
+        // Keep focus on the textarea so click doesn't fire a separate blur POST first.
+        e.preventDefault();
+      }
+    };
     this._onClick = (e) => {
-      if (e.target.closest && e.target.closest('.gm-composer-send, [data-prompt-send]')) this._sent();
+      const sendBtn = e.target.closest && e.target.closest('.gm-composer-send, [data-prompt-send]');
+      if (!sendBtn || e.target.closest?.('.gm-composer-wait')) return;
+      this._sent();
+      if (this.sendEvent && this._ta) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this._synced = this._ta.value;
+        this.dispatchEvent(new MesopEvent(this.sendEvent, { value: this._ta.value }));
+      }
     };
   }
 
@@ -73,7 +102,13 @@ class GmPromptKeys extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this.style.display = 'none';
+    this._synced = this.value || '';
     // The textarea renders in the same pass; attach on the next frame.
+    requestAnimationFrame(() => this._attach());
+  }
+
+  updated(changed) {
+    if (changed.has('value')) this._synced = this.value || '';
     requestAnimationFrame(() => this._attach());
   }
 
@@ -93,14 +128,25 @@ class GmPromptKeys extends LitElement {
     this._detach();
     this._ta = ta;
     this._card_ = card;
+    this._synced = ta.value ?? this.value ?? '';
     ta.addEventListener('keydown', this._onKey, true);
+    ta.addEventListener('blur', this._onBlur, true);
     ta.addEventListener('focus', () => this._loadServer(), { once: true });
+    card.addEventListener('pointerdown', this._onPointerDown, true);
+    card.addEventListener('mousedown', this._onPointerDown, true);
     card.addEventListener('click', this._onClick, true);
   }
 
   _detach() {
-    if (this._ta) this._ta.removeEventListener('keydown', this._onKey, true);
-    if (this._card_) this._card_.removeEventListener('click', this._onClick, true);
+    if (this._ta) {
+      this._ta.removeEventListener('keydown', this._onKey, true);
+      this._ta.removeEventListener('blur', this._onBlur, true);
+    }
+    if (this._card_) {
+      this._card_.removeEventListener('pointerdown', this._onPointerDown, true);
+      this._card_.removeEventListener('mousedown', this._onPointerDown, true);
+      this._card_.removeEventListener('click', this._onClick, true);
+    }
     this._ta = null;
     this._card_ = null;
   }

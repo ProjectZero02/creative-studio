@@ -41,7 +41,7 @@ from common.utils import (
 from common.veo_utils import start_async_veo_job
 from common.mock_generation import fake_wait, mock_enabled, sample_video
 from common.prompt_prefill import prefill_prompt, take_autostart
-from common.studio_history import hydrate_studio_history
+from common.studio_history import has_cached_owner_rows, hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
@@ -141,6 +141,8 @@ def on_veo_load(e: me.LoadEvent):
         state, "veo_prompt_input", empty_values=(_I2V_DEFAULT_PROMPT,)
     )
     owner = getattr(me.state(AppState), "user_email", "")
+    if owner and not state.history_urls and not has_cached_owner_rows(owner) and not filled:
+        yield
     hydrate_studio_history(
         state,
         owner,
@@ -1130,10 +1132,22 @@ def on_click_veo(e: me.ClickEvent):  # pylint: disable=unused-argument
     state.last_action = "generate"
 
     if omni:
+        enhancing_omni = bool(send_prompt and state.veo_mode != "upscale" and setting_on() and wanted(send_prompt))
+        progress_start(
+            state,
+            _video_stages(
+                "Enhancing prompt" if enhancing_omni else "Preparing request",
+                _OMNI_WORK_LABELS.get(state.veo_mode, "Generating video"),
+                engine=engine_name(state.veo_model),
+            ),
+        )
+        yield
         # Short prompts go out richer (the box keeps the person's own words).
         if send_prompt and state.veo_mode != "upscale":
             send_prompt = enhance_on_send(send_prompt, VIDEO_REWRITER)
-        yield from _generate_with_omni(state, app_state, send_prompt)
+        yield from _generate_with_omni(
+            state, app_state, send_prompt, progress_started=True
+        )
         return
 
     model_config = get_veo_model_config(state.veo_model)
@@ -1335,19 +1349,24 @@ _OMNI_WORK_LABELS = {
 
 
 def _generate_with_omni(
-    state: PageState, app_state: AppState, send_prompt: str | None = None
+    state: PageState,
+    app_state: AppState,
+    send_prompt: str | None = None,
+    *,
+    progress_started: bool = False,
 ):
     """Run one Gemini Omni generation with the shared progress card."""
     start_time = time.time()
-    progress_start(
-        state,
-        _video_stages(
-            "Preparing request",
-            _OMNI_WORK_LABELS.get(state.veo_mode, "Generating video"),
-            engine=engine_name(state.veo_model),
-        ),
-    )
-    yield
+    if not progress_started:
+        progress_start(
+            state,
+            _video_stages(
+                "Preparing request",
+                _OMNI_WORK_LABELS.get(state.veo_mode, "Generating video"),
+                engine=engine_name(state.veo_model),
+            ),
+        )
+        yield
 
     if mock_enabled():
         try:

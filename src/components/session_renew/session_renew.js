@@ -20,7 +20,7 @@
  * session cookie after the user changed their own password. The token travels
  * in the request body, never in the URL. Renders nothing.
  */
-import { LitElement } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement } from '/ui/vendor/lit-3.2.1.js';
 
 class SessionRenew extends LitElement {
   static properties = {

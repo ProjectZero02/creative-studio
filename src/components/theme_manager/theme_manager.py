@@ -6,8 +6,10 @@ def theme_manager(
     *,
     theme: str,
     on_theme_load: typing.Callable[[me.WebEvent], None],
+    key: str | None = "gm-theme-manager",
 ):
     return me.insert_web_component(
+        key=key,
         name="theme-manager",
         properties={
             "theme": theme,

@@ -23,7 +23,7 @@
  * handler then stores the text in page state like a normal edit. Browsers
  * without speech recognition (Firefox) get no button.
  */
-import { LitElement, css, html } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 

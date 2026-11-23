@@ -24,7 +24,7 @@
  * solid fallback when the browser can't blur or the user asks for less
  * transparency.
  */
-import { LitElement, css, html } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 
 const MAX_LEN = 2000;
 

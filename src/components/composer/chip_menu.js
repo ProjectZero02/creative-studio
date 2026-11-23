@@ -26,7 +26,7 @@
  * The chip's accessible name is "<label>: <value>", so screen readers hear
  * what the setting is even though only the value is shown.
  */
-import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const CARET = 'M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z';
 const CHECK = 'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z';

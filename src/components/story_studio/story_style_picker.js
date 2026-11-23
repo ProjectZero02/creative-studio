@@ -18,7 +18,7 @@
  * <story-style-picker>: visual style as image tiles (a radio group).
  * Arrow keys move the choice, like native radio buttons.
  */
-import { LitElement, css, html } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 
 class StoryStylePicker extends LitElement {
   static properties = {
