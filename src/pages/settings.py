@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import mesop as me
 
+from common import app_settings
 from common.i18n import apply_lang, tr
 from common.identity import ANONYMOUS_USER_EMAIL
 from common.verified_identity import AUTH_MODE_SESSION, auth_mode
@@ -217,6 +218,24 @@ def _admin() -> None:
         ),
     ]
     with me.box(classes="gm-set-card"):
+        with me.box(classes="gm-set-row"):
+            with me.box(classes="gm-set-row-icon"):
+                me.icon("storefront")
+            with me.box(classes="gm-set-row-text"):
+                _text(tr("settings.demos", "Show demos"), "gm-set-row-title")
+                _text(
+                    tr(
+                        "settings.demos_desc",
+                        "Adds Fashion, Interiors, Product 360 and Brand kit to the "
+                        "side menu for everyone.",
+                    ),
+                    "gm-set-row-desc",
+                )
+            me.slide_toggle(
+                checked=bool(app_settings.get("show_demos")),
+                on_change=on_show_demos,
+                key="settings-demos",
+            )
         for route, icon, title, desc in links:
             if route == "/admin/users" and not _session():
                 continue
@@ -232,6 +251,15 @@ def _admin() -> None:
                     on_click=on_open_link,
                     type="flat",
                 )
+
+
+def on_show_demos(e: me.SlideToggleChangeEvent):  # pylint: disable=unused-argument
+    """Admins only: show or hide the industry demos in everyone's side menu."""
+    if not _is_admin():
+        yield
+        return
+    app_settings.set_value("show_demos", not bool(app_settings.get("show_demos")))
+    yield
 
 
 def on_open_link(e: me.ClickEvent):

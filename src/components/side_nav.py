@@ -17,6 +17,7 @@ from typing import Optional
 
 import mesop as me
 
+from common import app_settings
 from common.i18n import current_lang, is_rtl, route_key, t, tr
 from components.styles import SIDENAV_MAX_WIDTH, SIDENAV_MIN_WIDTH
 from components.svg_icon.svg_icon import svg_icon
@@ -31,6 +32,9 @@ GROUP_LABELS = {
     "workflows": "Industry demos",
     "studio": "Your work",
 }
+
+# Nav group of the industry demo pages, hidden unless "Show demos" is on.
+DEMO_GROUP = "workflows"
 
 
 def _tooltip_side() -> str:
@@ -128,10 +132,15 @@ def sidenav(current_page: Optional[str]):
     opened = app_state.sidenav_open
 
     # align "menu" pages (My brand, Usage) live in the avatar menu and Settings.
+    # The industry demos (group "workflows") show only when an admin turns on
+    # "Show demos" in Settings (common/app_settings.py).
+    show_demos = bool(app_settings.get("show_demos"))
     pages = [
         p
         for p in get_welcome_page_config()
-        if p.get("route") and p.get("align") != "menu"
+        if p.get("route")
+        and p.get("align") != "menu"
+        and (show_demos or p.get("group") != DEMO_GROUP)
     ]
     top_items = [p for p in pages if p.get("align") != "bottom"]
     bottom_items = [p for p in pages if p.get("align") == "bottom"]
