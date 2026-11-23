@@ -405,6 +405,16 @@ class Default:
     STORY_TAKE_CONTEXT_SECONDS: int = int(
         os.environ.get("STORY_TAKE_CONTEXT_SECONDS", 30)
     )
+    # Longer takes roll on: each extension overlaps the last by the context,
+    # and the film crossfades between files for STORY_ROLL_CROSSFADE seconds
+    # inside the overlap (the same moment in both files).
+    STORY_TAKE_ROLLING_MAX_SECONDS: int = int(
+        os.environ.get("STORY_TAKE_ROLLING_MAX_SECONDS", 300)
+    )
+    STORY_ROLL_CROSSFADE: float = float(os.environ.get("STORY_ROLL_CROSSFADE", 0.17))
+    # Seamless joins (bridges, rolling takes) that still show a jump after
+    # stitching are made again this many times.
+    STORY_SEAM_RETRIES: int = int(os.environ.get("STORY_SEAM_RETRIES", 1))
     # Longest scene. Past the video model's single-clip limit (15 s for Omni
     # 1.2 Flash) a scene is one clip plus extensions in the same Omni thread
     # (3 to 10 s each); Omni extends up to 30 s in all.

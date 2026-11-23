@@ -908,8 +908,11 @@ def render_args(
             bucket = beds if c.get("ambient") else dialogue
             aclip = c
             alen = length
-            if c.get("ambient") and c["out"] + 0.16 <= c.get("src_max", c["out"]):
-                aclip = {**c, "out": round(c["out"] + 0.16, 3)}
+            # At a cut the outgoing sound runs on under the incoming one, so
+            # the two cross instead of both fading to a dip (heard as a cut).
+            tail = 0.16 if c.get("ambient") else (JOIN_FADE if next_c is not None else 0.0)
+            if tail and c["out"] + tail <= c.get("src_max", c["out"]):
+                aclip = {**c, "out": round(c["out"] + tail, 3)}
                 alen = clip_length(aclip)
             bucket.append(
                 _audio_chain(filters, idx, aclip, alen, f"d{k}", fade=JOIN_FADE)
@@ -1195,7 +1198,14 @@ def render_timeline(
             get_logger(__name__).error("ffmpeg render failed: %s", result.stderr[-2000:])
             raise GenerationError("Rendering the film failed. Retry export.")
     if check_seams:
-        cuts = [c["start"] for c in merge_runs(track(tl, "video")["clips"], tl["fps"])[1:]]
+        cuts = [
+            {
+                "t": c["start"] + float(c.get("fade_in") or 0) / 2,
+                "scene": c.get("scene", -1),
+                "seamless": c.get("join") in SEAMLESS_JOINS,
+            }
+            for c in merge_runs(track(tl, "video")["clips"], tl["fps"])[1:]
+        ]
         try:
             timeline["seams"] = seam_check(out_path, cuts)
         except Exception:  # the check never stops the film
@@ -1208,6 +1218,8 @@ def render_timeline(
 # A join whose picture change is this many times the film's typical
 # frame-to-frame change shows as a visible jump.
 SEAM_JUMP_RATIO = 5.0
+# Joins meant to be invisible. A jump at any other join is a planned cut.
+SEAMLESS_JOINS = ("bridge", "extend")
 
 
 def frame_changes(path: str) -> list[tuple[float, float]]:
@@ -1236,26 +1248,33 @@ def frame_changes(path: str) -> list[tuple[float, float]]:
     return list(zip(times, scores, strict=False))
 
 
-def seam_check(path: str, cut_times: list[float], window: float = 0.09) -> list[dict]:
+def seam_check(path: str, cuts: list, window: float = 0.09) -> list[dict]:
     """How visible each join of a rendered film is: the largest frame change
     within `window` seconds of the join, and how many times the film's
-    median change that is. ``jump`` marks a join past SEAM_JUMP_RATIO."""
+    median change that is. ``cuts`` are join times, or dicts with ``t``,
+    ``scene`` (the clip after the join) and ``seamless`` (the join is meant
+    to be invisible). ``jump`` marks a seamless join past SEAM_JUMP_RATIO."""
     changes = frame_changes(path)
-    if not changes or not cut_times:
+    if not changes or not cuts:
         return []
     ordered = sorted(s for _, s in changes)
     median = max(ordered[len(ordered) // 2], 1e-4)
     report = []
-    for t in cut_times:
+    for cut in cuts:
+        info = cut if isinstance(cut, dict) else {"t": cut, "seamless": True}
+        t = float(info["t"])
         near = [s for ts, s in changes if abs(ts - t) <= window]
         peak = max(near or [0.0])
         ratio = round(peak / median, 1)
+        seamless = bool(info.get("seamless", True))
         report.append(
             {
-                "t": round(float(t), 3),
+                "t": round(t, 3),
+                "scene": int(info.get("scene", -1) if info.get("scene") is not None else -1),
+                "seamless": seamless,
                 "score": round(peak, 4),
                 "ratio": ratio,
-                "jump": ratio >= SEAM_JUMP_RATIO,
+                "jump": seamless and ratio >= SEAM_JUMP_RATIO,
             }
         )
     return report

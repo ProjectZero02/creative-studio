@@ -69,10 +69,13 @@ Note: "we may be over-complicating it" is partly right. Most of the cuts come fr
 
 ### Phase A: seamless engine (do first)
 
-Status (2026-11-23): A1, A2, A4, A5 and A6 (check and log) are built.
+Status (2026-11-23): all of Phase A is built.
 
 - **Re-stitch of the live test film with A1:** the join change at 8 s and 16 s dropped from 0.018 to 0.0009 (normal motion; the film's median is 0.0006), and the sound runs through.
-- **Still to do:** A3, A7, A6 auto-retry, and the live re-test (section 5, tests 2–3).
+- **A3:** rolling takes up to `STORY_TAKE_ROLLING_MAX_SECONDS` (300). There is one change of file per extra extension, with a `STORY_ROLL_CROSSFADE` (0.17 s) crossfade inside the overlap.
+- **A6:** the check now judges only joins meant to be seamless. A jump remakes the clip after it once (`STORY_SEAM_RETRIES`); this is skipped in demo mode.
+- **A7:** sound crosses at cuts instead of dipping. Same-place frame references are part of Phase C.
+- **Still to do:** the live re-test (section 5, tests 2–4).
 
 A1. **One take = one file.** In `build_stitch_plan`, collapse an extension chain into a single segment that uses the last extension's file whole (start at the chain head, trim 0, full length, its own audio). Merge only between separate clips. Player and export use the same rule.
 

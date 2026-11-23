@@ -61,7 +61,7 @@ from services.story_models import (
     relink_scene,
     set_text_from_cast,
 )
-from services.story_service import get_backend, resolve_video_engine
+from services.story_service import get_backend, is_mock_mode, resolve_video_engine
 from services.story_store import StoryAccessError, get_store
 from services.story_sets import (
     KINDS,
@@ -1130,9 +1130,37 @@ def start_video(story_id: str, owner: str) -> Job:
         made: dict = {}
 
         def stitch() -> str:
+            nonlocal final, plan, voices
             film_uri, made["timeline"] = _film_and_timeline(
                 backend.stitch(final, plan, music_uri, voices)
             )
+            # A join meant to be invisible that still jumps: make the clip
+            # after it again (a new take of the same prompt) and re-stitch.
+            retries = 0 if is_mock_mode() else max(0, int(cfg.STORY_SEAM_RETRIES))
+            for _ in range(retries):
+                redo = seams_to_redo(final, (made.get("timeline") or {}).get("seams"))
+                if not redo or job.cancel_event.is_set():
+                    break
+                for i in redo:
+                    prev_clip = final.scenes[i - 1].clip_uri
+                    try:
+                        if final.continues_take(i):
+                            extend(i, prev_clip)
+                        else:
+                            current = get_store().get(story_id, owner) or final
+                            animate(i, backend.last_frame(current, prev_clip, i), prev_clip)
+                    except Exception:
+                        logger.exception("Remaking scene %s for a smoother join failed", i + 1)
+                final = get_store().get(story_id, owner) or final
+                plan = build_stitch_plan(
+                    final.scenes,
+                    cfg.STORY_CROSSFADE_SECONDS,
+                    seamless=final.continuity and final.seamless_joins,
+                )
+                voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
+                film_uri, made["timeline"] = _film_and_timeline(
+                    backend.stitch(final, plan, music_uri, voices)
+                )
             return film_uri
 
         if not _run_task(stitch_task, stitch, job.cancel_event):
@@ -1207,6 +1235,23 @@ def start_video(story_id: str, owner: str) -> Job:
         )
 
     return _spawn(job, work)
+
+
+def seams_to_redo(story: Story, seams: list[dict] | None) -> list[int]:
+    """Scenes to make again because the seamless join before them jumps.
+    Only a scene no later scene was built on (the last of its take, or a
+    clip of its own): remaking one in the middle of a take would leave the
+    rest of the take continuing a clip that no longer exists."""
+    out: list[int] = []
+    n = len(story.scenes)
+    for s in seams or []:
+        i = int(s.get("scene", -1))
+        if not s.get("jump") or i <= 0 or i >= n or i in out:
+            continue
+        if i + 1 < n and story.continues_take(i + 1):
+            continue
+        out.append(i)
+    return out
 
 
 def _film_and_timeline(result) -> tuple[str, dict | None]:

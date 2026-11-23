@@ -1624,6 +1624,27 @@ def frame_parts(*uris: str) -> list[dict]:
     return [{"type": "image", "uri": u, "mime_type": _image_mime(u)} for u in uris if u]
 
 
+def extension_offset(prev_len: float, new_len: float, new_seconds: float, cfg=None) -> float:
+    """Where an extension's new seconds start in the file it returned.
+
+    - The whole input plus the new seconds (input within the model's
+      context): the previous clip's length.
+    - Only the last STORY_TAKE_CONTEXT_SECONDS of a longer input plus the
+      new seconds (a rolling take): the new file's length minus the new
+      seconds, snapped to the context when it is within a second of it.
+    - Only the new seconds: 0.
+    """
+    if new_len > prev_len + 1.0:
+        return round(prev_len, 3)
+    retained = new_len - new_seconds
+    if retained > 1.0:
+        context = float(getattr(cfg or Default(), "STORY_TAKE_CONTEXT_SECONDS", 0) or 0)
+        if context and abs(retained - min(prev_len, context)) <= 1.0:
+            retained = min(prev_len, context)
+        return round(retained, 3)
+    return 0.0
+
+
 def take_frame(story: Story, index: int) -> str:
     """The storyboard frame that opens the continuous take scene `index`
     continues ("" when the scene starts its own shot)."""
@@ -2486,8 +2507,7 @@ class VertexStoryBackend:
                 _gcs_fetch(uri, new_path)
                 prev_len = clip_edges(prev_path)[0] or probe(prev_path)[0]
                 new_len = clip_edges(new_path)[0] or probe(new_path)[0]
-            joined = new_len > prev_len + 1.0
-            return uri, round(prev_len, 3) if joined else 0.0
+            return uri, extension_offset(prev_len, new_len, 7.0, self.cfg)
 
         story_set = self._set(story)
         prev = story.scenes[index - 1] if index > 0 else None
@@ -2551,8 +2571,9 @@ class VertexStoryBackend:
             # its sound, which put every later cut between two frames.
             prev_len = clip_edges(prev_path)[0] or probe(prev_path)[0]
             new_len = clip_edges(new_path)[0] or probe(new_path)[0]
-        joined = new_len > prev_len + 1.0
-        return uri, round(prev_len, 3) if joined else 0.0
+        return uri, extension_offset(
+            prev_len, new_len, float(scene.duration), self.cfg
+        )
 
     def save_audio_upload(self, data: bytes, mime_type: str) -> str:
         from common.storage import store_to_gcs
