@@ -31,7 +31,7 @@ from common.analytics import get_logger
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common.prompt_prefill import prefill_prompt, take_autostart
-from common.studio_history import hydrate_studio_history
+from common.studio_history import has_cached_owner_rows, hydrate_studio_history
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
@@ -95,6 +95,8 @@ def on_voice_load(e: me.LoadEvent):  # pylint: disable=unused-argument
     if filled:
         state.text_key += 1  # redraw the script box with the idea
     owner = getattr(me.state(AppState), "user_email", "")
+    if owner and not state.history_urls and not has_cached_owner_rows(owner) and not filled:
+        yield
     hydrate_studio_history(
         state,
         owner,
@@ -813,6 +815,8 @@ def legacy_on_load(engine: str):
         state = me.state(VoiceState)
         _set_engine(state, engine)
         owner = getattr(me.state(AppState), "user_email", "")
+        if owner and not state.history_urls and not has_cached_owner_rows(owner):
+            yield
         hydrate_studio_history(
             state,
             owner,

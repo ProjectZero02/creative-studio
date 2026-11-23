@@ -22,7 +22,7 @@
  * Upcoming steps that are not reachable yet are disabled. On narrow screens
  * only the current step keeps its label.
  */
-import { LitElement, css, html, svg } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html, svg } from '/ui/vendor/lit-3.2.1.js';
 
 const ICONS = {
   stories: svg`<rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/>`,

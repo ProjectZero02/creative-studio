@@ -181,6 +181,30 @@ def strings() -> dict:
     return {k: tr(key, english) for k, (key, english) in _STRINGS.items()}
 
 
+ALLOWED_HOME_ROUTES = frozenset(
+    {"/nano-banana", "/veo", "/lyria", "/voice", "/story", "/library_v2"}
+)
+
+
+def on_home_nav(e: me.WebEvent):
+    """SPA navigation from Home chat chips/cards into studios."""
+    value = e.value if isinstance(e.value, dict) else {}
+    route = str(value.get("route") or "")
+    if route not in ALLOWED_HOME_ROUTES:
+        return
+    raw_params = value.get("params")
+    params = (
+        {
+            str(k): str(v)[:1000]
+            for k, v in raw_params.items()
+            if k in {"prompt", "go", "id", "step"} and v is not None and v != ""
+        }
+        if isinstance(raw_params, dict)
+        else None
+    )
+    me.navigate(route, query_params=params or None)
+
+
 @me.web_component(path="./home_chat.js")
 def home_chat(*, live: bool = False, key: str | None = "home-chat"):
     """The Home chat: hero, prompt box, type chips and conversation."""
@@ -195,4 +219,5 @@ def home_chat(*, live: bool = False, key: str | None = "home-chat"):
             "talkJson": json.dumps({**live_strings(), "talk": t("live.talk", "Talk to the studio")}, ensure_ascii=False),
             "live": live,
         },
+        events={"navEvent": on_home_nav},
     )

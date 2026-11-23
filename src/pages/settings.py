@@ -90,15 +90,18 @@ def _open(key: str):
     if key == "usage":
         from pages import usage
 
+        yield
         yield from usage.on_load(None)
     elif key == "brand":
         from pages import brand
 
+        yield
         brand.on_load(None)
         yield
     elif key == "account":
         from pages import account
 
+        yield
         yield from account.on_load(None)
     else:
         yield

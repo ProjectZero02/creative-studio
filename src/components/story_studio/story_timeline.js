@@ -28,8 +28,8 @@
  * whole timeline JSON; the server validates and stores it, and "Export"
  * renders it with ffmpeg (services/story_timeline.py).
  */
-import { LitElement, html, css, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
-import { repeat } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/directives/repeat.js/+esm';
+import { LitElement, html, css, nothing } from '/ui/vendor/lit-3.2.1.js';
+import { repeat } from '/ui/vendor/lit-3.2.1.js';
 
 const KINDS = ['video', 'voice', 'music', 'text'];
 const LANE_LABEL = { video: 'Video', voice: 'Voice', music: 'Music', text: 'Titles' };

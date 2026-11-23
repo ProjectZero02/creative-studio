@@ -26,7 +26,7 @@ from common.i18n import t, tr
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, placeholder_image
 from common.prompt_prefill import prefill_prompt, take_autostart
-from common.studio_history import hydrate_studio_history
+from common.studio_history import has_cached_owner_rows, hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
@@ -1315,8 +1315,13 @@ def _generate_and_save(
     state.suggested_transformations = []
 
     state.num_images_to_generate = _requested_count(state)
-    typed_prompt = base_prompt
+    typed_prompt = shown_prompt or base_prompt
     shown_prompt = shown_prompt or base_prompt
+    if not state.is_generating:
+        state.is_generating = True
+        state.generation_complete = False
+        progress_start(state, _image_stages(bool(input_gcs_uris)))
+        yield
     if state.apply_brand:
         brand_line = brand_kit.prompt_line(brand_kit.load(app_state.user_email))
         if brand_line:
@@ -1325,12 +1330,8 @@ def _generate_and_save(
     model_config_for_run = get_gemini_image_model_config(state.selected_model)
     # final_prompt = base_prompt
 
-    state.is_generating = True
-    state.generation_complete = False
     state.last_prompt = typed_prompt  # a retry adds the brand line again
     state.last_input_uris = list(input_gcs_uris)
-    progress_start(state, _image_stages(bool(input_gcs_uris)))
-    yield
 
     start_time = time.time()
     try:
@@ -1480,6 +1481,11 @@ def _generate_and_save(
 def generate_images(e: me.ClickEvent):
     """Event handler for the main 'Generate Images' button."""
     state = me.state(PageState)
+    raw_prompt = state.prompt
+    state.is_generating = True
+    state.generation_complete = False
+    progress_start(state, _image_stages(bool(state.uploaded_image_gcs_uris)))
+    yield
     prompt = _apply_typed_settings(state)
     # Short prompts go out richer (the box keeps the person's own words).
     prompt = enhance_on_send(
@@ -1494,7 +1500,7 @@ def generate_images(e: me.ClickEvent):
     yield from _generate_and_save(
         base_prompt=prompt,
         input_gcs_uris=state.uploaded_image_gcs_uris,
-        shown_prompt=state.prompt,
+        shown_prompt=raw_prompt,
     )
 
 
@@ -1587,6 +1593,8 @@ def on_load(e: me.LoadEvent):
     if filled:
         state.prompt_key += 1  # redraw the composer with the idea
     owner = getattr(me.state(AppState), "user_email", "")
+    if owner and not state.history_urls and not has_cached_owner_rows(owner) and not filled:
+        yield
     hydrate_studio_history(
         state,
         owner,

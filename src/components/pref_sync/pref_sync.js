@@ -19,7 +19,7 @@
  * On load it reports a saved value that differs from the page's; after that,
  * every change the page makes is saved. Non-visual.
  */
-import { LitElement } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement } from '/ui/vendor/lit-3.2.1.js';
 
 class GmPref extends LitElement {
   static properties = {
@@ -45,11 +45,20 @@ class GmPref extends LitElement {
     this.style.display = 'none';
   }
 
+  _cookie(val) {
+    try {
+      document.cookie = `gm_pref_${this.name}=${encodeURIComponent(val)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+    } catch (_) { /* ignore */ }
+  }
+
   firstUpdated() {
     let saved = null;
     try { saved = localStorage.getItem(this._key()); } catch (_) { /* ignore */ }
-    if (saved !== null && saved !== this.value && this.loadEvent) {
-      this.dispatchEvent(new MesopEvent(this.loadEvent, { name: this.name, value: saved }));
+    if (saved !== null) {
+      this._cookie(saved);
+      if (saved !== this.value && this.loadEvent) {
+        this.dispatchEvent(new MesopEvent(this.loadEvent, { name: this.name, value: saved }));
+      }
     }
     this._ready = true;
   }
@@ -57,6 +66,7 @@ class GmPref extends LitElement {
   updated(changed) {
     if (!this._ready || !changed.has('value')) return;
     try { localStorage.setItem(this._key(), this.value); } catch (_) { /* ignore */ }
+    this._cookie(this.value);
   }
 
   render() { return ''; }

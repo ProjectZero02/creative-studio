@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {LitElement, html, css} from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
+import {LitElement, html, css} from '/ui/vendor/lit-3.2.1.js';
 
 class SearchEntryPoint extends LitElement {
   static properties = {

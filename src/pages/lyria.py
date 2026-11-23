@@ -25,7 +25,7 @@ from common import prompt_settings
 from common.i18n import t, tr
 from common.auto_enhance import enhance_on_send
 from common.prompt_prefill import prefill_prompt, take_autostart
-from common.studio_history import hydrate_studio_history
+from common.studio_history import has_cached_owner_rows, hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from common.utils import create_display_url
 from components.composer.chip_menu import change_value, chip_menu, chip_options
@@ -82,6 +82,8 @@ def on_lyria_load(e: me.LoadEvent):  # pylint: disable=unused-argument
         state.music_prompt_placeholder = state.music_prompt_input
         state.music_prompt_textarea_key += 1  # redraw the prompt box
     owner = getattr(me.state(AppState), "user_email", "")
+    if owner and not state.history_urls and not has_cached_owner_rows(owner) and not filled:
+        yield
     hydrate_studio_history(
         state,
         owner,
@@ -685,14 +687,6 @@ def on_click_lyria(e: me.ClickEvent):
         progress_fail(state, "Describe the music first, then press Enter.")
         yield
         return
-    # "2 tracks" or "instrumental" typed in the prompt move the chips.
-    send_prompt, instrumental = _apply_typed_settings(state)
-    # Short prompts go out richer; the typed words are kept for the Library.
-    enhanced = enhance_on_send(send_prompt, MUSIC_REWRITER)
-    if enhanced != send_prompt:
-        state.original_user_prompt = state.original_user_prompt or send_prompt
-        send_prompt = enhanced
-
     state.is_loading = True
     state.loading_operation_message = (
         "Generating music with Lyria..."  # Set specific message
@@ -706,6 +700,14 @@ def on_click_lyria(e: me.ClickEvent):
     state.c2pa_manifest_json = ""
     state.timing = ""
     yield
+    # "2 tracks" or "instrumental" typed in the prompt move the chips.
+    send_prompt, instrumental = _apply_typed_settings(state)
+    # Short prompts go out richer; the typed words are kept for the Library.
+    enhanced = enhance_on_send(send_prompt, MUSIC_REWRITER)
+    if enhanced != send_prompt:
+        state.original_user_prompt = state.original_user_prompt or send_prompt
+        send_prompt = enhanced
+
     progress_step(state, 1)
     yield
 

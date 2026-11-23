@@ -8,7 +8,7 @@
  * The last seq shown is kept per tab so a re-render or a page change never
  * shows the same notice twice.
  */
-import { LitElement } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement } from '/ui/vendor/lit-3.2.1.js';
 
 const SEEN = 'gm-notify-seen';
 

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import datetime
 import logging
 import math
@@ -19,27 +21,81 @@ import os
 import tempfile
 import uuid
 
-import cv2
-import moviepy
-import numpy as np
-from moviepy import (
-    ColorClip,
-    CompositeAudioClip,
-    CompositeVideoClip,
-    VideoClip,
-    VideoFileClip,
-    afx,
-    concatenate_videoclips,
-    vfx,
-)
-from moviepy.audio.io.AudioFileClip import AudioFileClip
-from scipy.ndimage import gaussian_filter
-
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.storage import download_from_gcs, store_to_gcs
 from config.default import Default
 
 config = Default()
+
+_LAZY_VIDEO_ATTRS = frozenset(
+    {
+        "cv2",
+        "moviepy",
+        "np",
+        "ColorClip",
+        "CompositeAudioClip",
+        "CompositeVideoClip",
+        "VideoClip",
+        "VideoFileClip",
+        "afx",
+        "concatenate_videoclips",
+        "vfx",
+        "AudioFileClip",
+        "gaussian_filter",
+    }
+)
+
+
+def __getattr__(name: str):
+    """Lazily import heavy video/scientific dependencies when first accessed."""
+    if name not in _LAZY_VIDEO_ATTRS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import cv2
+    import moviepy
+    import numpy as np
+    from moviepy import (
+        ColorClip,
+        CompositeAudioClip,
+        CompositeVideoClip,
+        VideoClip,
+        VideoFileClip,
+        afx,
+        concatenate_videoclips,
+        vfx,
+    )
+    from moviepy.audio.io.AudioFileClip import AudioFileClip
+    from scipy.ndimage import gaussian_filter
+
+    loaded = {
+        "cv2": cv2,
+        "moviepy": moviepy,
+        "np": np,
+        "ColorClip": ColorClip,
+        "CompositeAudioClip": CompositeAudioClip,
+        "CompositeVideoClip": CompositeVideoClip,
+        "VideoClip": VideoClip,
+        "VideoFileClip": VideoFileClip,
+        "afx": afx,
+        "concatenate_videoclips": concatenate_videoclips,
+        "vfx": vfx,
+        "AudioFileClip": AudioFileClip,
+        "gaussian_filter": gaussian_filter,
+    }
+    for key, val in loaded.items():
+        globals().setdefault(key, val)
+    return globals()[name]
+
+
+_DEPS_LOADED = False
+
+
+def _ensure_video_deps() -> None:
+    """Populate module globals with heavy video/scientific imports once on demand."""
+    global _DEPS_LOADED
+    if _DEPS_LOADED:
+        return
+    __getattr__("moviepy")
+    _DEPS_LOADED = True
 
 
 def _download_videos_to_temp(video_gcs_uris: list[str], tmpdir: str) -> list[str]:
@@ -80,7 +136,6 @@ def _upload_to_gcs(local_path: str, destination_folder: str, mime_type: str) -> 
 
 
 # --- Transition Functions (moviepy v2.x compatible) --- #
-print(f"DEBUG: Loading video_processing.py at {datetime.datetime.now()}. Moviepy version: {moviepy.__version__}")
 
 
 def _safe_transition_duration(clip1, clip2, transition_duration):
@@ -98,6 +153,7 @@ def _safe_transition_duration(clip1, clip2, transition_duration):
 
 def _match_clip_size(clip, target_size):
     """Fits a clip into target_size with letterboxing when needed."""
+    _ensure_video_deps()
     if clip.size == target_size:
         return clip
 
@@ -119,6 +175,7 @@ def _match_clip_size(clip, target_size):
 
 
 def crossfade(clip1, clip2, transition_duration, speed_curve="sigmoid"):
+    _ensure_video_deps()
     print("DEBUG: Entering crossfade function")
     transition_duration = _safe_transition_duration(clip1, clip2, transition_duration)
     transition_start = clip1.duration - transition_duration
@@ -177,6 +234,7 @@ def crossfade(clip1, clip2, transition_duration, speed_curve="sigmoid"):
 
 
 def wipe(clip1, clip2, transition_duration, direction="left-to-right"):
+    _ensure_video_deps()
     transition_duration = _safe_transition_duration(clip1, clip2, transition_duration)
     width, height = clip1.size
 
@@ -230,6 +288,7 @@ def wipe(clip1, clip2, transition_duration, direction="left-to-right"):
 
 
 def dipToBlack(clip1, clip2, transition_duration, **kwargs):
+    _ensure_video_deps()
     transition_duration = _safe_transition_duration(clip1, clip2, transition_duration)
     fade_duration = transition_duration / 2.0
     total_duration = clip1.duration + clip2.duration - fade_duration
@@ -263,6 +322,7 @@ def add_blur_transition(
     """
     Add a gradual blur effect to the start or end of a video clip.
     """
+    _ensure_video_deps()
     if blur_duration > clip.duration:
         blur_duration = clip.duration
         print(
@@ -306,6 +366,7 @@ def add_blur_transition(
 
 
 def blur(clip1, clip2, transition_duration=1.0, max_blur=1.0):
+    _ensure_video_deps()
     blur_duration_per_clip = transition_duration / 2
     clip1_blurred = add_blur_transition(
         clip1,
@@ -332,6 +393,7 @@ def process_videos(
     transition: str = "concat",
     transition_duration: float = 1.0,
 ) -> str:
+    _ensure_video_deps()
     if not video_gcs_uris or len(video_gcs_uris) < 2:
         raise ValueError("At least two videos are required.")
 
@@ -374,6 +436,7 @@ def layer_audio_on_video(video_gcs_uri: str, audio_gcs_uri: str) -> str:
     Layers an audio track over a video file. If the video already has audio,
     it will be replaced.
     """
+    _ensure_video_deps()
     if not video_gcs_uri or not audio_gcs_uri:
         raise ValueError("A video URI and an audio URI are required.")
 
@@ -406,6 +469,7 @@ def layer_audio_on_video(video_gcs_uri: str, audio_gcs_uri: str) -> str:
 
 def _calculate_motion_score(clip: VideoFileClip, sample_interval_seconds: float = 0.5) -> float:
     """Calculates a motion score based on frame-to-frame differences."""
+    _ensure_video_deps()
     frame_diffs = []
     prev_frame = None
 
@@ -429,6 +493,7 @@ def get_video_duration(gcs_uri: str) -> float:
     """
     Downloads the video from GCS and returns its duration in seconds.
     """
+    _ensure_video_deps()
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             local_path = _download_videos_to_temp([gcs_uri], tmpdir)[0]
@@ -444,6 +509,7 @@ def get_video_duration(gcs_uri: str) -> float:
 
 
 def convert_mp4_to_gif(source_video_gcs_uri: str, user_email: str, target_mb: int = 8) -> str:
+    _ensure_video_deps()
     with tempfile.TemporaryDirectory() as tmpdir:
         local_path = _download_videos_to_temp([source_video_gcs_uri], tmpdir)[0]
 
@@ -536,6 +602,7 @@ def convert_mp4_to_gif(source_video_gcs_uri: str, user_email: str, target_mb: in
 
 def extract_and_upload_thumbnail(video_gcs_uri: str, timestamp_s: float) -> str:
     """Extracts a frame from a video at the given timestamp and uploads it to GCS."""
+    _ensure_video_deps()
     logging.info(f"Extracting thumbnail for {video_gcs_uri} at {timestamp_s}s")
 
     with tempfile.TemporaryDirectory() as tmpdir:

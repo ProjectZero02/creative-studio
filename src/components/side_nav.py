@@ -83,7 +83,6 @@ def on_sidenav_menu_click(e: me.ClickEvent):  # pylint: disable=unused-argument
 def on_click_title(e: me.ClickEvent):  # pylint: disable=unused-argument
     """Go to the home page."""
     me.navigate(url="/home")
-    yield
 
 
 def navigate_to(e: me.ClickEvent):
@@ -93,7 +92,6 @@ def navigate_to(e: me.ClickEvent):
     if route_to_navigate:
         s.current_page = route_to_navigate
         me.navigate(route_to_navigate)
-    yield
 
 
 def sr_only(text: str):
@@ -186,13 +184,13 @@ def sidenav(current_page: Optional[str]):
                     flex_shrink=0,
                 ),
             ):
-                with me.content_button(
-                    type="icon",
-                    on_click=on_sidenav_menu_click,
-                    style=me.Style(width=ITEM_SIZE, height=ITEM_SIZE, padding=me.Padding.all(8), flex_shrink=0),
-                ):
-                    me.icon(icon="menu")
-                    sr_only(t("nav.close_menu") if opened else t("nav.open_menu"))
+                with me.box(classes="gm-nav-toggle"):
+                    with me.content_button(
+                        type="icon",
+                        style=me.Style(width=ITEM_SIZE, height=ITEM_SIZE, padding=me.Padding.all(8), flex_shrink=0),
+                    ):
+                        me.icon(icon="menu")
+                        sr_only(t("nav.close_menu") if opened else t("nav.open_menu"))
                 with me.box(classes="gm-nav-brand"):
                     with me.content_button(
                         on_click=on_click_title,

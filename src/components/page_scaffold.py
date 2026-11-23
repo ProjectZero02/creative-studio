@@ -44,12 +44,15 @@ def page_scaffold(page_name: str):
 
     app_state = me.state(AppState)
     app_state.current_page = page_name
-    log_page_view(page_name=page_name, session_id=app_state.session_id)
+    if app_state.last_logged_page != page_name:
+        log_page_view(page_name=page_name, session_id=app_state.session_id)
+        app_state.last_logged_page = page_name
 
     # Only save a theme the user picked; otherwise follow the system setting.
     theme_manager(
         theme=app_state.theme_mode if app_state.theme_chosen else "",
         on_theme_load=on_theme_load,
+        key="gm-theme-manager",
     )
     # Sets <html lang/dir> and saves the language (see common/i18n.py).
     lang_manager(

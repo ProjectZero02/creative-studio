@@ -29,6 +29,7 @@ screen-reader name and a tooltip; buttons are 44px tall on phones (CSS in
 assets/ui/studio.src.css, `.gm-composer`).
 """
 
+import inspect
 import typing
 
 import mesop as me
@@ -41,10 +42,19 @@ ENTER = me.Shortcut(key="Enter")
 
 
 @me.web_component(path="./prompt_keys.js")
-def composer_prompt_keys(*, page: str, key: str | None = None):
+def composer_prompt_keys(
+    *,
+    page: str,
+    value: str = "",
+    on_send: typing.Callable[[me.WebEvent], typing.Any] | None = None,
+    key: str | None = None,
+):
     """Up/Down arrows in the prompt box step through your recent prompts."""
     return me.insert_web_component(
-        key=key, name="gm-prompt-keys", properties={"page": page}
+        key=key,
+        name="gm-prompt-keys",
+        properties={"page": page, "value": value},
+        events={"sendEvent": on_send} if on_send else {},
     )
 
 
@@ -269,8 +279,21 @@ def composer(
                         on_click=on_click_send,
                         primary=True,
                     )
-        if history:
-            composer_prompt_keys(page=history, key=f"keys-{history}")
+
+        def _on_fast_send(e: me.WebEvent):
+            val = str((e.value or {}).get("value", ""))
+            result = on_submit(
+                me.TextareaShortcutEvent(key=textarea_key, value=val, shortcut=ENTER)
+            )
+            if inspect.isgenerator(result):
+                yield from result
+
+        composer_prompt_keys(
+            page=history,
+            value=value,
+            on_send=_on_fast_send,
+            key=f"keys-{history or textarea_key}",
+        )
         if notice:
             composer_notice(text=notice, on_undo=on_notice_undo)
         elif hint:

@@ -23,7 +23,7 @@
  * - On load, sends the saved language to the server, or (until the user picks)
  *   the browser language, if it differs from what the server rendered.
  */
-import { LitElement } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement } from '/ui/vendor/lit-3.2.1.js';
 
 const LANGS = ['en', 'ar'];
 const RTL = new Set(['ar']);

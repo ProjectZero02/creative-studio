@@ -26,6 +26,10 @@ from common.identity import (
     INTERNAL_VERIFIED_ROLE_ENVIRON,
 )
 
+THEME_COOKIE = "gm_theme"
+SIDENAV_COOKIE = "gm_sidenav"
+AUTO_ENHANCE_COOKIE = "gm_pref_auto_enhance"
+
 
 @me.stateclass
 class AppState:
@@ -45,6 +49,7 @@ class AppState:
     user_email: str = "anonymous@google.com"
     session_id: str = ""
     current_page: str = ""
+    last_logged_page: str = ""
     user_role: str = ""
     user_name: str = ""
     # Settings > General: improve short prompts with Gemini when sent
@@ -86,6 +91,16 @@ class AppState:
             self.lang = lang_from_accept_language(
                 request.headers.get("Accept-Language", "")
             )
+        saved_theme = request.cookies.get(THEME_COOKIE, "")
+        if saved_theme in ("light", "dark"):
+            self.theme_mode = saved_theme
+            self.theme_chosen = True
+        saved_nav = request.cookies.get(SIDENAV_COOKIE, "")
+        if saved_nav in ("1", "0"):
+            self.sidenav_open = saved_nav == "1"
+        saved_ae = request.cookies.get(AUTO_ENHANCE_COOKIE, "")
+        if saved_ae in ("on", "off", "true", "false", "1", "0"):
+            self.auto_enhance = saved_ae in ("on", "true", "1")
 
 
 def theme_toggle_button():

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit/+esm';
+import { LitElement, html, css } from '/ui/vendor/lit-3.2.1.js';
 
 export class ContentCredentialsViewer extends LitElement {
   static properties = {

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import datetime
 import logging
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -34,6 +36,10 @@ logger = logging.getLogger(__name__)
 SCAN = 120  # newest owner items scanned from Firestore
 LIMIT = 16  # recent cards shown in a studio tab
 _INCOMPLETE_STATUSES = frozenset({"pending", "processing", "failed"})
+_OWNER_ROWS_TTL_SECONDS = 60.0
+_CACHE_LOCK = threading.Lock()
+_OWNER_ROWS_CACHE: dict[tuple[int, str], tuple[float, list[dict]]] = {}
+_NO_COMPOSITE_INDEX_DBS: set[int] = set()
 
 
 @dataclass(frozen=True)
@@ -201,6 +207,32 @@ def extract_recent_assets(
     return assets
 
 
+def has_cached_owner_rows(owner: str) -> bool:
+    """True when recent Firestore rows for ``owner`` are warm in memory."""
+    if not owner:
+        return False
+    from common.metadata import db
+
+    if not db:
+        return True
+    key = (id(db), owner)
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        entry = _OWNER_ROWS_CACHE.get(key)
+        return bool(entry and entry[0] > now)
+
+
+def invalidate_owner_history(owner: str | None = None) -> None:
+    """Drop cached studio history after a user generates or saves new media."""
+    with _CACHE_LOCK:
+        if not owner:
+            _OWNER_ROWS_CACHE.clear()
+            return
+        stale = [k for k in _OWNER_ROWS_CACHE if k[1] == owner]
+        for k in stale:
+            del _OWNER_ROWS_CACHE[k]
+
+
 def _query_owner_rows(owner: str) -> list[dict]:
     from google.cloud import firestore
 
@@ -208,23 +240,46 @@ def _query_owner_rows(owner: str) -> list[dict]:
 
     if not db:
         return []
-    coll = db.collection(config.GENMEDIA_COLLECTION_NAME).where(
-        "user_email", "==", owner
-    )
-    try:
-        query = coll.order_by(
-            "timestamp", direction=firestore.Query.DESCENDING
-        ).limit(SCAN)
-        return [d.to_dict() or {} for d in query.stream()]
-    except Exception:  # no composite index on (user_email, timestamp)
-        logger.info(
-            "studio_history: ordered query failed, falling back to unordered scan",
-            exc_info=True,
+
+    db_id = id(db)
+    cache_key = (db_id, owner)
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _OWNER_ROWS_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
+        skip_ordered = db_id in _NO_COMPOSITE_INDEX_DBS
+
+    rows: list[dict]
+    if not skip_ordered:
+        coll = db.collection(config.GENMEDIA_COLLECTION_NAME).where(
+            "user_email", "==", owner
         )
+        try:
+            query = coll.order_by(
+                "timestamp", direction=firestore.Query.DESCENDING
+            ).limit(SCAN)
+            rows = [d.to_dict() or {} for d in query.stream()]
+        except Exception:  # no composite index on (user_email, timestamp)
+            logger.info(
+                "studio_history: ordered query failed, falling back to unordered scan",
+                exc_info=True,
+            )
+            with _CACHE_LOCK:
+                _NO_COMPOSITE_INDEX_DBS.add(db_id)
+            fallback = db.collection(config.GENMEDIA_COLLECTION_NAME).where(
+                "user_email", "==", owner
+            )
+            rows = [d.to_dict() or {} for d in fallback.limit(SCAN * 3).stream()]
+    else:
         fallback = db.collection(config.GENMEDIA_COLLECTION_NAME).where(
             "user_email", "==", owner
         )
-        return [d.to_dict() or {} for d in fallback.limit(SCAN * 3).stream()]
+        rows = [d.to_dict() or {} for d in fallback.limit(SCAN * 3).stream()]
+
+    with _CACHE_LOCK:
+        _OWNER_ROWS_CACHE[cache_key] = (time.monotonic() + _OWNER_ROWS_TTL_SECONDS, rows)
+    return rows
 
 
 def load_recent_assets(

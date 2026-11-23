@@ -360,6 +360,34 @@ html body .gm-nav .mat-mdc-button-base:hover { background-color: var(--gm-hover)
 /* Only real keyboard focus gets the ring (the drawer focuses its first button on load). */
 html body .gm-nav button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: 1px; }
 html body .gm-nav button:focus-visible:not(.cdk-keyboard-focused) { outline: none; }
+/* Instant client-side rail toggle (theme_manager.js sets html[data-sidenav]). */
+html[data-sidenav="open"] body mat-sidenav.mat-drawer {
+  width: var(--gm-nav-open) !important;
+  background: var(--gm-panel) !important;
+}
+html[data-sidenav="closed"] body mat-sidenav.mat-drawer {
+  width: var(--gm-rail) !important;
+  background: transparent !important;
+}
+html[data-sidenav="open"] body .gm-nav .gm-nav-label,
+html[data-sidenav="open"] body .gm-nav .gm-nav-brand {
+  opacity: 1 !important;
+  transition: opacity 160ms ease 70ms !important;
+  pointer-events: auto !important;
+}
+html[data-sidenav="closed"] body .gm-nav .gm-nav-label,
+html[data-sidenav="closed"] body .gm-nav .gm-nav-brand {
+  opacity: 0 !important;
+  transition: opacity 70ms ease !important;
+  pointer-events: none !important;
+}
+html[data-sidenav="open"] body .gm-nav .gm-nav-group { height: 30px !important; }
+html[data-sidenav="closed"] body .gm-nav .gm-nav-group { height: 12px !important; }
+@media (max-height: 720px) {
+  html[data-sidenav="open"] body .gm-nav .gm-nav-group { height: 24px !important; padding-top: 8px; }
+  html[data-sidenav="closed"] body .gm-nav .gm-nav-group { height: 8px !important; }
+}
+html[data-sidenav="open"] .cdk-overlay-container mat-tooltip-component { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   html body .gm-nav-label, html body .gm-nav-brand, html body .gm-nav-group { transition: none; }
 }
@@ -406,12 +434,18 @@ html body .gm-content {
   margin-left: var(--gm-rail);
   transition: margin-left var(--gm-med) var(--gm-ease);
 }
-html body .gm-content.gm-nav-open { margin-left: var(--gm-nav-open); }
+html body .gm-content.gm-nav-open,
+html[data-sidenav="open"] body .gm-content { margin-left: var(--gm-nav-open); }
+html[data-sidenav="closed"] body .gm-content { margin-left: var(--gm-rail); }
+html[dir="rtl"][data-sidenav="open"] body .gm-content { margin-left: 0; margin-right: var(--gm-nav-open); transition: margin-right var(--gm-med) var(--gm-ease); }
+html[dir="rtl"][data-sidenav="closed"] body .gm-content { margin-left: 0; margin-right: var(--gm-rail); transition: margin-right var(--gm-med) var(--gm-ease); }
 html body .gm-page > * { animation: gm-fade-up var(--gm-med) var(--gm-ease); }
 
 /* Phones and small tablets: the open menu floats over the page. */
 @media (max-width: 760px) {
-  html body .gm-content.gm-nav-open { margin-left: var(--gm-rail); }
+  html body .gm-content.gm-nav-open,
+  html[data-sidenav="open"] body .gm-content { margin-left: var(--gm-rail); }
+  html[dir="rtl"][data-sidenav="open"] body .gm-content { margin-left: 0; margin-right: var(--gm-rail); }
   html body .mat-drawer { box-shadow: none; }
 }
 @media (max-width: 760px) {
@@ -519,19 +553,31 @@ html body .gm-title p { margin: 0; }
 
 /* Phones: no rail. The menu button floats top-left; the page gets the full width. */
 @media (max-width: 600px) {
-  html body .mat-drawer:has(.gm-nav-collapsed) {
+  html[data-sidenav="closed"] body .mat-drawer,
+  html:not([data-sidenav="open"]) body .mat-drawer:has(.gm-nav-collapsed) {
     width: 64px !important; height: 64px !important;
-    background: transparent !important; border: 0 !important; overflow: visible;
+    background: transparent !important; border: 0 !important; overflow: visible !important;
   }
-  html body .gm-nav-collapsed { padding: 8px !important; overflow: visible !important; background: transparent; }
-  html body .gm-nav-collapsed > :not(:first-child) { display: none !important; }
+  html[data-sidenav="closed"] body .gm-nav,
+  html:not([data-sidenav="open"]) body .gm-nav-collapsed { padding: 8px !important; overflow: visible !important; background: transparent; }
+  html[data-sidenav="closed"] body .gm-nav > :not(:first-child),
+  html:not([data-sidenav="open"]) body .gm-nav-collapsed > :not(:first-child) { display: none !important; }
+  html[data-sidenav="closed"] body .gm-nav > :first-child .mdc-icon-button,
+  html[data-sidenav="closed"] body .gm-nav > :first-child button,
   html body .gm-nav-collapsed > :first-child .mdc-icon-button,
   html body .gm-nav-collapsed > :first-child button { border-radius: 50%; }
   html body .gm-content:not(.gm-nav-open),
-  html body .gm-content.gm-nav-open { margin-left: 0; }
+  html body .gm-content.gm-nav-open,
+  html[data-sidenav="closed"] body .gm-content,
+  html[data-sidenav="open"] body .gm-content { margin-left: 0 !important; margin-right: 0 !important; }
   /* The avatar row (.gm-topbar) shares the line with the floating menu button. */
   html body .gm-topbar { padding-left: 64px !important; padding-right: 16px !important; }
-  html body .mat-drawer:not(:has(.gm-nav-collapsed)) { box-shadow: 0 8px 32px rgb(0 0 0 / 0.28) !important; }
+  html[data-sidenav="open"] body .mat-drawer,
+  html body .mat-drawer:not(:has(.gm-nav-collapsed)) {
+    height: 100% !important;
+    box-shadow: 0 8px 32px rgb(0 0 0 / 0.28) !important;
+  }
+  html[dir="rtl"][data-sidenav="closed"] body .mat-drawer { border-left: 0 !important; }
 }
 
 /* ---------- Studio pages (Image Studio, Video Studio): composer layout ---------- */
@@ -925,11 +971,13 @@ html body .gm-frame { margin-inline: auto; width: 100%; }
    centred content (home hero, studio composers) lines up with the middle of
    the screen. The open menu is wide, so only very wide screens do it then. */
 @media (min-width: 1100px) {
-  html body .gm-content:not(.gm-nav-open) .gm-frame {
+  html[data-sidenav="closed"] body .gm-content .gm-frame,
+  html:not([data-sidenav="open"]) body .gm-content:not(.gm-nav-open) .gm-frame {
     padding-inline-end: calc(32px + var(--gm-rail)) !important;
   }
 }
 @media (min-width: 1700px) {
+  html[data-sidenav="open"] body .gm-content .gm-frame,
   html body .gm-content.gm-nav-open .gm-frame {
     padding-inline-end: calc(32px + var(--gm-nav-open)) !important;
   }
@@ -977,8 +1025,8 @@ html body.dark-theme .gm-home {
   --gm-card-shadow-hover: 0 20px 56px rgba(0, 0, 0, 0.55);
 }
 
-/* Soft colour fields behind the page. Radial gradients (no filter blur) keep
-   it cheap; only transform animates, slowly. */
+/* Soft colour fields behind the page. Static radial gradients avoid continuous
+   60fps compositor re-blurring beneath glass surfaces. */
 html body .gm-aurora {
   position: fixed;
   inset: 0;
@@ -992,28 +1040,18 @@ html body .gm-aurora > * {
   width: 70vmax;
   height: 70vmax;
   border-radius: 50%;
-  will-change: transform;
 }
 html body .gm-aurora-a {
   top: -30vmax; left: -10vmax;
   background: radial-gradient(closest-side, var(--gm-aurora-1), transparent);
-  animation: gm-drift-a 38s ease-in-out infinite alternate;
 }
 html body .gm-aurora-b {
   top: -25vmax; right: -25vmax;
   background: radial-gradient(closest-side, var(--gm-aurora-2), transparent);
-  animation: gm-drift-b 46s ease-in-out infinite alternate;
 }
 html body .gm-aurora-c {
   bottom: -40vmax; left: 25vw;
   background: radial-gradient(closest-side, var(--gm-aurora-3), transparent);
-  animation: gm-drift-c 52s ease-in-out infinite alternate;
-}
-@keyframes gm-drift-a { to { transform: translate(12vw, 8vh) scale(1.08); } }
-@keyframes gm-drift-b { to { transform: translate(-10vw, 12vh) scale(0.95); } }
-@keyframes gm-drift-c { to { transform: translate(-14vw, -10vh) scale(1.1); } }
-@media (prefers-reduced-motion: reduce) {
-  html body .gm-aurora > * { animation: none; }
 }
 /* The colour fields sit behind every page (page_scaffold draws them first). */
 html body .gm-page { position: relative; }

@@ -32,7 +32,7 @@
  * inside it; results open in a small viewer window.
  * <live-call-button> is the big call button on the home page.
  */
-import { LitElement, html, css } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, html, css } from '/ui/vendor/lit-3.2.1.js';
 
 const DEFAULT_STRINGS = {
   talk: 'Talk to the studio',

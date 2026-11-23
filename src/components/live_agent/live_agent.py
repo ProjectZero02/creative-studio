@@ -24,13 +24,14 @@ change through Mesop. It also carries the page's fillable fields (see
 ``live_call_button`` is the large "Talk to the studio" button on the home page.
 """
 
+import functools
 import json
 import logging
 import typing
 
 import mesop as me
 
-from common.i18n import t
+from common.i18n import current_lang, t, tl
 from config.default import Default
 from services import page_forms
 
@@ -102,42 +103,62 @@ def on_live_action(e: me.WebEvent):
     yield
 
 
+_STRING_KEYS = (
+    ("talk", "live.talk", "Talk to the studio"),
+    ("hint", "live.hint", "Ask for images and videos by voice. Jobs run side by side."),
+    ("connecting", "live.connecting", "Connecting…"),
+    ("listening", "live.listening", "Listening"),
+    ("speaking", "live.speaking", "Speaking"),
+    ("offline", "live.offline", "Offline mode (typed)"),
+    ("type", "live.type", "Type a request…"),
+    ("mute", "live.mute", "Mute microphone"),
+    ("unmute", "live.unmute", "Unmute microphone"),
+    ("hangup", "live.hangup", "End call"),
+    ("jobs", "live.jobs", "Jobs"),
+    ("download", "live.download", "Download"),
+    ("close", "live.close", "Close"),
+    ("nomic", "live.nomic", "No microphone access. You can still type."),
+    ("minimize", "live.minimize", "Minimize"),
+    ("expand", "live.expand", "Expand"),
+    ("restore", "live.restore", "Restore"),
+    ("keyboard", "live.keyboard", "Type instead"),
+    ("noJobs", "live.no_jobs", "Things you ask for show up here."),
+    ("avatarOn", "live.avatar_on", "Turn the avatar off"),
+    ("avatarOff", "live.avatar_off", "Turn the avatar on"),
+    ("avatar", "live.avatar", "Avatar"),
+    (
+        "avatarHint",
+        "live.avatar_hint",
+        "Show a talking presenter instead of voice only. Uses much more of the Live quota.",
+    ),
+    (
+        "avatarNoSupport",
+        "live.avatar_no_support",
+        "This browser cannot play the avatar, so the call is voice only.",
+    ),
+)
+
+
 def _strings() -> dict:
     return {
-        "talk": t("live.talk", "Talk to the studio"),
-        "hint": t(
-            "live.hint", "Ask for images and videos by voice. Jobs run side by side."
-        ),
-        "connecting": t("live.connecting", "Connecting…"),
-        "listening": t("live.listening", "Listening"),
-        "speaking": t("live.speaking", "Speaking"),
-        "offline": t("live.offline", "Offline mode (typed)"),
-        "type": t("live.type", "Type a request…"),
-        "mute": t("live.mute", "Mute microphone"),
-        "unmute": t("live.unmute", "Unmute microphone"),
-        "hangup": t("live.hangup", "End call"),
-        "jobs": t("live.jobs", "Jobs"),
-        "download": t("live.download", "Download"),
-        "close": t("live.close", "Close"),
-        "nomic": t("live.nomic", "No microphone access. You can still type."),
-        "minimize": t("live.minimize", "Minimize"),
-        "expand": t("live.expand", "Expand"),
-        "restore": t("live.restore", "Restore"),
-        "keyboard": t("live.keyboard", "Type instead"),
-        "noJobs": t("live.no_jobs", "Things you ask for show up here."),
-        "avatarOn": t("live.avatar_on", "Turn the avatar off"),
-        "avatarOff": t("live.avatar_off", "Turn the avatar on"),
-        "avatar": t("live.avatar", "Avatar"),
-        "avatarHint": t(
-            "live.avatar_hint",
-            "Show a talking presenter instead of voice only. Uses much more of the Live quota.",
-        ),
-        "avatarNoSupport": t(
-            "live.avatar_no_support", "This browser cannot play the avatar, so the call is voice only."
-        ),
+        **{out_k: t(i18n_k, default) for out_k, i18n_k, default in _STRING_KEYS},
         # Empty when the server has no avatar: the switch is then hidden.
         "avatarName": Default.LIVE_AVATAR,
     }
+
+
+@functools.lru_cache(maxsize=8)
+def _strings_json_for_lang(lang: str, avatar: str) -> str:
+    payload = {
+        out_k: (tl(lang, i18n_k) or default)
+        for out_k, i18n_k, default in _STRING_KEYS
+    }
+    payload["avatarName"] = avatar
+    return json.dumps(payload)
+
+
+def _strings_json() -> str:
+    return _strings_json_for_lang(current_lang(), Default.LIVE_AVATAR)
 
 
 @me.web_component(path="./live_agent.js")
@@ -153,7 +174,7 @@ def live_agent_bridge(
         key=key,
         name="live-agent-bridge",
         properties={
-            "stringsJson": json.dumps(_strings()),
+            "stringsJson": _strings_json(),
             "page": page,
             "fieldsJson": page_fields_json(page),
             "lastFillJson": me.state(LiveFormState).last_fill_json,
@@ -168,5 +189,5 @@ def live_call_button(*, key: str | None = "live-call-button", compact: bool = Fa
     return me.insert_web_component(
         key=key,
         name="live-call-button",
-        properties={"stringsJson": json.dumps(_strings()), "compact": compact},
+        properties={"stringsJson": _strings_json(), "compact": compact},
     )

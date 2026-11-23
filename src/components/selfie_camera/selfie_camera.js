@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { LitElement, css, html } from "https://cdn.jsdelivr.net/npm/lit/+esm";
+import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 import 'https://cdn.jsdelivr.net/npm/@material/mwc-button/+esm';
 
 class SelfieCamera extends LitElement {

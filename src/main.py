@@ -24,10 +24,39 @@ if _HERE not in _sys.path:
     _sys.path.insert(0, _HERE)
 
 import datetime
+import hashlib
 import inspect
 import os
 import uuid
 from urllib.parse import quote, urlencode
+
+
+def _compute_web_components_cache_key() -> str:
+    """Fingerprint local JS modules so Mesop can emit cache headers safely."""
+    entries: list[str] = []
+    for folder in ("components", "workflows", "pages"):
+        if not os.path.isdir(folder):
+            continue
+        for root, _dirs, files in sorted(os.walk(folder)):
+            for name in sorted(files):
+                if name.endswith(".js"):
+                    p = os.path.join(root, name)
+                    try:
+                        st = os.stat(p)
+                        entries.append(f"{p}:{st.st_mtime_ns}:{st.st_size}")
+                    except OSError:
+                        pass
+    return hashlib.sha1("\n".join(entries).encode("utf-8")).hexdigest()[:12]
+
+
+# Default to in-memory Mesop session state (one process + Cloud Run session
+# affinity) and cacheable JS bundles so clicks don't upload 40KB+ state.
+os.environ.setdefault("MESOP_STATE_SESSION_BACKEND", "memory")
+os.environ.setdefault("MESOP_HTTP_CACHE_JS_BUNDLE", "true")
+os.environ.setdefault(
+    "MESOP_WEB_COMPONENTS_HTTP_CACHE_KEY",
+    _compute_web_components_cache_key(),
+)
 
 try:
     import urllib3.contrib.pyopenssl
@@ -119,7 +148,6 @@ from common.verified_identity import (
 )
 from config import default as config
 from config.voice import LEGACY_ENGINE_FOR_ROUTE
-from models.video_processing import convert_mp4_to_gif
 from pages import about as about_page
 from pages import banana_studio as banana_studio_page
 from pages import character_consistency as character_consistency_page
@@ -137,23 +165,20 @@ from pages import pixie_compositor as pixie_compositor_page
 from pages import portraits as motion_portraits
 from pages import selfie as selfie_page
 from pages import starter_pack as starter_pack_page
-from pages import test_proxy_caching as test_proxy_caching_page
 from pages import veo
 from pages import voice as voice_page
 from pages import vto as vto_page
 from pages import welcome as welcome_page
 from pages.library_v2 import page as library_v2_page
-from pages.test_async_veo import page as test_async_veo_page
-from pages.test_character_consistency import page as test_character_consistency_page
-from pages.test_index import page as test_index_page
-from pages.test_infinite_scroll import test_infinite_scroll_page
-from pages.test_media_chooser import page as test_media_chooser_page
-from pages.test_pixie_compositor import test_pixie_compositor_page
-from pages.test_svg import test_svg_page
-from pages.test_uploader import test_uploader_page
-from pages.test_vto_prompt_generator import page as test_vto_prompt_generator_page
 from pages import account as account_page
 from pages import admin_users as admin_users_page
+
+
+def convert_mp4_to_gif(*args, **kwargs):
+    """Lazily load heavy video processing dependencies on first GIF conversion."""
+    from models.video_processing import convert_mp4_to_gif as _impl
+
+    return _impl(*args, **kwargs)
 from routers import (
     auth_router,
     chat_router,
@@ -233,22 +258,163 @@ async def readyz():
 
 
 from starlette.concurrency import run_in_threadpool
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import URL, Headers, MutableHeaders
+from starlette.requests import cookie_parser
+
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://esm.sh https://cdn.jsdelivr.net; "
+    "connect-src 'self' https://esm.sh https://cdn.jsdelivr.net https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com http://fonts.googleapis.com/; "
+    "font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com http://fonts.googleapis.com;"
+    "img-src 'self' data: blob: https://google-ai-skin-tone-research.imgix.net https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
+    # blob: lets the Live Avatar play: its MediaSource (in a worker, or
+    # behind a blob URL) counts as a blob: media source.
+    "media-src 'self' blob: https://deepmind.google https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
+    "worker-src 'self' blob:;"
+)
 
 
-class ForwardedHostMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        forwarded_host = request.headers.get("X-Forwarded-Host")
+class StudioHttpMiddleware:
+    """Single pure-ASGI middleware replacing 4 stacked BaseHTTPMiddleware layers.
+
+    Handles X-Forwarded-Host rewriting (for Mesop CSRF), correlation IDs,
+    verified identity + internal header bridging, session cookies, CSP/HSTS
+    headers, and immutable Cache-Control on versioned /ui assets without buffering SSE.
+    """
+
+    def __init__(self, app_asgi) -> None:
+        self.app = app_asgi
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        forwarded_host = headers.get("x-forwarded-host")
         if forwarded_host:
-            # Overwrite the host so that Mesop's CSRF check matches the Origin header
-            request.scope["headers"] = [
+            # Overwrite host so Mesop's CSRF check matches the Origin header.
+            scope["headers"] = [
                 (k, v) if k != b"host" else (k, forwarded_host.encode())
-                for k, v in request.scope["headers"]
+                for k, v in scope["headers"]
             ]
-        return await call_next(request)
+            headers = Headers(scope=scope)
 
+        correlation_id = resolve_correlation_id(headers.get(CORRELATION_ID_HEADER))
+        scope.setdefault("state", {})["correlation_id"] = correlation_id
+        token = correlation_id_var.set(correlation_id)
 
-app.add_middleware(ForwardedHostMiddleware)
+        path = scope.get("path", "")
+        method = scope.get("method", "GET").upper()
+        query_bytes = scope.get("query_string", b"")
+        hostname = URL(scope=scope).hostname
+
+        def _decorate_headers(
+            raw_headers: list[tuple[bytes, bytes]],
+            status: int,
+            *,
+            set_session: str | None,
+        ) -> None:
+            mh = MutableHeaders(raw=raw_headers)
+            mh[CORRELATION_ID_HEADER] = correlation_id
+            mh["Content-Security-Policy"] = _CSP_POLICY
+            if should_send_hsts(config.Default.APP_ENV, hostname):
+                mh[HSTS_HEADER] = HSTS_VALUE
+            if set_session:
+                mh.append(
+                    "Set-Cookie",
+                    f"session_id={set_session}; HttpOnly; Path=/; SameSite=Lax",
+                )
+            if (
+                status == 200
+                and method in ("GET", "HEAD")
+                and path.startswith("/ui/")
+                and "cache-control" not in mh
+            ):
+                if b"v=" in query_bytes or path.startswith("/ui/vendor/"):
+                    mh["Cache-Control"] = "public, max-age=31536000, immutable"
+                else:
+                    mh["Cache-Control"] = "public, max-age=3600"
+
+        try:
+            identity = await run_in_threadpool(get_verified_user_identity, headers)
+            user_email = identity.email if identity else ANONYMOUS_USER_EMAIL
+
+            if auth_mode() == AUTH_MODE_SESSION:
+                denied = session_gate(
+                    identity,
+                    method,
+                    path,
+                    query_bytes.decode("latin-1"),
+                    headers.get("accept"),
+                )
+                if denied is not None:
+
+                    async def _send_denied(message):
+                        if message["type"] == "http.response.start":
+                            _decorate_headers(
+                                message.setdefault("headers", []),
+                                message["status"],
+                                set_session=None,
+                            )
+                        await send(message)
+
+                    await denied(scope, receive, _send_denied)
+                    return
+            elif (
+                config.Default.REQUIRE_AUTHENTICATED_USER
+                and identity is None
+                and not _is_public_path(path)
+            ):
+                denied = JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+                async def _send_403(message):
+                    if message["type"] == "http.response.start":
+                        _decorate_headers(
+                            message.setdefault("headers", []),
+                            message["status"],
+                            set_session=None,
+                        )
+                    await send(message)
+
+                await denied(scope, receive, _send_403)
+                return
+
+            cookies = cookie_parser(headers.get("cookie", ""))
+            existing_sid = cookies.get("session_id")
+            session_id = existing_sid or str(uuid.uuid4())
+            set_session = None if existing_sid else session_id
+
+            scope["MESOP_USER_EMAIL"] = user_email
+            scope["MESOP_SESSION_ID"] = session_id
+            set_internal_scope_headers(
+                scope,
+                {
+                    INTERNAL_VERIFIED_EMAIL_HEADER: user_email,
+                    INTERNAL_SESSION_ID_HEADER: session_id,
+                    INTERNAL_VERIFIED_ROLE_HEADER: (identity.role or "") if identity else "",
+                    INTERNAL_VERIFIED_NAME_HEADER: quote(
+                        (identity.name or "") if identity else ""
+                    ),
+                },
+            )
+            if config.Default.GA_MEASUREMENT_ID:
+                scope["MESOP_GA_MEASUREMENT_ID"] = config.Default.GA_MEASUREMENT_ID
+
+            async def _send_wrapped(message):
+                if message["type"] == "http.response.start":
+                    _decorate_headers(
+                        message.setdefault("headers", []),
+                        message["status"],
+                        set_session=set_session,
+                    )
+                await send(message)
+
+            await self.app(scope, receive, _send_wrapped)
+        finally:
+            correlation_id_var.reset(token)
+
 
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 app.add_middleware(
@@ -261,6 +427,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(StudioHttpMiddleware)
 
 
 @app.get("/api/convert_to_gif")
@@ -340,128 +507,6 @@ def get_signed_url(request: Request, gcs_uri: str):
         return JSONResponse({"error": "Failed to generate signed URL"}, status_code=500)
 
 
-@app.middleware("http")
-async def add_global_csp(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://esm.sh https://cdn.jsdelivr.net; "
-        "connect-src 'self' https://esm.sh https://cdn.jsdelivr.net https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com http://fonts.googleapis.com/; "
-        "font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com http://fonts.googleapis.com;"
-        "img-src 'self' data: blob: https://google-ai-skin-tone-research.imgix.net https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
-        # blob: lets the Live Avatar play: its MediaSource (in a worker, or
-        # behind a blob URL) counts as a blob: media source.
-        "media-src 'self' blob: https://deepmind.google https://storage.cloud.google.com https://storage.googleapis.com https://*.googleusercontent.com; "
-        "worker-src 'self' blob:;"
-    )
-    # HSTS only in deployed environments over a real host: a browser that sees it
-    # on localhost would refuse plain-HTTP local testing for a year.
-    if should_send_hsts(config.Default.APP_ENV, request.url.hostname):
-        response.headers[HSTS_HEADER] = HSTS_VALUE
-    return response
-
-
-@app.middleware("http")
-async def set_request_context(request: Request, call_next):
-    # Identity comes ONLY from the cryptographically verified source. In a
-    # deployed env this verifies the IAP assertion; plaintext identity headers
-    # are never trusted. Verification is CPU-bound (with an occasional cached cert
-    # fetch), so run it off the event loop.
-    identity = await run_in_threadpool(get_verified_user_identity, request.headers)
-    user_email = identity.email if identity else ANONYMOUS_USER_EMAIL
-
-    if auth_mode() == AUTH_MODE_SESSION:
-        # App sign-in: no session -> /login (page loads) or 401 (API/XHR);
-        # /admin/* needs the admin role. See routers/auth_router.session_gate.
-        denied = session_gate(
-            identity,
-            request.method,
-            request.url.path,
-            request.url.query,
-            request.headers.get("accept"),
-        )
-        if denied is not None:
-            return denied
-    elif (
-        config.Default.REQUIRE_AUTHENTICATED_USER
-        and identity is None
-        and not _is_public_path(request.url.path)
-    ):
-        # App-level denial: IAP already intercepts truly unauthenticated users, so
-        # a request reaching here without a verified identity is forbidden (403).
-        return JSONResponse({"detail": "Forbidden"}, status_code=403)
-
-    # Generate the session id ONCE and use the same value everywhere below (scope
-    # key, internal bridge header, and the response cookie) so AppState, the ASGI
-    # consumers, and the client cookie never disagree.
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        session_id = str(uuid.uuid4())
-
-    # ASGI scope keys — consumed directly by the ASGI-layer handlers
-    # (veo_router, get_media_proxy, convert_to_gif). Left as-is (Phase 4).
-    request.scope["MESOP_USER_EMAIL"] = user_email
-    request.scope["MESOP_SESSION_ID"] = session_id
-
-    # ASGI->WSGI bridge (Vuln #4 HIGH-2 transport fix + LOW-4 session transport).
-    # WSGIMiddleware.build_environ copies ONLY headers into the WSGI environ, not
-    # custom scope keys, so the Mesop AppState (WSGI) cannot see the scope values
-    # above. Carry the ALREADY-verified email and the server-owned session id
-    # across as dedicated internal headers. set_internal_scope_headers strips any
-    # client-supplied copy BEFORE setting exactly one server value, so a client
-    # can neither inject nor append to them. These headers are never an identity
-    # input to the verifier.
-    set_internal_scope_headers(
-        request.scope,
-        {
-            INTERNAL_VERIFIED_EMAIL_HEADER: user_email,
-            INTERNAL_SESSION_ID_HEADER: session_id,
-            # Role/name only exist in session mode; always set (possibly empty)
-            # so a client-supplied copy is stripped in every mode.
-            INTERNAL_VERIFIED_ROLE_HEADER: (identity.role or "") if identity else "",
-            INTERNAL_VERIFIED_NAME_HEADER: quote(
-                (identity.name or "") if identity else ""
-            ),
-        },
-    )
-
-    # Pass GA ID to Mesop context if it exists
-    if config.Default.GA_MEASUREMENT_ID:
-        request.scope["MESOP_GA_MEASUREMENT_ID"] = config.Default.GA_MEASUREMENT_ID
-
-    response = await call_next(request)
-    response.set_cookie(
-        key="session_id",
-        value=session_id,
-        httponly=True,
-        samesite="Lax",
-    )
-    return response
-
-
-@app.middleware("http")
-async def set_correlation_id(request: Request, call_next) -> Response:  # noqa: ANN001
-    """Tag every request with a correlation id (gmcs-0lo.6).
-
-    Defined after ``set_request_context`` so it is the outermost of the
-    decorator middlewares and therefore also tags that middleware's early
-    rejections. A well-formed incoming ``X-Correlation-ID`` is honored (so a
-    caller or upstream proxy can trace a request end to end); otherwise a new
-    UUID4 is generated. This is intentionally NOT the Mesop session id: it
-    identifies one HTTP request, not a user's sequence of actions.
-    """
-    correlation_id = resolve_correlation_id(request.headers.get(CORRELATION_ID_HEADER))
-    request.state.correlation_id = correlation_id
-    token = correlation_id_var.set(correlation_id)
-    try:
-        response = await call_next(request)
-    finally:
-        correlation_id_var.reset(token)
-    response.headers[CORRELATION_ID_HEADER] = correlation_id
-    return response
-
-
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Return a generic 500 in deployed envs; full detail only in local dev."""
@@ -478,18 +523,26 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 # Test page routes are left as is, they don't need the scaffold.
-# They are only registered for local dev, or when SHOW_DEV_PAGES=true, so a
-# client demo never exposes half-built pages.
+# Only import and register them when SHOW_DEV_PAGES=true (or DEBUG_MODE=true)
+# so unused @me.stateclass definitions never bloat normal sessions.
 SHOW_DEV_PAGES = (
-    os.environ.get(
-        "SHOW_DEV_PAGES",
-        "true" if config.Default.APP_ENV in LOCAL_APP_ENVS else "false",
-    ).lower()
-    == "true"
+    os.environ.get("SHOW_DEV_PAGES", "false").lower() == "true"
+    or os.environ.get("DEBUG_MODE", "").lower() == "true"
 )
 
 
 def _register_dev_pages() -> None:
+    from pages import test_proxy_caching as _test_proxy_caching_page  # noqa: F401
+    from pages.test_async_veo import page as test_async_veo_page
+    from pages.test_character_consistency import page as test_character_consistency_page
+    from pages.test_index import page as test_index_page
+    from pages.test_infinite_scroll import test_infinite_scroll_page
+    from pages.test_media_chooser import page as test_media_chooser_page
+    from pages.test_pixie_compositor import test_pixie_compositor_page
+    from pages.test_svg import test_svg_page
+    from pages.test_uploader import test_uploader_page
+    from pages.test_vto_prompt_generator import page as test_vto_prompt_generator_page
+
     me.page(path="/test_character_consistency", title="Test Character Consistency")(
         test_character_consistency_page,
     )

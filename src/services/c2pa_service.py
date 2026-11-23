@@ -17,7 +17,6 @@
 import json
 import os
 import tempfile
-import c2pa
 from common.storage import download_from_gcs
 from common.analytics import analytics_logger
 
@@ -57,6 +56,8 @@ class C2PAService:
                 return None
 
             # Read C2PA data
+            import c2pa
+
             try:
                 with c2pa.Reader(local_path) as reader:
                     manifest_json = reader.json()

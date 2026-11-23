@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { LitElement, css, html } from "https://cdn.jsdelivr.net/npm/lit/+esm";
+import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 import { SvgIcon } from "../svg_icon/svg_icon.js";
 
 class CopyButton extends LitElement {
