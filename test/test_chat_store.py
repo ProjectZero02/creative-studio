@@ -225,6 +225,28 @@ def test_api_create_with_messages_gets_title(store):
     assert r.json()["chat"]["title"] == "Jazz loop for a cafe"
 
 
+def test_api_repeated_create_with_page_id_makes_one_chat(store):
+    me, other = client_for(ME), client_for(OTHER)
+    first = me.post(
+        "/api/chats", json={"id": "a1b2c3d4e5f6", "messages": [msg("user", "Hi")]}
+    )
+    again = me.post(
+        "/api/chats",
+        json={
+            "id": "a1b2c3d4e5f6",
+            "messages": [msg("user", "Hi"), msg("assistant", "Hello")],
+        },
+    )
+    assert first.json()["chat"]["id"] == again.json()["chat"]["id"] == "a1b2c3d4e5f6"
+    listed = me.get("/api/chats").json()["chats"]
+    assert len(listed) == 1 and listed[0]["message_count"] == 2
+    # Someone else can't take over that id.
+    assert other.post("/api/chats", json={"id": "a1b2c3d4e5f6"}).status_code == 403
+    # A malformed id is ignored and a fresh one is made.
+    odd = me.post("/api/chats", json={"id": "../x"}).json()["chat"]["id"]
+    assert odd != "../x" and len(odd) == 12
+
+
 def test_api_owner_isolation(store):
     me, other = client_for(ME), client_for(OTHER)
     cid = me.post("/api/chats", json={"title": "secret"}).json()["chat"]["id"]

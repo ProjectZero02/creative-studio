@@ -427,10 +427,12 @@ class GmHomeChat extends LitElement {
   async _newChat(projectId = '') {
     clearTimeout(this._timer);
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
+    else if (this._saving) { try { await this._saving; } catch (_) { /* ignore */ } }
     this._loading = true;
     this._msgs = [];
     this._jobs = {};
     this._chatId = '';
+    this._newId = '';
     this._projectId = projectId || '';
     this._panel = false;
     this._panelClosed = false;
@@ -479,7 +481,17 @@ class GmHomeChat extends LitElement {
     this._saveTimer = setTimeout(() => { this._saveTimer = null; this._persist(); }, 700);
   }
 
-  async _persist() {
+  /** Save the chat. One save at a time, so two quick saves can't both create it. */
+  _persist() {
+    const run = async () => {
+      try { await this._saving; } catch (_) { /* the last one failed; try again */ }
+      await this._persistNow();
+    };
+    this._saving = run();
+    return this._saving;
+  }
+
+  async _persistNow() {
     if (!this._msgs.length) return;
     const messages = this._msgs.map((m) => ({
       role: m.role, text: m.text || '', images: (m.images || []).filter((u) => u && !String(u).startsWith('blob:')),
@@ -488,9 +500,11 @@ class GmHomeChat extends LitElement {
     const job_ids = Object.keys(this._jobs);
     try {
       if (!this._chatId) {
+        // Our own id, so a repeated create updates the same chat.
+        if (!this._newId) this._newId = [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, '0')).join('');
         const r = await fetch('/api/chats', {
           method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages, job_ids, project_id: this._projectId }),
+          body: JSON.stringify({ id: this._newId, messages, job_ids, project_id: this._projectId }),
         });
         if (!r.ok) return;
         const body = await r.json();
@@ -516,6 +530,7 @@ class GmHomeChat extends LitElement {
   async _openChat(id) {
     if (!id || id === this._chatId) { this._announce(); return; }
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
+    else if (this._saving) { try { await this._saving; } catch (_) { /* ignore */ } }
     let chat = null;
     try {
       const r = await fetch(`/api/chats/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
@@ -533,6 +548,7 @@ class GmHomeChat extends LitElement {
       return { role: m.role, text: m.text, images: m.images || [], jobs: ids, ask: m.ask || undefined, meta: m.meta || '' };
     });
     this._chatId = chat.id;
+    this._newId = '';
     this._projectId = chat.project_id || '';
     this._jobs = jobs;
     this._panelClosed = false;
