@@ -264,10 +264,35 @@ def _build_video_response_format(
     return video_format if len(video_format) > 1 else None
 
 
-def _resolve_gcs_uris_in_history(input_parts: list) -> list:
-    """Iterate input parts history and convert GCS URIs back to base64 data for model outputs."""
+def _resolve_gcs_uris_in_history(
+    input_parts: list,
+    max_inline_videos: int = 2,
+) -> list:
+    """Iterate input parts history and convert GCS URIs back to base64 data for model outputs.
+
+    Only the most recent ``max_inline_videos`` ``model_output`` video entries are
+    downloaded and base64-encoded; older video items are replaced with a lightweight
+    text summary so long multi-minute takes never OOM or blow HTTP limits.
+    """
+    video_positions: list[tuple[int, int]] = []
+    for step_idx, step in enumerate(input_parts):
+        if not isinstance(step, dict):
+            continue
+        if step.get("type") == "model_output" and isinstance(step.get("content"), list):
+            for item_idx, item in enumerate(step["content"]):
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "video"
+                    and "gcs_uri" in item
+                ):
+                    video_positions.append((step_idx, item_idx))
+
+    keep_positions = (
+        set(video_positions[-max_inline_videos:]) if max_inline_videos > 0 else set()
+    )
+
     resolved_parts = []
-    for step in input_parts:
+    for step_idx, step in enumerate(input_parts):
         if not isinstance(step, dict):
             resolved_parts.append(step)
             continue
@@ -277,12 +302,20 @@ def _resolve_gcs_uris_in_history(input_parts: list) -> list:
 
         if step_type == "model_output" and isinstance(step_content, list):
             resolved_content = []
-            for item in step_content:
+            for item_idx, item in enumerate(step_content):
                 if (
                     isinstance(item, dict)
                     and item.get("type") == "video"
                     and "gcs_uri" in item
                 ):
+                    if (step_idx, item_idx) not in keep_positions:
+                        resolved_content.append(
+                            {
+                                "type": "text",
+                                "text": "[Earlier clip omitted from inline payload]",
+                            },
+                        )
+                        continue
                     try:
                         logger.info(
                             f"Downloading previous video output from GCS: {item['gcs_uri']}",

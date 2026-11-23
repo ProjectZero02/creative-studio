@@ -121,13 +121,19 @@ def story_timeline(
     busy: bool,
     on_change: typing.Callable[[me.WebEvent], None],
     on_point: typing.Callable[[me.WebEvent], None] | None = None,
+    preview_url: str = "",
+    preview_state: str = "film",
     key: str | None = None,
 ):
-    """Video editor: preview plus video, voice, music and title tracks.
+    """Video editor: a player for the rendered preview, plus video, voice,
+    music and title tracks.
 
-    `media` maps each clip's stored URI to a browser URL. `on_change` gets
-    {"timeline": json} after every finished edit, `on_point` {"time": s}
-    where the viewer paused or scrubbed to.
+    `media` maps "thumb:<scene>" to a browser URL of that scene's frame.
+    `preview_url` is the rendered film or proxy of this exact timeline;
+    `preview_state` is "film", "ready", "making" or "failed" (see
+    story_jobs.preview). `on_change` gets {"timeline": json} after every
+    finished edit, `on_point` {"time": s} where the viewer paused or
+    scrubbed to.
     """
     events = {"changeEvent": on_change}
     if on_point is not None:
@@ -138,6 +144,8 @@ def story_timeline(
         properties={
             "timelineJson": timeline_json,
             "mediaJson": json.dumps(media),
+            "previewUrl": preview_url,
+            "previewState": preview_state,
             "aspect": aspect,
             "busy": busy,
         },

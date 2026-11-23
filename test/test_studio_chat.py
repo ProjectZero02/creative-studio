@@ -155,7 +155,12 @@ def test_offline_agent_handles_typed_requests(fresh):
 
 
 def test_empty_message_does_nothing():
-    assert studio_chat.send(OWNER, "   ", None) == {"reply": "", "jobs": [], "offline": False}
+    assert studio_chat.send(OWNER, "   ", None) == {
+        "reply": "",
+        "jobs": [],
+        "offline": False,
+        "trace": [],
+    }
 
 
 def test_api_routes(monkeypatch, fresh):

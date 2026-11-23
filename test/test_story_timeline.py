@@ -204,16 +204,157 @@ def test_stale_extension_still_trims_old_seconds():
 
 
 def test_take_is_cut_after_the_take_cap():
-    """Omni continues a thread up to STORY_TAKE_MAX_SECONDS (30 s): two 15 s
-    spoken scenes are one take, the third starts a new one."""
+    """Omni returns up to 40 s but reads only the last 30 s of its input: a
+    take grows while it is at most 30 s long and stays within 40 s."""
     from config.default import Default
 
-    assert Default.__dataclass_fields__["STORY_TAKE_MAX_SECONDS"].default == 30
+    fields = Default.__dataclass_fields__
+    assert fields["STORY_TAKE_MAX_SECONDS"].default == 40
+    assert fields["STORY_TAKE_CONTEXT_SECONDS"].default == 30
     s = Story(
-        scenes=[Scene(spoken=True, narration=f"line {i}", duration=d) for i, d in enumerate([15, 15, 10, 10])]
+        scenes=[Scene(spoken=True, narration=f"line {i}", duration=d) for i, d in enumerate([15, 15, 10, 15])]
     )
-    assert [s.continues_take(i) for i in range(4)] == [False, True, False, True]
-    assert [s.take_start(i) for i in range(4)] == [0, 0, 2, 2]
+    # The 4th scene is too long for one rolling extension (10 s of new
+    # seconds on top of the 30 s the model reads): a new take.
+    assert [s.continues_take(i) for i in range(4)] == [False, True, True, False]
+    assert [s.take_start(i) for i in range(4)] == [0, 0, 0, 3]
+    # A 10 s scene rolls the take on past 40 s.
+    s.scenes[3].duration = 10
+    assert s.continues_take(3)
+    # The live test: four 8 s shots are one 32 s take (24 s before the last).
+    s = Story(scenes=[Scene(spoken=True, narration=f"l{i}", duration=8) for i in range(4)])
+    assert [s.continues_take(i) for i in range(4)] == [False, True, True, True]
+
+
+def test_join_picker_decides_the_take():
+    """Extend joins even without speech; Cut, Bridge, Dissolve and Fade
+    black always start a new shot; Auto joins two spoken scenes."""
+    s = Story(scenes=[Scene(duration=8), Scene(duration=8, transition="extend")])
+    assert s.continues_take(1)
+    for t in ("cut", "bridge", "dissolve", "fade_black"):
+        s = Story(
+            scenes=[
+                Scene(spoken=True, narration="a", duration=8),
+                Scene(spoken=True, narration="b", duration=8, transition=t),
+            ]
+        )
+        assert not s.continues_take(1), t
+
+
+def test_a_take_is_cut_from_its_last_file():
+    """Each extension returns the whole take so far: every scene of the take
+    is cut from the last file at its own offset, so nothing switches files."""
+    a = Scene(clip_uri="c1", duration=8)
+    b = Scene(clip_uri="c2", duration=8, extends_from="c1", clip_in=8.0)
+    c = Scene(clip_uri="c3", duration=8, extends_from="c2", clip_in=16.0)
+    d = Scene(clip_uri="c4", duration=8)
+    plan = build_stitch_plan([a, b, c, d], 0.0, seamless=True)
+    assert [s.clip_uri for s in plan.segments] == ["c3", "c3", "c3", "c4"]
+    assert [s.trim_head for s in plan.segments[:3]] == [0.0, 8.0, 16.0]
+    assert [s.start for s in plan.segments] == [0.0, 8.0, 16.0, 24.0]
+    # A scene only set to Extend, but made as its own clip, keeps its file.
+    e = Scene(clip_uri="c5", duration=8, transition="extend")
+    plan = build_stitch_plan([d, e], 0.0, seamless=True)
+    assert [s.clip_uri for s in plan.segments] == ["c4", "c5"]
+
+
+def test_a_rolling_take_uses_the_newest_file_that_holds_each_scene():
+    """Past the model's 30 s context, an extension returns the last 30 s
+    plus the new seconds. Five 8 s scenes: file 4 holds 0-32 s (one file so
+    far); file 5 holds 2-40 s. Scenes 1-4 come from file 4, and the film
+    crossfades into file 5 for scene 5, inside the overlap where both files
+    show the same moment: one change of file in the whole take."""
+    from config.default import Default
+
+    xf = Default.__dataclass_fields__["STORY_ROLL_CROSSFADE"].default
+    scenes = [Scene(clip_uri="c1", duration=8)]
+    scenes += [
+        Scene(clip_uri=f"c{k}", duration=8, extends_from=f"c{k - 1}", clip_in=float(8 * (k - 1)))
+        for k in (2, 3, 4)
+    ]
+    # File 5 holds 30 s of the take (2-32 s) before its new seconds.
+    scenes.append(Scene(clip_uri="c5", duration=8, extends_from="c4", clip_in=30.0))
+    plan = build_stitch_plan(scenes, 0.0, seamless=True)
+    segs = plan.segments
+    assert [s.clip_uri for s in segs] == ["c4", "c4", "c4", "c4", "c5"]
+    assert [s.trim_head for s in segs[:4]] == [0.0, 8.0, 16.0, 24.0]
+    assert segs[4].start == round(32.0 - xf, 3)
+    assert segs[4].trim_head == round(30.0 - xf, 4) and segs[4].fade_in == xf
+    assert plan.total == 40.0
+
+
+def test_extension_offset_finds_the_new_seconds():
+    from services.story_service import extension_offset
+
+    # Whole input returned plus 8 new seconds.
+    assert extension_offset(24.0, 32.0, 8.0) == 24.0
+    # A 38 s input: the model keeps its last 30 s and adds 8.
+    assert extension_offset(38.0, 38.04, 8.0) == 30.0
+    # Only the new seconds came back.
+    assert extension_offset(24.0, 8.0, 8.0) == 0.0
+
+
+def test_only_seamless_joins_count_as_jumps(monkeypatch):
+    from services import story_timeline
+
+    changes = [(k / 24, 0.001) for k in range(240)]
+    changes[96] = (4.0, 0.2)  # a jump at 4 s
+    changes[192] = (8.0, 0.3)  # a planned cut at 8 s
+    monkeypatch.setattr(story_timeline, "frame_changes", lambda path: changes)
+    report = story_timeline.seam_check(
+        "film.mp4",
+        [
+            {"t": 4.0, "scene": 1, "seamless": True},
+            {"t": 8.0, "scene": 2, "seamless": False},
+        ],
+    )
+    assert [(r["scene"], r["jump"]) for r in report] == [(1, True), (2, False)]
+
+
+def test_seams_to_redo_only_remakes_the_end_of_a_take():
+    from services.story_jobs import seams_to_redo
+
+    s = Story(scenes=[Scene(spoken=True, narration=f"l{i}", duration=8) for i in range(4)])
+    s.scenes[3].transition = "cut"
+    seams = [{"scene": 1, "jump": True}, {"scene": 2, "jump": True}, {"scene": 3, "jump": False}]
+    # Scene 2 is the take's last; scene 1 has scene 2 built on it.
+    assert seams_to_redo(s, seams) == [2]
+
+
+def test_sound_crosses_at_a_cut():
+    """The outgoing clip's sound runs JOIN_FADE past the cut, under the
+    incoming one, instead of both fading to a dip."""
+    from services import story_timeline as st
+
+    tl = st.empty_timeline()
+    st.track(tl, "video")["clips"] = [
+        {"id": "a", "src": "a", "start": 0.0, "in": 0.0, "out": 8.0, "src_max": 9.0, "gain": 1.0, "fade_in": 0, "join": "cut"},
+        {"id": "b", "src": "b", "start": 8.0, "in": 0.0, "out": 8.0, "src_max": 8.0, "gain": 1.0, "fade_in": 0, "join": "cut"},
+    ]
+    args = st.render_args(tl, {"a": "a.mp4", "b": "b.mp4"}, {"a": True, "b": True}, {}, "out.mp4")
+    graph = args[args.index("-filter_complex") + 1]
+    assert f"atrim=start=0.000:end={8.0 + st.JOIN_FADE:.3f}" in graph
+    assert "atrim=start=0.000:end=8.000" in graph  # the last clip has no tail
+
+
+def test_render_plays_a_take_straight_through():
+    """Back-to-back pieces of one file render as one piece (one trim, one
+    sound chain), so nothing is cut or faded at the join."""
+    from services.story_timeline import merge_runs
+
+    clips = [
+        {"src": "t", "start": 0.0, "in": 0.0, "out": 8.0, "gain": 1.0, "fade_in": 0},
+        {"src": "t", "start": 8.0, "in": 8.0, "out": 16.0, "gain": 1.0, "fade_in": 0},
+        {"src": "t", "start": 16.0, "in": 16.04, "out": 24.0, "gain": 1.0, "fade_in": 0},
+        {"src": "u", "start": 24.0, "in": 0.0, "out": 8.0, "gain": 1.0, "fade_in": 0},
+        {"src": "u", "start": 32.0, "in": 3.0, "out": 5.0, "gain": 1.0, "fade_in": 0},
+    ]
+    runs = merge_runs(clips, 24)
+    assert [(r["src"], r["in"], r["out"]) for r in runs] == [
+        ("t", 0.0, 24.0),
+        ("u", 0.0, 8.0),
+        ("u", 3.0, 5.0),
+    ]
 
 
 def test_clear_clip_forgets_the_omni_thread():
@@ -492,7 +633,8 @@ def test_rerender_keeps_order_trims_and_transitions():
     v[1]["out"] = 4.0  # scene 2 trimmed to 4 s
     v[1]["fade_in"], v[2]["fade_in"] = 0.5, 0.0
     v[1]["gain"] = 0.4
-    old = T.normalize(old)
+    # The editor moves each line with its scene, as it does on every edit.
+    old = T.follow_scenes(_scenes_tl(), T.normalize(old))
     new = _scenes_tl()  # a fresh render in story order, same clips
     out = T.keep_edits(new, json.dumps(old))
     vids = T.track(out, "video")["clips"]

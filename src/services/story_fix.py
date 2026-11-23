@@ -70,7 +70,8 @@ ACTIONS = (
     "scenario",
     "none",
 )
-TIMELINE_OPS = ("trim", "remove", "move")
+TIMELINE_OPS = ("trim", "remove", "move", "transition")
+TRANSITION_JOINS = ("cut", "bridge", "dissolve", "fade_black")
 # A trimmed clip keeps at least this much picture (or all of it when shorter).
 TRIM_MIN_KEEP = 1.0
 # Most seconds one trim may take off a clip edge.
@@ -335,8 +336,9 @@ Changes, from the smallest step back to the largest:
   Best for a blank, black or frozen moment at the start or end of a clip,
   a scene that runs too long, a scene to drop, or the wrong order. Give
   "timeline": a list of {{"op": "trim", "scene": n, "cut_start": seconds,
-  "cut_end": seconds}}, {{"op": "remove", "scene": n}} or {{"op": "move",
-  "scene": n, "to": position}}.
+  "cut_end": seconds}}, {{"op": "remove", "scene": n}}, {{"op": "move",
+  "scene": n, "to": position}}, or {{"op": "transition", "scene": n,
+  "join": "cut"|"bridge"|"dissolve"|"fade_black"}}.
 - "repaint_frame": scene n's picture looks wrong (who or what is on screen,
   the place, the screen content, the framing) but what happens is right.
   Give an improved "visual" (English). Its storyboard frame is painted again
@@ -423,6 +425,10 @@ def _timeline_ops(raw, story: Story) -> list[dict]:
                 )
         elif op["op"] == "remove":
             ops.append({"op": "remove", "scene": scene})
+        elif op["op"] == "transition":
+            join = str(op.get("join") or "").strip().lower()
+            if join in TRANSITION_JOINS:
+                ops.append({"op": "transition", "scene": scene, "join": join})
         else:
             to = _scene_index(op.get("to"), story)
             if to >= 0:
@@ -690,6 +696,8 @@ def _timeline_labels(ops: list[dict]) -> list[str]:
             out.append(f"Trim scene {n}: {' and '.join(parts)}")
         elif op["op"] == "remove":
             out.append(f"Remove scene {n} from the film")
+        elif op["op"] == "transition":
+            out.append(f"Change scene {n} transition to {op['join']}")
         else:
             out.append(f"Move scene {n} to position {op['to'] + 1}")
     return out
@@ -784,6 +792,12 @@ def apply_timeline_ops(timeline: dict | str, ops: list[dict]) -> dict:
             if len(mine) == len(clips):
                 raise ValueError("The film needs at least one scene.")
             clips[:] = [c for c in clips if c not in mine]
+        elif op["op"] == "transition":
+            join = str(op.get("join") or "cut").strip().lower()
+            if join not in TRANSITION_JOINS:
+                continue
+            mine[0]["join"] = join
+            mine[0]["fade_in"] = 0.5 if join in ("dissolve", "fade_black") else 0.0
         else:
             order: list[int] = []
             for c in clips:

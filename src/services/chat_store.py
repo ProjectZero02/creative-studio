@@ -47,6 +47,7 @@ MAX_MESSAGES = 200  # a chat keeps its last 200 messages
 MAX_TEXT = 20_000  # characters per message
 MAX_IMAGES = 12  # image URIs per message
 MAX_JOBS = 40  # jobs per message
+MAX_TRACE = 20  # thinking steps per message
 MAX_JOB_IDS = 500  # job ids per chat
 MAX_TITLE = 80
 MAX_NAME = 60
@@ -116,7 +117,26 @@ def clean_message(raw: Any) -> dict | None:
         "ask": _json_value(raw.get("ask"), 1),
         # The settings line under a reply from the type controls.
         "meta": _text(raw.get("meta"), 200),
+        # The chat's thinking steps ({label, detail}) and how long it took.
+        "trace": _clean_trace(raw.get("trace")),
+        "took": int(raw.get("took") or 0)
+        if isinstance(raw.get("took"), (int, float))
+        else 0,
     }
+
+
+def _clean_trace(raw: Any) -> list[dict]:
+    rows = raw if isinstance(raw, list) else []
+    out = []
+    for step in rows[:MAX_TRACE]:
+        if isinstance(step, dict) and step.get("label"):
+            out.append(
+                {
+                    "label": _text(step.get("label"), 200),
+                    "detail": _text(step.get("detail"), 600),
+                }
+            )
+    return out
 
 
 def clean_messages(raw: Any) -> list[dict]:

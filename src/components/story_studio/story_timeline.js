@@ -15,18 +15,24 @@
  */
 
 /**
- * <story-timeline>: a small video editor for a Story Studio film.
+ * <story-timeline>: the Story Studio film editor.
  *
- * Shows a live preview (video, voice, music and titles played from their
- * own files, no render needed) and one lane per track. Each clip file has its
- * own preloaded <video>, so a cut swaps players instead of loading a file,
- * and the playhead follows the picture (it waits while a clip buffers, so
- * the sound never runs ahead). Speech recorded in a clip shows on the Voice
- * lane, linked to its clip. Clips can be moved,
- * trimmed at either edge, re-ordered (video), turned up or down, and titles
- * can be added and edited. Every finished change sends `changeEvent` with the
- * whole timeline JSON; the server validates and stores it, and "Export"
- * renders it with ffmpeg (services/story_timeline.py).
+ * The player plays ONE file: the server's render of the current timeline
+ * (`previewUrl`, a fast low-bitrate proxy rebuilt after each edit, or the
+ * film itself when nothing changed since it was made), so the preview is
+ * the render. Below it, a lean strip: shots in order (drag to reorder, trim
+ * handles, split, delete, transition per join), titles, and the voice and
+ * music lanes (select to set a level; voice lines follow their scene).
+ *
+ * Sync: every edit is sent as the whole timeline tagged `rev`
+ * ("<editor id>:<n>"). The server echoes it back; an echo carrying this
+ * editor's own tag is ignored, so a slow echo never undoes a newer edit.
+ * A timeline without this editor's tag (a new render, music, a restored
+ * version) replaces the editor's and clears undo.
+ *
+ * Keys: Space play/pause, F fullscreen, Left/Right seek 1 s (Shift: 5 s),
+ * Alt+Left/Right move the selected shot or title, S split, Delete,
+ * Ctrl+Z / Ctrl+Shift+Z.
  */
 import { LitElement, html, css, nothing } from '/ui/vendor/lit-3.2.1.js';
 import { repeat } from '/ui/vendor/lit-3.2.1.js';
@@ -34,6 +40,7 @@ import { repeat } from '/ui/vendor/lit-3.2.1.js';
 const KINDS = ['video', 'voice', 'music', 'text'];
 const LANE_LABEL = { video: 'Video', voice: 'Voice', music: 'Music', text: 'Titles' };
 const MIN_LEN = 0.3;
+const VOICE_GAP = 0.05;
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -54,10 +61,30 @@ function fmt(t) {
   return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`;
 }
 
+/** The clip's "100%": its sound as first levelled (never above it). */
+const levelOf = (c) => +c.level || Math.max(1, +c.gain || 0);
+
+/** Voice lines in time order, none running into the next (story_timeline.no_overlap). */
+function noOverlap(lines) {
+  const out = [];
+  for (const line of [...lines].sort((a, b) => (+b.start || 0) - (+a.start || 0))) {
+    const next = out[0];
+    if (next && clipEnd(line) > (+next.start || 0) - VOICE_GAP + 1e-6) {
+      const room = (+next.start || 0) - VOICE_GAP - (+line.start || 0);
+      if (room < MIN_LEN) continue;
+      line.out = r3((+line.in || 0) + room * (+line.tempo || 1));
+    }
+    out.unshift(line);
+  }
+  return out;
+}
+
 class StoryTimeline extends LitElement {
   static properties = {
     timelineJson: { type: String },
     mediaJson: { type: String },
+    previewUrl: { type: String },
+    previewState: { type: String },
     aspect: { type: String },
     busy: { type: Boolean },
     changeEvent: { type: String },
@@ -67,12 +94,13 @@ class StoryTimeline extends LitElement {
     _sel: { state: true },
     _pps: { state: true },
     _drag: { state: true },
+    _full: { state: true },
   };
 
   static styles = css`
     :host {
       display: block; color: var(--sys-on-surface, #e7e9ed); font: 14px/1.4 inherit;
-      --tl-h: 40px;
+      --tl-h: var(--gm-control-h, 40px);
       --tl-radius: var(--gm-radius-md, 12px);
       --tl-radius-sm: var(--gm-radius-sm, 8px);
       --tl-tonal: var(--gm-tonal, rgba(255,255,255,.08));
@@ -93,13 +121,18 @@ class StoryTimeline extends LitElement {
     /* Preview and inspector share one row height. */
     .top { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: stretch; }
     @media (max-width: 900px) { .top { grid-template-columns: 1fr; } }
-    .viewer { display: grid; gap: 8px; align-content: start; }
-    .stage { position: relative; background: #000; border-radius: var(--tl-radius); overflow: hidden; width: 100%; }
+    .viewer { display: grid; gap: 8px; align-content: start; min-width: 0; }
+    .stage { position: relative; background: #000; border-radius: var(--tl-radius); overflow: hidden; width: 100%; outline: none; }
     .stage.ar169 { aspect-ratio: 16 / 9; }
     .stage.ar916 { aspect-ratio: 9 / 16; max-height: 64vh; width: auto; margin: 0 auto; }
-    .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; border-radius: 0; }
-    .stage video.hide { visibility: hidden; }
-    .vids { position: absolute; inset: 0; }
+    .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+    .stage:fullscreen { border-radius: 0; aspect-ratio: auto; max-height: none; width: 100%; height: 100%; }
+    .stage .poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+    .badge { position: absolute; top: 10px; left: 10px; z-index: 2; display: inline-flex; align-items: center; gap: 8px;
+             padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; color: #fff;
+             background: rgba(0,0,0,.6); pointer-events: none; }
+    .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tl-accent); animation: pulse 1s ease-in-out infinite alternate; }
+    @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
     .speech { position: absolute; top: 8px; bottom: 8px; border-radius: 6px; box-sizing: border-box; overflow: hidden;
               display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 12px; white-space: nowrap; cursor: pointer;
               color: var(--tl-muted); background: color-mix(in srgb, var(--tl-voice) 40%, transparent);
@@ -108,12 +141,10 @@ class StoryTimeline extends LitElement {
     .speech span { overflow: hidden; text-overflow: ellipsis; }
     .speech.muted { opacity: .55; }
     .speech.sel { outline-color: var(--tl-accent); }
-    .title { position: absolute; left: 7%; right: 7%; text-align: center; color: #fff; font-weight: 600;
-             text-shadow: 0 2px 6px rgba(0,0,0,.7); pointer-events: none; line-height: 1.25; }
-    .title.top { top: 8%; } .title.center { top: 50%; transform: translateY(-50%); } .title.bottom { bottom: 8%; }
     .transport { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: var(--tl-h); }
     .transport .time { font-variant-numeric: tabular-nums; color: var(--tl-muted); font-size: 13px; }
     .transport .mid { display: flex; gap: 8px; }
+    .transport .end { display: flex; justify-content: flex-end; }
     .bar { display: flex; gap: 8px; align-items: center; height: var(--tl-h); }
     .sep { width: 1px; height: 24px; background: var(--tl-line); margin: 0 4px; }
     .spacer { flex: 1; }
@@ -129,7 +160,7 @@ class StoryTimeline extends LitElement {
     button.ghost { background: transparent; }
     button.ghost:hover:not(:disabled) { background: var(--tl-tonal); }
     button:disabled { opacity: .4; cursor: default; }
-    button:focus-visible, .clip:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    button:focus-visible, .clip:focus-visible, .stage:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
       outline: 2px solid var(--gm-focus, var(--tl-accent)); outline-offset: 2px; }
     svg { width: 20px; height: 20px; fill: currentColor; flex: none; }
     .panel { border-radius: var(--tl-radius); padding: 16px; background: var(--tl-panel); display: flex; flex-direction: column;
@@ -137,13 +168,12 @@ class StoryTimeline extends LitElement {
     .panel h3 { margin: 0; font-size: 15px; font-weight: 600; }
     .panel .meta { margin: -10px 0 0; color: var(--tl-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
     .panel .empty { margin: auto; color: var(--tl-muted); text-align: center; }
-    .panel .foot { margin-top: auto; }
     .field { display: grid; gap: 6px; font-size: 13px; color: var(--tl-muted); }
     .field .val { float: right; color: var(--sys-on-surface, #e7e9ed); font-variant-numeric: tabular-nums; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    select, textarea, input[type=number] { font: inherit; font-size: 14px; color: var(--sys-on-surface, #e7e9ed);
+    select, textarea { font: inherit; font-size: 14px; color: var(--sys-on-surface, #e7e9ed);
              background: var(--tl-field); border: 1px solid var(--tl-line); border-radius: var(--tl-radius-sm); box-sizing: border-box; width: 100%; }
-    select, input[type=number] { height: var(--tl-h); padding: 0 10px; }
+    select { height: var(--tl-h); padding: 0 10px; }
     select option { background: var(--tl-base); }
     textarea { resize: vertical; min-height: 72px; padding: 10px; }
     input[type=range] { width: 100%; accent-color: var(--tl-accent); height: 20px; margin: 0; }
@@ -169,6 +199,8 @@ class StoryTimeline extends LitElement {
             padding: 0 12px; display: flex; align-items: center; font-size: 12px; font-weight: 500; white-space: nowrap;
             cursor: grab; user-select: none; touch-action: none; outline: 2px solid transparent; outline-offset: -2px;
             color: var(--sys-on-surface, #e7e9ed); background-size: auto 100%; background-repeat: repeat-x; }
+    .clip.narrow { padding: 0 4px; justify-content: center; }
+    .clip.fixed { cursor: pointer; }
     .clip.video { background-color: var(--tl-video); } .clip.voice { background-color: var(--tl-voice); }
     .clip.music { background-color: var(--tl-music); } .clip.text { background-color: var(--tl-text); }
     .clip.thumbs { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
@@ -176,6 +208,7 @@ class StoryTimeline extends LitElement {
     .clip.sel { outline-color: var(--tl-accent); }
     .clip.drag { opacity: .85; cursor: grabbing; z-index: 2; }
     .clip .fade { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(0,0,0,.45), transparent); pointer-events: none; }
+    .clip .fade.fade-black { background: linear-gradient(90deg, rgba(0,0,0,.92), transparent); }
     .clip span { overflow: hidden; text-overflow: ellipsis; pointer-events: none; position: relative; align-self: flex-end; padding-bottom: 6px; }
     .clip.voice span, .clip.music span, .clip.text span { align-self: center; padding: 0; }
     .edge { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 1; }
@@ -183,7 +216,6 @@ class StoryTimeline extends LitElement {
     .clip.sel .edge { background: var(--tl-accent); }
     .head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--tl-accent); pointer-events: none; z-index: 3; }
     .head::before { content: ''; position: absolute; top: 0; left: -5px; width: 12px; height: 10px; background: var(--tl-accent); border-radius: 2px 2px 6px 6px; }
-    .lbl { display: none; }
     @media (max-width: 600px) {
       .tracks { grid-template-columns: 48px minmax(0, 1fr); }
       .heads div span { display: none; }
@@ -193,17 +225,21 @@ class StoryTimeline extends LitElement {
       .sep { margin: 0; }
       .zoom input { display: none; }
     }
-    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   `;
 
   constructor() {
     super();
     this.timelineJson = '';
     this.mediaJson = '{}';
+    this.previewUrl = '';
+    this.previewState = 'film';
     this.aspect = '16:9';
     this.busy = false;
     this.changeEvent = '';
     this.pointEvent = '';
+    this._id = uid();
+    this._seq = 0;
     this._pointed = -1;
     this._tl = null;
     this._seen = '';
@@ -212,35 +248,52 @@ class StoryTimeline extends LitElement {
     this._sel = '';
     this._pps = 0;
     this._drag = null;
+    this._full = false;
     this._undo = [];
     this._redo = [];
-    this._audio = new Map();
-    this._vids = new Map();
-    this._waiting = false;
-    this._titleKey = '';
     this._raf = 0;
     this._onMove = (e) => this._dragMove(e);
     this._onUp = (e) => this._dragEnd(e);
     this._onKey = (e) => this._key(e);
+    this._onFull = () => { this._full = document.fullscreenElement === this._stage(); };
   }
 
-  connectedCallback() { super.connectedCallback(); this.addEventListener('keydown', this._onKey); }
+  connectedCallback() {
+    super.connectedCallback();
+    this.addEventListener('keydown', this._onKey);
+    document.addEventListener('fullscreenchange', this._onFull);
+  }
   disconnectedCallback() {
     super.disconnectedCallback();
     this.removeEventListener('keydown', this._onKey);
-    this._pause();
-    for (const a of this._audio.values()) { a.pause(); a.src = ''; }
-    this._audio.clear();
-    for (const v of this._vids.values()) { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); }
-    this._vids.clear();
+    document.removeEventListener('fullscreenchange', this._onFull);
+    cancelAnimationFrame(this._raf);
+    const v = this._video();
+    if (v) v.pause();
   }
 
+  /** Accept a timeline from the server unless it is this editor's own echo. */
   willUpdate(changed) {
-    if (changed.has('timelineJson') && this.timelineJson && this.timelineJson !== this._seen) {
-      this._seen = this.timelineJson;
-      try { this._tl = JSON.parse(this.timelineJson); } catch (e) { this._tl = null; }
-      if (this._tl && !this._pps) this._fit();
+    if (!changed.has('timelineJson') || !this.timelineJson || this.timelineJson === this._seen) return;
+    this._seen = this.timelineJson;
+    let next;
+    try { next = JSON.parse(this.timelineJson); } catch (e) { return; }
+    if (!next) return;
+    const rev = String(next.rev || '');
+    if (this._tl && rev.startsWith(`${this._id}:`)) return;  // our own edit, maybe an old one
+    const hadTl = !!this._tl;
+    const oldDur = hadTl ? this._duration() : 0;
+    this._tl = next;
+    if (hadTl) {
+      // Someone else changed the film (a render, music, a restored version):
+      // undo would write the old film back over it.
+      this._undo = [];
+      this._redo = [];
+      if (this._sel && !this._find(this._sel)) this._sel = '';
+      if (Math.abs(this._duration() - oldDur) > 1) this._pps = 0;
     }
+    if (this._t > this._duration()) this._t = this._duration();
+    if (!this._pps) this._fit();
   }
 
   // ---------- model helpers ----------
@@ -254,8 +307,12 @@ class StoryTimeline extends LitElement {
     const ends = (v.length ? v : KINDS.flatMap((k) => this._clips(k))).map(clipEnd);
     return Math.max(0, ...ends, 0);
   }
-  _url(src) {
-    try { return (JSON.parse(this.mediaJson || '{}'))[src] || ''; } catch (e) { return ''; }
+  _mediaMap() {
+    try { return JSON.parse(this.mediaJson || '{}') || {}; } catch (e) { return {}; }
+  }
+  _thumb(c) {
+    if (!c || c.scene === undefined || c.scene < 0) return '';
+    return this._mediaMap()[`thumb:${c.scene}`] || '';
   }
   _find(id) {
     for (const k of KINDS) {
@@ -263,6 +320,24 @@ class StoryTimeline extends LitElement {
       if (c) return { kind: k, clip: c };
     }
     return null;
+  }
+  /** Shot names: "Scene 3", and "Scene 3a", "Scene 3b" for split parts. */
+  _labels() {
+    const out = {};
+    const count = {};
+    const seen = {};
+    for (const c of this._clips('video')) if (+c.scene >= 0) count[c.scene] = (count[c.scene] || 0) + 1;
+    for (const c of this._clips('video')) {
+      const base = +c.scene >= 0 ? `Scene ${+c.scene + 1}` : (c.label || 'Clip');
+      if (+c.scene >= 0 && count[c.scene] > 1) {
+        const n = seen[c.scene] = (seen[c.scene] || 0) + 1;
+        const part = String.fromCharCode(96 + Math.min(n, 26));
+        out[c.id] = { full: `${base}${part}`, short: `${+c.scene + 1}${part}` };
+      } else {
+        out[c.id] = { full: base, short: +c.scene >= 0 ? String(+c.scene + 1) : base.slice(0, 3) };
+      }
+    }
+    return out;
   }
   _layoutVideo() {
     let t = 0;
@@ -284,12 +359,10 @@ class StoryTimeline extends LitElement {
   _pushUndo(json) {
     this._undo.push(json);
     if (this._undo.length > 50) this._undo.shift();
-    this._redo = []; // a new change ends the redo chain
+    this._redo = [];
   }
   _snapshot() { const json = JSON.stringify(this._tl); this._pushUndo(json); return json; }
-  // After an edit: each scene's voice lines move with that scene's picture
-  // (or go when the scene is deleted), and music that ran to the end of the
-  // film still does. `prevJson` is the timeline before the edit.
+  /** Voice lines move with their scene's clip (story_timeline.follow_scenes). */
   _follow(prevJson) {
     let prev;
     try { prev = JSON.parse(prevJson); } catch (e) { return; }
@@ -302,33 +375,37 @@ class StoryTimeline extends LitElement {
       const at = +a.start || 0;
       const inside = (c) => at >= c.start - 0.001 && at < clipEnd(c);
       let p = linked(a) ? (pv.find((c) => c.scene === +a.scene && inside(c)) || pv.find((c) => c.scene === +a.scene)) : pv.find(inside);
-      if (!p || !linked(p)) { keep.push(a); continue; } // not tied to a scene
+      if (!p || !linked(p)) { keep.push(a); continue; }
       a.scene = +p.scene;
-      const src = (+p.in || 0) + (at - p.start); // where in the scene's clip the line starts
+      const src = (+p.in || 0) + (at - p.start);
       const now = vids.filter((c) => c.scene === a.scene);
-      if (!now.length) continue; // the scene was deleted: so is its line
+      if (!now.length) continue;
       const c = now.find((x) => src >= (+x.in || 0) - 0.001 && src < (+x.out || 0)) || now[0];
       a.start = r3(Math.max(0, c.start + (src - (+c.in || 0))));
       keep.push(a);
     }
-    voice.clips = keep;
+    voice.clips = noOverlap(keep);
     const oldDur = Math.max(0, ...pv.map(clipEnd));
     const dur = this._duration();
     for (const m of this._clips('music')) {
       if (oldDur > 0 && Math.abs(clipEnd(m) - oldDur) < 0.05 && dur > m.start) m.out = r3((+m.in || 0) + (dur - m.start));
     }
   }
-  // Transitions belong to the joins, not to the clips: after re-ordering,
-  // the n-th join keeps the transition it had.
-  _keepJoins(fades) {
-    this._clips('video').forEach((c, k) => { c.fade_in = k < fades.length ? fades[k] : 0; });
+  _keepJoins(joins) {
+    this._clips('video').forEach((c, k) => {
+      const j = k < joins.length ? joins[k] : { fade_in: 0, join: 'cut' };
+      c.fade_in = j.fade_in;
+      c.join = j.join;
+    });
   }
   _commit(prevJson = '') {
     this._layoutVideo();
     if (prevJson) this._follow(prevJson);
+    this._seq += 1;
+    this._tl.rev = `${this._id}:${this._seq}`;
     const json = JSON.stringify(this._tl);
-    this._seen = json;
     this._tl = JSON.parse(json);
+    if (this._t > this._duration()) this._t = this._duration();
     if (this.changeEvent) this.dispatchEvent(new MesopEvent(this.changeEvent, { timeline: json }));
   }
   _change(fn) {
@@ -361,10 +438,17 @@ class StoryTimeline extends LitElement {
   }
   _remove(id) {
     this._change(() => {
+      const vids = this._track('video');
+      const gone = vids.clips.find((c) => c.id === id);
+      if (gone && vids.clips.length <= 1) return;
       for (const k of KINDS) {
         const tr = this._track(k);
-        if (k === 'video' && tr.clips.length <= 1 && tr.clips.some((c) => c.id === id)) return;
         tr.clips = tr.clips.filter((c) => c.id !== id);
+      }
+      // A whole scene deleted stays deleted when the film is made again.
+      if (gone && +gone.scene >= 0 && !vids.clips.some((c) => c.scene === gone.scene)) {
+        const removed = this._tl.removed || (this._tl.removed = []);
+        if (!removed.some((r) => r.scene === gone.scene && r.src === gone.src)) removed.push({ scene: +gone.scene, src: gone.src });
       }
       this._sel = '';
     });
@@ -372,24 +456,55 @@ class StoryTimeline extends LitElement {
   _set(id, key, value) {
     this._change(() => { const f = this._find(id); if (f) f.clip[key] = value; });
   }
+  _setLevel(id, pct) {
+    this._change(() => {
+      const f = this._find(id);
+      if (f) f.clip.gain = r3(levelOf(f.clip) * clamp(pct, 0, 100) / 100);
+    });
+  }
+  _setTransition(id, value) {
+    this._change(() => {
+      const f = this._find(id);
+      if (!f) return;
+      if (value === 'fade_black') {
+        f.clip.join = 'fade_black';
+        f.clip.fade_in = 0.5;
+      } else if (value === 'cut') {
+        f.clip.join = 'cut';
+        f.clip.fade_in = 0;
+      } else {
+        const secs = +value || 0;
+        f.clip.fade_in = secs;
+        f.clip.join = secs > 0 ? 'dissolve' : 'cut';
+      }
+    });
+  }
   _reorder(id, delta) {
     this._change(() => {
       const v = this._track('video').clips;
       const i = v.findIndex((c) => c.id === id);
       const j = i + delta;
       if (i < 0 || j < 0 || j >= v.length) return;
-      const fades = v.map((c) => +c.fade_in || 0);
+      const joins = v.map((c) => ({ fade_in: +c.fade_in || 0, join: c.join || 'cut' }));
       [v[i], v[j]] = [v[j], v[i]];
-      this._keepJoins(fades);
+      this._keepJoins(joins);
     });
   }
 
-  // ---------- playback ----------
+  // ---------- the player: one <video> with the rendered preview ----------
+  _video() { return this.renderRoot && this.renderRoot.querySelector('video.player'); }
+  _stage() { return this.renderRoot && this.renderRoot.querySelector('.stage'); }
   _togglePlay() {
-    if (this._playing) { this._pause(); this._point(); } else this._play();
+    const v = this._video();
+    if (!v || !this.previewUrl) return;
+    if (v.paused) {
+      if (this._t >= this._duration() - 0.05) this._seek(0);
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+      this._point();
+    }
   }
-  /** Tells the page where the viewer stopped (debounced), so "Fix with AI"
-   * can point at that moment. Not sent while playing or at the very start. */
   _point() {
     clearTimeout(this._pointTimer);
     this._pointTimer = setTimeout(() => {
@@ -399,184 +514,76 @@ class StoryTimeline extends LitElement {
       this.dispatchEvent(new MesopEvent(this.pointEvent, { time: t }));
     }, 400);
   }
-  _play() {
-    if (!this._tl) return;
-    if (this._t >= this._duration() - 0.05) this._t = 0;
+  _onPlay() {
     this._playing = true;
-    this._clock = { wall: performance.now(), t: this._t };
     const tick = () => {
-      if (!this._playing) return;
-      const now = performance.now();
-      this._t = this._next(now);
-      this._clock = { wall: now, t: this._t };
-      if (this._t >= this._duration()) { this._t = this._duration(); this._pause(); this.requestUpdate(); return; }
-      this._sync(true);
-      this._paint();
+      const v = this._video();
+      if (!this._playing || !v) return;
+      this._t = Math.min(v.currentTime, this._duration());
+      this._paint(true);
       this._raf = requestAnimationFrame(tick);
     };
-    this._sync(true, true);
+    cancelAnimationFrame(this._raf);
     this._raf = requestAnimationFrame(tick);
   }
-  /** The playhead at wall time `now`: it follows the clip on screen, and
-   * holds while that clip is still loading or seeking. */
-  _next(now) {
-    const t = this._clock.t + (now - this._clock.wall) / 1000;
-    const clip = this._activeVideo(this._t);
-    const v = clip && this._vid(clip);
-    this._waiting = false;
-    if (!v || v.ended) return t;
-    const atEnd = v.duration && v.currentTime >= v.duration - 0.1;
-    if ((v.seeking || v.readyState < 3) && !atEnd) {
-      this._waiting = true;
-      return this._t;
-    }
-    const vt = clip.start + v.currentTime - (+clip.in || 0);
-    if (!v.paused && Math.abs(vt - t) < 0.5) return Math.max(this._t, vt);
-    return t;
-  }
-  _pause() {
+  _onPause() {
     this._playing = false;
-    this._waiting = false;
     cancelAnimationFrame(this._raf);
-    for (const v of this._vids.values()) v.pause();
-    for (const a of this._audio.values()) a.pause();
+    const v = this._video();
+    if (v) this._t = Math.min(v.currentTime, this._duration());
+    this.requestUpdate();
+  }
+  /** A new preview file: keep the place and keep playing. */
+  _onLoaded() {
+    const v = this._video();
+    if (!v) return;
+    const want = clamp(this._t, 0, Math.max(0, (v.duration || 0) - 0.05));
+    if (Math.abs(v.currentTime - want) > 0.04) { try { v.currentTime = want; } catch (e) { /* loading */ } }
+    if (this._resume) { this._resume = false; v.play().catch(() => {}); }
   }
   _seek(t) {
     this._t = clamp(t, 0, this._duration());
-    if (this._playing) this._clock = { wall: performance.now(), t: this._t };
-    this._sync(this._playing, true);
+    const v = this._video();
+    if (v && v.readyState >= 1) { try { v.currentTime = Math.min(this._t, Math.max(0, (v.duration || 0) - 0.05)); } catch (e) { /* loading */ } }
     this.requestUpdate();
     if (!this._playing) this._point();
   }
-  /** Moves the playhead and time readout without a full re-render. */
-  _paint() {
+  _fullscreen() {
+    const stage = this._stage();
+    if (!stage) return;
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else if (stage.requestFullscreen) stage.requestFullscreen().catch(() => {});
+  }
+  /** Playhead and time; while playing, the strip scrolls to keep the playhead in view. */
+  _paint(follow = false) {
     const r = this.renderRoot;
     if (!r) return;
+    const x = this._t * this._pps;
     const head = r.querySelector('.head');
-    if (head) head.style.left = `${this._t * this._pps}px`;
+    if (head) head.style.left = `${x}px`;
     const time = r.querySelector('.time');
     if (time) time.textContent = `${fmt(this._t)} / ${fmt(this._duration())}`;
-    const key = this._clips('text').filter((c) => this._t >= c.start && this._t < clipEnd(c)).map((c) => c.id).join();
-    if (key !== this._titleKey) { this._titleKey = key; this.requestUpdate(); }
-  }
-  /** The preloaded player for a clip's file (one per file, kept hidden
-   * until its clip is on screen). */
-  _vid(clip) {
-    const url = clip && this._url(clip.src);
-    const box = this.renderRoot && this.renderRoot.querySelector('.vids');
-    if (!url || !box) return null;
-    let v = this._vids.get(url);
-    if (!v) {
-      v = document.createElement('video');
-      v.playsInline = true;
-      v.preload = 'auto';
-      v.muted = true;
-      v.className = 'hide';
-      v.src = url;
-      v.addEventListener('loadedmetadata', () => {
-        const on = this._activeVideo(this._t);
-        if (on && this._url(on.src) === url) { this._sync(this._playing, true); return; }
-        // Not on screen yet: wait on the clip's first frame, so the browser
-        // buffers from there (a continued take starts 6 or 12 s into its file).
-        const first = this._clips('video').find((c) => this._url(c.src) === url && c.start > this._t);
-        if (first && +first.in > 0) { try { v.currentTime = +first.in; } catch (e) { /* loading */ } }
-      });
-      this._vids.set(url, v);
+    const scroll = r.querySelector('.scroll');
+    if (follow && scroll && !this._drag) {
+      const view = scroll.clientWidth;
+      if (x < scroll.scrollLeft || x > scroll.scrollLeft + view - 32) scroll.scrollLeft = Math.max(0, x - 32);
     }
-    if (v.parentNode !== box) box.appendChild(v);
-    return v;
-  }
-  _activeVideo(t) {
-    let found = null;
-    for (const c of this._clips('video')) if (t >= c.start && t < clipEnd(c)) found = c;
-    return found;
-  }
-  _speaking(t) {
-    const v = this._activeVideo(t);
-    if (v && (+v.gain || 0) > 0 && !v.ambient) return true;
-    return this._clips('voice').some((c) => t >= c.start && t < clipEnd(c));
-  }
-  _sync(playing, force = false) {
-    const t = this._t;
-    const clip = this._activeVideo(t);
-    for (const c of this._clips('video')) this._vid(c); // preload every clip
-    const cur = clip ? this._vid(clip) : null;
-    for (const v of this._vids.values()) {
-      if (v === cur) continue;
-      v.classList.add('hide');
-      if (!v.paused) v.pause();
-    }
-    if (cur) {
-      cur.classList.remove('hide');
-      const want = (+clip.in || 0) + (t - clip.start);
-      const off = Math.abs(cur.currentTime - want);
-      // While playing the playhead follows this player, so only a real jump
-      // (a cut into a clip, a seek) moves it; paused, show the exact frame.
-      if (cur.readyState >= 1 && !cur.seeking && off > (playing && !force ? 0.5 : 0.04)) {
-        try { cur.currentTime = want; } catch (e) { /* not loaded yet */ }
-      }
-      cur.volume = clamp(+clip.gain || 0, 0, 1);
-      cur.muted = !(+clip.gain > 0);
-      const past = cur.duration && want >= cur.duration - 0.05;
-      if (playing && cur.paused && !past) cur.play().catch(() => {});
-      if (!playing && !cur.paused) cur.pause();
-    }
-    if (playing) {
-      // Park the next clip on its first frame so the cut is instant.
-      const next = this._clips('video').find((c) => c !== clip && c.start > t && c.start - t < 2);
-      const nv = next && this._vid(next);
-      const nin = next ? +next.in || 0 : 0;
-      if (nv && nv !== cur && nv.paused && nv.readyState >= 1 && !nv.seeking && Math.abs(nv.currentTime - nin) > 0.05) {
-        try { nv.currentTime = nin; } catch (e) { /* loading */ }
-      }
-    }
-    // Sound waits with the picture while a clip buffers.
-    const run = playing && !this._waiting;
-    const ducking = (this._track('music').duck !== false) && this._speaking(t);
-    const live = new Set();
-    for (const kind of ['voice', 'music']) {
-      for (const c of this._clips(kind)) {
-        if (!(t >= c.start && t < clipEnd(c))) continue;
-        live.add(c.id);
-        let a = this._audio.get(c.id);
-        const url = this._url(c.src);
-        if (!a || a.dataset.src !== url) {
-          if (a) a.pause();
-          a = new Audio();
-          a.preload = 'auto';
-          a.dataset.src = url;
-          a.src = url;
-          a.loop = kind === 'music';
-          this._audio.set(c.id, a);
-        }
-        const tempo = +c.tempo || 1;
-        a.playbackRate = tempo;
-        let want = (+c.in || 0) + (t - c.start) * tempo;
-        if (a.loop && a.duration && isFinite(a.duration)) want %= a.duration;
-        if (force || Math.abs(a.currentTime - want) > 0.35) { try { a.currentTime = want; } catch (e) { /* loading */ } }
-        a.volume = clamp((+c.gain || 0) * (kind === 'music' && ducking ? 0.35 : 1), 0, 1);
-        if (run && a.paused) a.play().catch(() => {});
-        if (!run && !a.paused) a.pause();
-      }
-    }
-    for (const [id, a] of this._audio) if (!live.has(id) && !a.paused) a.pause();
   }
 
-  // ---------- dragging ----------
+  // ---------- dragging (shots and titles; voice and music stay with their scenes) ----------
   _dragStart(e, kind, clip, mode) {
     if (this.busy || e.button > 0) return;
     e.preventDefault();
     e.stopPropagation();
-    // Keep keyboard focus on the clip (Space, Delete, arrows, Ctrl+Z).
     const el = e.currentTarget.classList.contains('clip') ? e.currentTarget : e.currentTarget.parentElement;
     el?.focus({ preventScroll: true });
     this._sel = clip.id;
+    if (kind === 'voice' || kind === 'music') return;
     const tr = this._track(kind);
     this._drag = {
       kind, id: clip.id, mode, x0: e.clientX, moved: false,
       orig: clone(clip), before: JSON.stringify(this._tl),
-      // How far a clip's source can be stretched to the right.
-      max: kind === 'music' ? 36000 : Math.max(+clip.src_max || 0, +clip.out || 0),
+      max: Math.max(+clip.src_max || 0, +clip.out || 0),
       index: tr.clips.findIndex((c) => c.id === clip.id),
     };
     window.addEventListener('pointermove', this._onMove);
@@ -591,20 +598,16 @@ class StoryTimeline extends LitElement {
     const f = this._find(d.id);
     if (!f) return;
     const c = f.clip, o = d.orig;
-    const tempo = +o.tempo || 1;
     if (d.kind === 'text') {
       if (d.mode === 'move') c.start = r3(Math.max(0, o.start + dt));
       else if (d.mode === 'r') c.dur = r3(Math.max(MIN_LEN, o.dur + dt));
       else { const s = clamp(o.start + dt, 0, o.start + o.dur - MIN_LEN); c.dur = r3(o.dur - (s - o.start)); c.start = r3(s); }
     } else if (d.mode === 'move') {
-      if (d.kind === 'video') c._dx = dt; // re-ordered on drop
-      else c.start = r3(Math.max(0, o.start + dt));
+      c._dx = dt;
     } else if (d.mode === 'r') {
-      c.out = r3(clamp(o.out + dt * tempo, o.in + MIN_LEN * tempo, d.max || o.out));
+      c.out = r3(clamp(o.out + dt, o.in + MIN_LEN, d.max || o.out));
     } else {
-      const nin = clamp(o.in + dt * tempo, 0, o.out - MIN_LEN * tempo);
-      c.in = r3(nin);
-      if (d.kind !== 'video') c.start = r3(Math.max(0, o.start + (nin - o.in) / tempo));
+      c.in = r3(clamp(o.in + dt, 0, o.out - MIN_LEN));
     }
     if (d.kind === 'video' && d.mode !== 'move') this._layoutVideo();
     this.requestUpdate();
@@ -620,13 +623,13 @@ class StoryTimeline extends LitElement {
       const v = this._track('video').clips;
       const centre = d.orig.start + clipLen(d.orig) / 2 + (f.clip._dx || 0);
       delete f.clip._dx;
-      const fades = v.map((c) => +c.fade_in || 0);
+      const joins = v.map((c) => ({ fade_in: +c.fade_in || 0, join: c.join || 'cut' }));
       const rest = v.filter((c) => c.id !== d.id);
       let at = rest.findIndex((c) => centre < c.start + clipLen(c) / 2);
       if (at < 0) at = rest.length;
       rest.splice(at, 0, f.clip);
       this._track('video').clips = rest;
-      this._keepJoins(fades);
+      this._keepJoins(joins);
     }
     this._pushUndo(d.before);
     this._commit(d.before);
@@ -647,59 +650,64 @@ class StoryTimeline extends LitElement {
   _key(e) {
     const tag = (e.composedPath()[0]?.tagName || '').toLowerCase();
     if (['input', 'textarea', 'select'].includes(tag)) return;
+    const k = e.key.toLowerCase();
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
     if (e.key === ' ') { e.preventDefault(); this._togglePlay(); }
-    else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); this._redoLast(); }
-    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this._undoLast(); }
-    else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); this._split(); }
+    else if (plain && k === 'f') { e.preventDefault(); this._fullscreen(); }
+    else if ((e.ctrlKey || e.metaKey) && (k === 'y' || (e.shiftKey && k === 'z'))) { e.preventDefault(); this._redoLast(); }
+    else if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this._undoLast(); }
+    else if (plain && k === 's') { e.preventDefault(); this._split(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && this._sel) { e.preventDefault(); this._remove(this._sel); }
-    else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && this._sel) {
-      const f = this._find(this._sel);
-      if (!f) return;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
       const step = e.key === 'ArrowLeft' ? -1 : 1;
-      if (f.kind === 'video') this._reorder(this._sel, step);
-      else this._set(this._sel, 'start', r3(Math.max(0, (+f.clip.start || 0) + step * 0.1)));
+      const f = e.altKey && this._sel ? this._find(this._sel) : null;
+      if (f && f.kind === 'video') this._reorder(this._sel, step);
+      else if (f && f.kind === 'text') this._set(this._sel, 'start', r3(Math.max(0, (+f.clip.start || 0) + step * 0.1)));
+      else if (!e.altKey) this._seek(this._t + step * (e.shiftKey ? 5 : 1));
     }
   }
 
   // ---------- render ----------
   _zoom(f) { this._pps = clamp(this._pps * f, 4, 400); }
 
-  _thumb(c) {
-    if (c.scene === undefined || c.scene < 0) return '';
-    try { return (JSON.parse(this.mediaJson || '{}'))[`thumb:${c.scene}`] || ''; } catch (e) { return ''; }
-  }
-
-  _clipEl(kind, c) {
+  _clipEl(kind, c, names) {
     const left = (+c.start || 0) * this._pps + (kind === 'video' && c._dx ? c._dx * this._pps : 0);
     const width = Math.max(14, clipLen(c) * this._pps);
-    const label = kind === 'text' ? c.text : (c.label || (kind === 'music' ? 'Music' : kind === 'voice' ? 'Voice' : 'Clip'));
+    const name = kind === 'video' ? (names[c.id] || { full: c.label || 'Clip', short: '' }) : null;
+    const narrow = width < 72;
+    const label = kind === 'text' ? c.text
+      : kind === 'video' ? (narrow ? name.short : name.full)
+      : kind === 'music' ? 'Music' : 'Voice';
+    const full = kind === 'video' ? name.full : label;
     const sel = this._sel === c.id;
     const dragging = this._drag && this._drag.id === c.id;
     const thumb = kind === 'video' ? this._thumb(c) : '';
-    return html`<div class="clip ${kind} ${thumb ? 'thumbs' : ''} ${sel ? 'sel' : ''} ${dragging ? 'drag' : ''}" tabindex="0" role="button"
+    const fadeCls = c.join === 'fade_black' ? 'fade fade-black' : 'fade';
+    const fixed = kind === 'voice' || kind === 'music';
+    return html`<div class="clip ${kind} ${thumb ? 'thumbs' : ''} ${sel ? 'sel' : ''} ${dragging ? 'drag' : ''} ${narrow ? 'narrow' : ''} ${fixed ? 'fixed' : ''}" tabindex="0" role="button"
         aria-pressed=${sel ? 'true' : 'false'}
-        aria-label="${`${LANE_LABEL[kind]}: ${label}, ${fmt(c.start)} to ${fmt(clipEnd(c))}`}"
+        aria-label="${`${LANE_LABEL[kind]}: ${full}, ${fmt(c.start)} to ${fmt(clipEnd(c))}`}"
+        title=${full}
         style="left:${left}px;width:${width}px;${thumb ? `background-image:url('${thumb}')` : ''}"
         @pointerdown=${(e) => this._dragStart(e, kind, c, 'move')}
         @click=${() => { if (Date.now() - (this._dragEndedAt || 0) < 250) return; this._sel = c.id; }}
         @focus=${() => { this._sel = c.id; }}>
-      ${kind === 'video' && c.fade_in > 0 ? html`<div class="fade" style="width:${c.fade_in * this._pps}px"></div>` : nothing}
+      ${kind === 'video' && c.fade_in > 0 ? html`<div class="${fadeCls}" style="width:${c.fade_in * this._pps}px"></div>` : nothing}
       <span>${label}</span>
-      <div class="edge l" @pointerdown=${(e) => this._dragStart(e, kind, c, 'l')}></div>
-      <div class="edge r" @pointerdown=${(e) => this._dragStart(e, kind, c, 'r')}></div>
+      ${fixed ? nothing : html`<div class="edge l" @pointerdown=${(e) => this._dragStart(e, kind, c, 'l')}></div>
+      <div class="edge r" @pointerdown=${(e) => this._dragStart(e, kind, c, 'r')}></div>`}
     </div>`;
   }
 
-  /** Speech recorded in a clip, shown on the Voice lane under its clip.
-   * Selecting it selects the clip, whose volume sets the speech level. */
-  _speechEl(c) {
+  _speechEl(c, names) {
     const left = (+c.start || 0) * this._pps + (c._dx ? c._dx * this._pps : 0);
     const width = Math.max(14, clipLen(c) * this._pps);
     const muted = !(+c.gain > 0);
-    const label = `${c.label || 'Clip'} speech${muted ? ' (muted)' : ''}`;
+    const name = (names[c.id] || {}).full || c.label || 'Clip';
+    const label = `${name} speech${muted ? ' (muted)' : ''}`;
     return html`<div class="speech ${this._sel === c.id ? 'sel' : ''} ${muted ? 'muted' : ''}" role="button" tabindex="-1"
-        title="Speech recorded in ${c.label || 'this clip'}. It moves with the clip; select it to change its volume."
+        title="Speech recorded in ${name}. It moves with the shot; select it to change its volume."
         style="left:${left}px;width:${width}px"
         @click=${() => { this._sel = c.id; }}>${ICON.wave}<span>${label}</span></div>`;
   }
@@ -714,14 +722,29 @@ class StoryTimeline extends LitElement {
     return out;
   }
 
-  _inspector() {
+  _transitionValue(c) {
+    if (c.join === 'fade_black' && +c.fade_in > 0) return 'fade_black';
+    if (!(+c.fade_in > 0)) return 'cut';
+    const d = +c.fade_in;
+    return String([0.25, 0.5, 1].reduce((best, v) => Math.abs(v - d) < Math.abs(best - d) ? v : best, 0.5));
+  }
+
+  _inspector(names) {
     const f = this._sel ? this._find(this._sel) : null;
     if (!f) return html`<aside class="panel" aria-label="Clip settings"><p class="empty">Select a clip to edit it</p></aside>`;
     const { kind, clip: c } = f;
-    const pct = Math.round((+c.gain || 0) * 100);
+    const pct = Math.min(100, Math.round((+c.gain || 0) / levelOf(c) * 100));
     const vid = this._clips('video');
     const vi = vid.findIndex((x) => x.id === c.id);
-    const name = kind === 'text' ? 'Title' : kind === 'video' ? (c.label || 'Clip') : kind === 'voice' ? 'Voice' : 'Music';
+    const name = kind === 'text' ? 'Title' : kind === 'video' ? (names[c.id] || {}).full || 'Clip' : kind === 'voice' ? 'Voice' : 'Music';
+    const transVal = kind === 'video' ? this._transitionValue(c) : 'cut';
+    const transOpts = [
+      ['cut', 'Cut'],
+      ['0.25', 'Crossfade 0.25 s'],
+      ['0.5', 'Crossfade 0.5 s'],
+      ['1', 'Crossfade 1 s'],
+      ['fade_black', 'Dip to black'],
+    ];
     return html`<aside class="panel" aria-label="Clip settings">
       <h3>${name}</h3>
       <p class="meta">${fmt(c.start)} – ${fmt(clipEnd(c))} · ${clipLen(c).toFixed(1)} s</p>
@@ -735,12 +758,12 @@ class StoryTimeline extends LitElement {
             ${[[32, 'Small'], [48, 'Medium'], [72, 'Large'], [104, 'Huge']].map(([v, l]) => html`<option value=${v} ?selected=${+c.size === v}>${l}</option>`)}
           </select></label>
         </div>` : html`
-        <label class="field"><span>${kind !== 'video' ? 'Volume' : c.ambient ? 'Clip sound' : 'Speech volume'} <span class="val">${pct}%</span></span>
-          <input type="range" min="0" max="200" step="5" .value=${String(pct)}
-            @change=${(e) => this._set(c.id, 'gain', +e.target.value / 100)}></label>`}
+        <label class="field"><span>${kind !== 'video' ? 'Volume' : 'Clip sound'} <span class="val">${pct}%</span></span>
+          <input type="range" min="0" max="100" step="5" .value=${String(pct)}
+            @change=${(e) => this._setLevel(c.id, +e.target.value)}></label>`}
       ${kind === 'video' ? html`
-        <label class="field">Transition in<select ?disabled=${vi === 0} @change=${(e) => this._set(c.id, 'fade_in', +e.target.value)}>
-          ${[[0, 'Cut'], [0.25, 'Crossfade 0.25 s'], [0.5, 'Crossfade 0.5 s'], [1, 'Crossfade 1 s']].map(([v, l]) => html`<option value=${v} ?selected=${+c.fade_in === v}>${l}</option>`)}
+        <label class="field">Transition in<select ?disabled=${vi === 0} @change=${(e) => this._setTransition(c.id, e.target.value)}>
+          ${transOpts.map(([v, l]) => html`<option value=${v} ?selected=${transVal === v}>${l}</option>`)}
         </select></label>
         <div class="grid2">
           <button ?disabled=${this.busy || vi <= 0} @click=${() => this._reorder(c.id, -1)}>${ICON.left} Earlier</button>
@@ -754,7 +777,7 @@ class StoryTimeline extends LitElement {
 
   _canSplit() {
     const f = this._sel ? this._find(this._sel) : null;
-    if (!f) return false;
+    if (!f || f.kind === 'voice' || f.kind === 'music') return false;
     const c = f.clip;
     return this._t > c.start + MIN_LEN && this._t < clipEnd(c) - MIN_LEN;
   }
@@ -773,11 +796,17 @@ class StoryTimeline extends LitElement {
       } else {
         const mid = r3((+c.in || 0) + at * (+c.tempo || 1));
         b.in = mid; c.out = mid; b.start = r3(this._t);
-        if (kind === 'video') b.fade_in = 0;
+        b.fade_in = 0; b.join = 'cut';
       }
       tr.clips.splice(tr.clips.indexOf(c) + 1, 0, b);
       this._sel = b.id;
     });
+  }
+
+  _badge() {
+    if (this.previewState === 'making') return html`<div class="badge" role="status"><span class="dot"></span>Updating preview</div>`;
+    if (this.previewState === 'failed') return html`<div class="badge" role="status">Preview not updated</div>`;
+    return nothing;
   }
 
   render() {
@@ -786,26 +815,35 @@ class StoryTimeline extends LitElement {
     const total = this._duration();
     const width = Math.max(total * this._pps + 120, 200);
     const t = this._t;
-    const titles = this._clips('text').filter((c) => t >= c.start && t < clipEnd(c));
-    const h = this.renderRoot?.querySelector('.stage')?.clientHeight || 360;
+    const names = this._labels();
     const zoomVal = Math.round(Math.log(this._pps / 4) / Math.log(100) * 100);
+    const poster = this._thumb(this._clips('video')[0]);
     return html`<div class="wrap">
       <div class="top">
         <div class="viewer">
-          <div class="stage ${this.aspect === '9:16' ? 'ar916' : 'ar169'}">
-            <div class="vids" role="img" aria-label="Preview"></div>
-            ${titles.map((c) => html`<div class="title ${c.pos}" style="font-size:${Math.max(10, (+c.size || 48) * h / 720)}px">${c.text}</div>`)}
+          <div class="stage ${this.aspect === '9:16' ? 'ar916' : 'ar169'}" tabindex="0" aria-label="Preview"
+              @dblclick=${this._fullscreen}>
+            ${this.previewUrl ? html`<video class="player" src=${this.previewUrl} playsinline preload="auto"
+                poster=${poster || nothing}
+                @play=${this._onPlay} @pause=${this._onPause} @ended=${this._onPause}
+                @loadedmetadata=${this._onLoaded} @click=${this._togglePlay}></video>`
+              : poster ? html`<img class="poster" src=${poster} alt="">` : nothing}
+            ${this._badge()}
           </div>
           <div class="transport">
             <span class="time" .textContent=${`${fmt(t)} / ${fmt(total)}`}></span>
             <div class="mid">
-              <button class="icon ghost" aria-label="Back to start" @click=${() => this._seek(0)}>${ICON.start}</button>
-              <button class="icon primary" aria-label=${this._playing ? 'Pause' : 'Play'} @click=${this._togglePlay}>${this._playing ? ICON.pause : ICON.play}</button>
+              <button class="icon ghost" aria-label="Back to start" title="Back to start" @click=${() => this._seek(0)}>${ICON.start}</button>
+              <button class="icon primary" aria-label=${this._playing ? 'Pause' : 'Play'} title="Play or pause (Space)"
+                ?disabled=${!this.previewUrl} @click=${this._togglePlay}>${this._playing ? ICON.pause : ICON.play}</button>
             </div>
-            <span></span>
+            <span class="end">
+              <button class="icon ghost" aria-label=${this._full ? 'Exit full screen' : 'Full screen'} title="Full screen (F)"
+                ?disabled=${!this.previewUrl} @click=${this._fullscreen}>${this._full ? ICON.unfull : ICON.full}</button>
+            </span>
           </div>
         </div>
-        ${this._inspector()}
+        ${this._inspector(names)}
       </div>
       <div class="bar" role="toolbar" aria-label="Edit">
         <button title="Split at playhead (S)" ?disabled=${this.busy || !this._canSplit()} @click=${this._split}>${ICON.split}<span class="lbl-hide">Split</span></button>
@@ -827,7 +865,7 @@ class StoryTimeline extends LitElement {
         <div class="scroll" @pointerdown=${(e) => { if (e.target.classList.contains('lane')) this._sel = ''; }}>
           <div class="inner" style="width:${width}px">
             <div class="ruler" @pointerdown=${(e) => this._rulerDown(e)} aria-hidden="true">${this._ticks(total)}</div>
-            ${KINDS.map((k) => html`<div class="lane h-${k}" aria-label="${LANE_LABEL[k]} track">${k === 'voice' ? repeat(this._clips('video').filter((c) => !c.ambient), (c) => `s-${c.id}`, (c) => this._speechEl(c)) : nothing}${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c))}</div>`)}
+            ${KINDS.map((k) => html`<div class="lane h-${k}" aria-label="${LANE_LABEL[k]} track">${k === 'voice' ? repeat(this._clips('video').filter((c) => !c.ambient), (c) => `s-${c.id}`, (c) => this._speechEl(c, names)) : nothing}${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c, names))}</div>`)}
             <div class="head" style="left:${t * this._pps}px"></div>
           </div>
         </div>
@@ -835,15 +873,16 @@ class StoryTimeline extends LitElement {
     </div>`;
   }
 
-
   firstUpdated() {
-    // Fit the whole film to the lane width once the lanes exist.
     this._fit();
   }
 
-  updated() {
+  updated(changed) {
+    if (changed.has('previewUrl')) {
+      // The new file loads from the start: carry on where the viewer was.
+      this._resume = this._playing;
+    }
     this._paint();
-    if (!this._playing) this._sync(false);
   }
 }
 
@@ -852,6 +891,8 @@ const ICON = {
   play: svg('M8 5v14l11-7z'),
   pause: svg('M6 5h4v14H6zM14 5h4v14h-4z'),
   start: svg('M6 6h2v12H6zm3.5 6 8.5 6V6z'),
+  full: svg('M7 14H5v5h5v-2H7zm-2-4h2V7h3V5H5zm12 7h-3v2h5v-5h-2zM14 5v2h3v3h2V5z'),
+  unfull: svg('M5 16h3v3h2v-5H5zm3-8H5v2h5V5H8zm6 11h2v-3h3v-2h-5zm2-11V5h-2v5h5V8z'),
   undo: svg('M12.5 8c-2.65 0-5.05 1-6.9 2.6L2 7v9h9l-3.62-3.62A7.95 7.95 0 0 1 20.4 16l2.36-.78A10.5 10.5 0 0 0 12.5 8z'),
   plus: svg('M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z'),
   minus: svg('M19 13H5v-2h14z'),

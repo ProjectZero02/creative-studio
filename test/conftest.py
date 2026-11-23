@@ -114,3 +114,12 @@ def pytest_addoption(parser):
 def gcs_bucket_for_tests(request):
     """A pytest fixture that provides the GCS bucket from the command-line option."""
     return request.config.getoption("--gcs-bucket")
+
+
+@pytest.fixture(autouse=True)
+def _no_story_previews(monkeypatch):
+    """Story Studio renders a preview in a background thread after each
+    timeline save; tests that want one call story_jobs._proxy_worker."""
+    jobs = sys.modules.get("services.story_jobs")
+    if jobs is not None:
+        monkeypatch.setattr(jobs, "PROXY_ENABLED", False)

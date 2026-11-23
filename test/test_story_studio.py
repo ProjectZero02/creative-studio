@@ -177,9 +177,14 @@ def test_caps_total_film_length(monkeypatch):
 
 def test_caps_force_configured_resolution(monkeypatch):
     monkeypatch.setattr(story_models, "Default", _caps_cfg())
-    caps = apply_caps(4, 6, resolution="4k")
+    # A resolution the engine cannot make falls back to the configured one.
+    caps = apply_caps(4, 6, resolution="8k")
     assert caps.resolution == "720p"
     assert any("Resolution" in n for n in caps.notes)
+    # One it can make is kept (Setup picks it per story).
+    allowed = story_models.resolution_options()
+    caps = apply_caps(4, 6, resolution=allowed[-1])
+    assert caps.resolution == allowed[-1] and not caps.notes
 
 
 # ---------------------------------------------------------------------------
@@ -597,9 +602,11 @@ def test_full_pipeline_with_mock_backend(fast_backend, local_store):
     story_jobs.mutate_story(s.id, OWNER, lambda x: setattr(x, "approved", True))
     job = _run(story_jobs.start_storyboard(s.id, OWNER))
     assert job.status == "done"
-    # Scene 1 anchors the look: later frames get it as reference.
+    # Scene 1 anchors the look; a cut in the same place is painted from the
+    # frame before it.
     assert fast_backend.refs[0] == ""
-    assert fast_backend.refs[1] == fast_backend.refs[2] == f"local://{s.id}/frame0.png"
+    assert fast_backend.refs[1] == f"local://{s.id}/frame0.png"
+    assert fast_backend.refs[2] == f"local://{s.id}/frame1.png"
 
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [t.error for t in job.tasks]
@@ -1193,20 +1200,21 @@ def test_continuation_carries_the_thread_and_its_history(omni_calls, monkeypatch
     (req,) = omni_calls
     assert req.previous_interaction_id == "int-b"
     assert req.omni_mode == "t2v" and req.duration_seconds == 8
-    assert "Carry on the same take" in req.prompt and "Maya" in req.prompt
-    # The thread keeps the voice; the scene's storyboard frame sets the shot.
-    assert req.reference_image_gcs == "gs://b/f2.png"
+    assert "Continue this exact shot without a cut" in req.prompt and "Maya" in req.prompt
+    # The take carries on from its own last second: no painted frame is sent
+    # (it pulled the camera back to a separately drawn shot).
+    assert not req.reference_image_gcs
     assert not req.last_reference_image_gcs
-    assert "hold that shot" in req.prompt
+    assert "hold that shot" not in req.prompt
     history = json.loads(req.chat_history_json)
     assert [h["type"] for h in history] == ["user_input", "model_output"] * 2
     assert history[0]["content"][0]["text"] == story_models.clip_prompt(
         story, story.scenes[0]
     )
-    # Each turn carries only its own frame.
+    # Only the take's first turn carries a frame.
     assert [p["uri"] for p in history[0]["content"][1:]] == ["gs://b/f0.png"]
-    assert "Carry on the same take" in history[2]["content"][0]["text"]
-    assert [p["uri"] for p in history[2]["content"][1:]] == ["gs://b/f1.png"]
+    assert "Continue this exact shot" in history[2]["content"][0]["text"]
+    assert history[2]["content"][1:] == []
     assert [h["content"][0]["gcs_uri"] for h in history[1::2]] == [
         "gs://b/c0.mp4",
         "gs://b/c1.mp4",
@@ -1519,7 +1527,7 @@ def test_continuation_without_a_frame_keeps_the_shot(omni_calls, monkeypatch):
     assert not req.reference_image_gcs
 
 
-def test_later_frames_of_a_continuous_take_are_painted_from_its_first(
+def test_later_scenes_of_a_continuous_take_get_no_frame_of_their_own(
     fast_backend, local_store
 ):
     def line(text):
@@ -1536,7 +1544,8 @@ def test_later_frames_of_a_continuous_take_are_painted_from_its_first(
     assert s.continues_take(2) and not s.continues_take(1)
     job = _run(story_jobs.start_storyboard(s.id, OWNER))
     assert job.status == "done"
-    # Scene 2 opens a new take (from scene 1's look); scene 3 continues it,
-    # so it is painted from scene 2's frame and keeps that set.
+    # Scene 2 opens a new take (from scene 1's look); scene 3 continues it
+    # from the take's clip, so only take starts are painted.
     assert fast_backend.refs[1] == f"local://{s.id}/frame0.png"
-    assert fast_backend.refs[2] == f"local://{s.id}/frame1.png"
+    assert 2 not in fast_backend.refs
+    assert story_models.frames_ready(local_store.get(s.id, OWNER))

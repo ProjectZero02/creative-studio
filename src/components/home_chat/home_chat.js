@@ -42,12 +42,14 @@
  * recall past prompts.
  */
 import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
+import { detectKind } from './detect_kind.js';
+import './gm_audio.js';
 
 const STORE = 'gm-home-chat';
 const SETTINGS = 'gm-home-settings';
 const HISTORY = 'gm-prompts:home';
 const POLL_MS = 2000;
-const MAX_FILES = 3;
+const MAX_FILES = 14;
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const reduceMotion = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -67,10 +69,14 @@ const ICON = {
   video: 'M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11zM15 16H5V8h10z',
   film: 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4zm2 14H4V10h16z',
   music: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3z',
+  check: 'M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z',
+  chevron: 'M10 6 8.6 7.4 13.2 12l-4.6 4.6L10 18l6-6z',
+  caret: 'M7 10l5 5 5-5z',
+  tune: 'M3 17v2h6v-2zM3 5v2h10V5zm10 16v-2h8v-2h-8v-2h-2v6zM7 9v2H3v2h4v2h2V9zm14 4v-2H11v2zm-6-4h2V7h4V5h-4V3h-2z',
+  attach: 'M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6z',
   voice: 'M9 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 8c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4zm-6 4c.2-.7 3.3-2 6-2s5.8 1.3 6 2zM16 5.1a6 6 0 0 1 0 7.8l1.4 1.4a8 8 0 0 0 0-10.6z',
 };
 // Samples shown inside the type tiles on hover (animated webp for video and film).
-const HOVER_MEDIA = ['/ui/home/word-video.webp', '/ui/home/word-film.webp', '/ui/posters/gemini-image__page-cover.webp', '/ui/posters/lyria_header.webp', '/ui/posters/capability__native-audio_16-9.webp'];
 // Bar heights (0-1) of the sound equaliser shown on the Music and Voice tiles.
 const EQ = [0.35, 0.6, 0.9, 0.55, 1, 0.7, 0.45, 0.8, 0.5, 0.3, 0.65, 0.4];
 const svg = (d, size = 20) => html`<svg viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true"><path d=${d}></path></svg>`;
@@ -100,6 +106,7 @@ class GmHomeChat extends LitElement {
     stringsJson: { type: String },
     kindsJson: { type: String },
     optionsJson: { type: String },
+    inputsJson: { type: String },
     talkJson: { type: String },
     live: { type: Boolean, reflect: true },
     navEvent: { type: String },
@@ -109,11 +116,16 @@ class GmHomeChat extends LitElement {
     _listening: { state: true },
     _files: { state: true },
     _hasText: { state: true },
-    _kind: { state: true },
+    _lock: { state: true },
+    _auto: { state: true },
+    _dismissed: { state: true },
     _enhancing: { state: true },
     _panel: { state: true },
     _settings: { state: true },
     _dragOver: { state: true },
+    _menu: { state: true },
+    _adv: { state: true },
+    _thinking: { state: true },
     panelOpen: { type: Boolean, reflect: true, attribute: 'panel' },
   };
 
@@ -122,7 +134,8 @@ class GmHomeChat extends LitElement {
     this.stringsJson = '{}';
     this.kindsJson = '[]';
     this.optionsJson = '{}';
-    // Settings picked in the type controls, per type; kept between visits.
+    this.inputsJson = '{}';
+    // Settings picked under the box, per type; kept between visits.
     this._settings = readSettings();
     this.talkJson = '{}';
     this.live = false;
@@ -135,11 +148,17 @@ class GmHomeChat extends LitElement {
     this._draft = '';
     this._timer = null;
     this._rec = null;
-    this._files = []; // [{ id, name, preview, handle, url, busy, error }]
+    this._files = []; // [{ id, name, preview, handle, url, busy, error, slot, video }]
     this._hasText = false;
-    this._kind = ''; // the picked type chip ('' = chat)
-    this._sample = {}; // kind -> index of the sample shown last
+    // The mode: picked by hand (side menu, the mode pill) it stays until
+    // removed; read from the text (detect_kind.js) it follows the words.
+    this._lock = '';
+    this._auto = null; // { kind, word } from the text
+    this._dismissed = ''; // a detected mode the person turned off for this message
     this._enhancing = false;
+    this._menu = null; // open dropdown: { id, x, y, w, up, items }
+    this._adv = false; // the Advanced panel behind "+"
+    this._thinking = null; // live steps while the chat works: { steps, start }
     const kept = load(STORE, {});
     this._chatId = kept.chatId || ''; // saved chat id ('' until the first send)
     this._projectId = kept.projectId || ''; // project for a new chat
@@ -153,6 +172,23 @@ class GmHomeChat extends LitElement {
     this.panelOpen = false;
     this._onOpenChat = (e) => this._openChat((e.detail && e.detail.id) || '');
     this._onNewChat = (e) => this._newChat((e.detail && e.detail.project_id) || '');
+    this._onPickKind = (e) => this._setLock((e.detail && e.detail.kind) || '');
+    this._onDown = (e) => {
+      if (!this._menu && !this._adv) return;
+      const path = e.composedPath();
+      const inside = (sel) => { const el = this.renderRoot.querySelector(sel); return !!el && path.includes(el); };
+      if (this._menu && !inside('.pop') && !inside(`[data-menu="${this._menu.id}"]`)) this._menu = null;
+      else if (this._adv && !this._menu && !inside('.adv') && !inside('.plus') && !inside('.pop')) this._adv = false;
+    };
+    this._onKeyDoc = (e) => {
+      if (e.key !== 'Escape') return;
+      if (this._menu) {
+        const id = this._menu.id;
+        this._menu = null;
+        this.updateComplete.then(() => this.renderRoot.querySelector(`[data-menu="${id}"]`)?.focus());
+      } else if (this._adv) this._adv = false;
+    };
+    this._onViewport = () => { if (this._menu) this._menu = null; };
   }
 
   get _kinds() {
@@ -164,6 +200,40 @@ class GmHomeChat extends LitElement {
     try { return JSON.parse(this.optionsJson || '{}') || {}; } catch (_) { return {}; }
   }
 
+  /** File slots per type: {video: [{name, label, accept, max, show_if}], ...}. */
+  get _inputs() {
+    try { return JSON.parse(this.inputsJson || '{}') || {}; } catch (_) { return {}; }
+  }
+
+  /** The type the next message makes ('' = chat). */
+  get _mode() {
+    if (this._lock) return this._lock;
+    const k = this._auto && this._auto.kind;
+    return k && k !== this._dismissed && this._options[k] ? k : '';
+  }
+
+  _setLock(kind) {
+    this._lock = kind && this._options[kind] ? kind : '';
+    this._dismissed = '';
+    this._menu = null;
+    this._adv = false;
+    this.updateComplete.then(() => this._ta && this._ta.focus());
+  }
+
+  /** Clear the mode: a picked one unlocks, a detected one is dismissed. */
+  _clearMode() {
+    if (this._lock) this._lock = '';
+    else if (this._auto) this._dismissed = this._auto.kind;
+    this._menu = null;
+    this._adv = false;
+  }
+
+  /** Does a field (or file slot) apply, given the other values ({show_if}). */
+  static _shown(f, values) {
+    const cond = f.show_if || {};
+    return Object.keys(cond).every((k) => (cond[k] || []).includes(values[k]));
+  }
+
   /** The fields shown for a type, each with its current value and choices. */
   _fields(kind) {
     const list = this._options[kind] || [];
@@ -172,18 +242,33 @@ class GmHomeChat extends LitElement {
     const picked = {};
     list.forEach((f) => {
       const choice = (f.by_model && f.by_model[picked.model]) || f;
-      const values = (choice.options || []).map((o) => o.value);
-      const value = values.includes(mine[f.name]) ? mine[f.name] : choice.default;
+      const type = f.type || 'select';
+      const dflt = choice.default ?? f.default;
+      let value;
+      if (type === 'select') {
+        const values = (choice.options || []).map((o) => o.value);
+        value = values.includes(mine[f.name]) ? mine[f.name] : dflt;
+      } else if (type === 'toggle') {
+        value = mine[f.name] === 'on' || mine[f.name] === 'off' ? mine[f.name] : (dflt || 'off');
+      } else {
+        value = mine[f.name] !== undefined ? mine[f.name] : (dflt ?? '');
+      }
       picked[f.name] = value;
-      out.push({ ...f, options: choice.options || [], value });
+      out.push({ ...f, type, tier: f.tier || 'main', options: choice.options || [], value, dflt });
     });
-    return out;
+    return out.filter((f) => GmHomeChat._shown(f, picked));
   }
 
   _values(kind) {
     const out = {};
     this._fields(kind).forEach((f) => { out[f.name] = f.value; });
     return out;
+  }
+
+  /** File slots that apply to a type right now. */
+  _slots(kind) {
+    const values = this._values(kind);
+    return (this._inputs[kind] || []).filter((s) => GmHomeChat._shown(s, values));
   }
 
   _setField(kind, name, value) {
@@ -199,18 +284,28 @@ class GmHomeChat extends LitElement {
     super.connectedCallback();
     window.addEventListener('gm-open-chat', this._onOpenChat);
     window.addEventListener('gm-new-chat', this._onNewChat);
+    window.addEventListener('gm-pick-kind', this._onPickKind);
+    window.addEventListener('pointerdown', this._onDown, true);
+    window.addEventListener('keydown', this._onKeyDoc);
+    window.addEventListener('resize', this._onViewport);
     let params = new URLSearchParams();
     try { params = new URL(window.location.href).searchParams; } catch (_) { /* ignore */ }
     const askedChat = params.get('chat') || '';
     if (params.get('new')) this._newChat(params.get('project') || '');
     else if (askedChat && askedChat !== this._chatId) this._openChat(askedChat);
     else this._announce();
-    if (this._pending().length) this._poll();
-    const warm = () => HOVER_MEDIA.forEach((src) => { const i = new Image(); i.src = src; });
-    if (!reduceMotion()) {
-      if (window.requestIdleCallback) window.requestIdleCallback(warm, { timeout: 4000 });
-      else setTimeout(warm, 2000);
+    const mode = params.get('mode') || '';
+    if (mode) {
+      this.updateComplete.then(() => this._setLock(mode));
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.delete('mode');
+        window.history.replaceState(window.history.state, '', u.pathname + u.search);
+      } catch (_) { /* ignore */ }
     }
+    if (this._pending().length) this._poll();
+    // Elapsed time on running jobs and on the thinking steps.
+    this._tick = setInterval(() => { if (this._pending().length || this._thinking) this.requestUpdate(); }, 1000);
     setTimeout(() => window.gmLive && window.gmLive.refreshLauncher && window.gmLive.refreshLauncher(), 60);
   }
 
@@ -218,13 +313,20 @@ class GmHomeChat extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('gm-open-chat', this._onOpenChat);
     window.removeEventListener('gm-new-chat', this._onNewChat);
+    window.removeEventListener('gm-pick-kind', this._onPickKind);
+    window.removeEventListener('pointerdown', this._onDown, true);
+    window.removeEventListener('keydown', this._onKeyDoc);
+    window.removeEventListener('resize', this._onViewport);
+    clearInterval(this._tick);
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._persist(); }
     clearTimeout(this._timer);
     if (this._rec) try { this._rec.stop(); } catch (_) { /* ignore */ }
+    window.gmKind = '';
+    window.dispatchEvent(new CustomEvent('gm-kind-changed', { detail: { kind: '' } }));
     setTimeout(() => window.gmLive && window.gmLive.refreshLauncher && window.gmLive.refreshLauncher(), 60);
   }
 
-  updated(changed) {
+  _afterUpdate(changed) {
     if (changed.has('_msgs') || changed.has('_jobs') || changed.has('_panel')) {
       save(STORE, { msgs: this._msgs, jobs: this._jobs, chatId: this._chatId, projectId: this._projectId, panel: this._panel, panelClosed: this._panelClosed });
       if (!this._loading && this._msgs.length) this._queueSave();
@@ -243,93 +345,191 @@ class GmHomeChat extends LitElement {
     const files = this._files.filter((f) => f.handle);
     if ((!typed && !files.length) || this._busy || this._files.some((f) => f.busy)) return;
     if (typed) remember(typed);
-    const kind = this._kinds.find((k) => k.kind === this._kind);
-    if (kind && this._options[kind.kind]) {
-      await this._make(kind, typed, files);
-      return;
-    }
-    if (kind && typed && !files.length) {
-      // Type chip: open that studio with the prompt; ?go=1 starts it there.
-      this._busy = true;
-      if (this.navEvent) {
-        this.dispatchEvent(new MesopEvent(this.navEvent, { route: kind.href, params: { prompt: typed, go: '1' } }));
-      } else {
-        window.location.assign(`${kind.href}?prompt=${encodeURIComponent(typed)}&go=1`);
-      }
+    const mode = this._mode;
+    if (mode) {
+      await this._make(mode, typed, files);
       return;
     }
     this._hist = -1;
     if (this._ta) { this._ta.value = ''; this._fit(); }
     this._hasText = false;
+    this._auto = null;
+    this._dismissed = '';
     const said = typed || this._s.attach_default || 'What can you make from this?';
     const message = files.length ? `[Attached: ${files.map((f) => f.handle).join(', ')}] ${said}` : said;
     this._files = [];
     this._msgs = [...this._msgs, { role: 'user', text: said, images: files.map((f) => f.url) }];
     this._busy = true;
+    const start = Date.now();
+    this._thinking = { steps: [], start };
     let reply = '';
     let jobs = [];
+    let trace = [];
     try {
       const r = await fetch('/api/chat', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson, application/json' },
+        body: JSON.stringify({ message, stream: true }),
       });
       if (!r.ok) throw new Error(String(r.status));
-      const body = await r.json();
-      reply = body.reply || '';
-      jobs = Array.isArray(body.jobs) ? body.jobs : [];
-    } catch (_) {
-      reply = this._s.error || 'Something went wrong. Please try again.';
+      const type = r.headers.get('content-type') || '';
+      if (type.includes('ndjson') && r.body) {
+        // The chat's steps arrive one line at a time while it works.
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let done = false;
+        const take = (line) => {
+          if (!line.trim()) return;
+          let ev;
+          try { ev = JSON.parse(line); } catch (_) { return; }
+          if (ev.type === 'step') {
+            this._thinking = { ...this._thinking, steps: [...this._thinking.steps, { label: ev.label || '', detail: ev.detail || '' }] };
+          } else if (ev.type === 'done') {
+            reply = ev.reply || '';
+            jobs = Array.isArray(ev.jobs) ? ev.jobs : [];
+            trace = Array.isArray(ev.trace) ? ev.trace : this._thinking.steps;
+          } else if (ev.type === 'error') {
+            throw new Error(ev.message || '');
+          }
+        };
+        while (!done) {
+          const chunk = await reader.read();
+          done = chunk.done;
+          buf += dec.decode(chunk.value || new Uint8Array(), { stream: !done });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          lines.forEach(take);
+        }
+        take(buf);
+        if (!trace.length) trace = this._thinking.steps;
+      } else {
+        const body = await r.json();
+        reply = body.reply || '';
+        jobs = Array.isArray(body.jobs) ? body.jobs : [];
+        trace = Array.isArray(body.trace) ? body.trace : [];
+      }
+    } catch (err) {
+      reply = (err && err.message && !/^\d+$/.test(err.message) ? err.message : '') || this._s.error || 'Something went wrong. Please try again.';
+      trace = this._thinking ? this._thinking.steps : [];
     }
     const next = { ...this._jobs };
     jobs.forEach((j) => { next[j.id] = j; });
     this._jobs = next;
-    this._msgs = [...this._msgs, { role: 'assistant', text: reply, jobs: jobs.map((j) => j.id), ask: message }];
+    this._thinking = null;
+    this._msgs = [...this._msgs, {
+      role: 'assistant', text: reply, jobs: jobs.map((j) => j.id), ask: message,
+      trace: trace.map((t) => ({ label: t.label || '', detail: t.detail || '' })), took: Math.round((Date.now() - start) / 1000),
+    }];
     this._busy = false;
     if (jobs.length && !this._panelClosed && !this._phone()) this._panel = true;
     if (jobs.length) this._poll();
     this.updateComplete.then(() => this._ta && this._ta.focus());
   }
 
-  /** Type controls: start the job with exactly these settings (no chat model). */
+  /** A mode is on: start that job with exactly the settings shown (no chat model). */
   async _make(kind, typed, files) {
     const S = this._s;
-    if (!typed) {
+    const label = this._kindLabel(kind);
+    if (!typed && kind !== 'video') {
       this._flash(S.need_prompt || 'Write what to make first.');
       return;
     }
-    const settings = this._values(kind.kind);
-    const source = (kind.kind === 'image' || kind.kind === 'video') && files.length ? files[0].handle : '';
+    const settings = this._values(kind);
+    const fields = this._fields(kind);
+    // Files go to their slots; a named earlier result ("animate image 2") is the source.
+    const inputs = {};
+    files.forEach((f) => {
+      const slot = f.slot || this._defaultSlot(kind, f);
+      if (!slot) return;
+      (inputs[slot] = inputs[slot] || []).push(f.handle);
+    });
+    const named = (typed.match(/\b(image|upload|video) \d+\b/i) || [])[0] || '';
+    const source = (kind === 'image' || kind === 'video') ? ((files.find((f) => !f.video) || {}).handle || named.toLowerCase()) : '';
+    const detected = !this._lock && this._auto ? this._auto.word : '';
+    const start = Date.now();
+    // What the page decided, shown as the first thinking steps.
+    const steps = [
+      { label: S.t_read || 'Reading your prompt', detail: '' },
+      {
+        label: `${S.t_mode || 'Making'}: ${label}`,
+        detail: detected ? (S.t_detected || 'You wrote “{word}”').replace('{word}', detected) : (S.t_picked || 'Picked by you'),
+      },
+      { label: S.t_settings || 'Settings', detail: fields.filter((f) => f.value !== '' && f.value !== undefined).map((f) => `${f.label}: ${this._show(f)}`).join(' · ') },
+    ];
+    if (Object.keys(inputs).length) {
+      steps.push({ label: S.t_files || 'Files', detail: Object.entries(inputs).map(([k, v]) => `${this._slotLabel(kind, k)}: ${v.join(', ')}`).join(' · ') });
+    }
     this._hist = -1;
     if (this._ta) { this._ta.value = ''; this._fit(); }
     this._hasText = false;
+    this._auto = null;
+    this._dismissed = '';
     this._files = [];
-    this._msgs = [...this._msgs, { role: 'user', text: typed, images: files.map((f) => f.url) }];
+    this._adv = false;
+    this._msgs = [...this._msgs, { role: 'user', text: typed, images: files.filter((f) => !f.video).map((f) => f.url) }];
     this._busy = true;
+    this._thinking = { steps, start };
     let reply = '';
     let meta = '';
     let job = null;
+    let trace = steps;
     try {
       const r = await fetch('/api/chat/job', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: kind.kind, prompt: typed, settings, source }),
+        body: JSON.stringify({ kind, prompt: typed, settings, source, inputs }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || '');
       reply = body.reply || '';
-      meta = [kind.label, body.summary].filter(Boolean).join(' · ');
+      meta = [label, body.summary].filter(Boolean).join(' · ');
       job = body.job || null;
+      const extra = (Array.isArray(body.trace) ? body.trace : []).map((t) => (typeof t === 'string' ? { label: t, detail: '' } : t));
+      // The server names the model and settings itself: keep ours only when it doesn't.
+      trace = extra.length ? [...steps.filter((t) => t.label !== (S.t_settings || 'Settings')), ...extra] : steps;
     } catch (err) {
       reply = (err && err.message) || S.error || 'Something went wrong. Please try again.';
     }
     if (job) this._jobs = { ...this._jobs, [job.id]: job };
-    this._msgs = [...this._msgs, { role: 'assistant', text: reply, jobs: job ? [job.id] : [], meta }];
+    this._thinking = null;
+    this._msgs = [...this._msgs, { role: 'assistant', text: reply, jobs: job ? [job.id] : [], meta, trace, took: Math.round((Date.now() - start) / 1000) }];
     this._busy = false;
     if (job && !this._panelClosed && !this._phone()) this._panel = true;
     if (job) this._poll();
     this.updateComplete.then(() => this._ta && this._ta.focus());
+  }
+
+  _kindLabel(kind) {
+    const k = this._kinds.find((x) => x.kind === kind);
+    return (k && k.label) || kind;
+  }
+
+  /** A field's value as people read it. */
+  _show(f) {
+    if (f.type === 'toggle') return f.value === 'on' ? (this._s.on || 'On') : (this._s.off || 'Off');
+    if (f.type === 'select') {
+      const o = (f.options || []).find((x) => x.value === f.value);
+      return o ? o.label : String(f.value ?? '');
+    }
+    const v = String(f.value ?? '');
+    return v.length > 40 ? `${v.slice(0, 40)}…` : v;
+  }
+
+  _slotLabel(kind, name) {
+    const s = (this._inputs[kind] || []).find((x) => x.name === name);
+    return (s && s.label) || name;
+  }
+
+  /** Where a file goes when the person didn't pick a slot. */
+  _defaultSlot(kind, f) {
+    const slots = this._slots(kind);
+    const fits = slots.filter((s) => (f.video ? /video/ : /image/).test(s.accept || 'image/*'));
+    const taken = (name) => this._files.filter((x) => x.slot === name).length;
+    const model = this._values(kind).model;
+    const free = fits.find((s) => taken(s.name) < ((s.by_model && s.by_model[model]) || s.max || 1));
+    return (free || fits[0] || {}).name || '';
   }
 
   // ---------------------------------------------------------------- films
@@ -427,10 +627,12 @@ class GmHomeChat extends LitElement {
   async _newChat(projectId = '') {
     clearTimeout(this._timer);
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
+    else if (this._saving) { try { await this._saving; } catch (_) { /* ignore */ } }
     this._loading = true;
     this._msgs = [];
     this._jobs = {};
     this._chatId = '';
+    this._newId = '';
     this._projectId = projectId || '';
     this._panel = false;
     this._panelClosed = false;
@@ -470,7 +672,8 @@ class GmHomeChat extends LitElement {
     return {
       id: j.id, kind: j.kind, status: j.status, handle: j.handle, prompt: j.prompt, error: j.error,
       display_url: j.display_url, mime_type: j.mime_type,
-      params: { story_id: p.story_id, story_step: p.story_step, has_film: p.has_film },
+      params: { story_id: p.story_id, story_step: p.story_step, has_film: p.has_film, settings: p.settings },
+      stages: j.stages, stage: j.stage, started_at: j.started_at, finished_at: j.finished_at,
     };
   }
 
@@ -479,18 +682,30 @@ class GmHomeChat extends LitElement {
     this._saveTimer = setTimeout(() => { this._saveTimer = null; this._persist(); }, 700);
   }
 
-  async _persist() {
+  /** Save the chat. One save at a time, so two quick saves can't both create it. */
+  _persist() {
+    const run = async () => {
+      try { await this._saving; } catch (_) { /* the last one failed; try again */ }
+      await this._persistNow();
+    };
+    this._saving = run();
+    return this._saving;
+  }
+
+  async _persistNow() {
     if (!this._msgs.length) return;
     const messages = this._msgs.map((m) => ({
       role: m.role, text: m.text || '', images: (m.images || []).filter((u) => u && !String(u).startsWith('blob:')),
-      jobs: (m.jobs || []).map((id) => this._snapshot(typeof id === 'string' ? id : id.id)), ask: m.ask || null, meta: m.meta || '',
+      jobs: (m.jobs || []).map((id) => this._snapshot(typeof id === 'string' ? id : id.id)), ask: m.ask || null, meta: m.meta || '', trace: m.trace || [], took: m.took || 0,
     }));
     const job_ids = Object.keys(this._jobs);
     try {
       if (!this._chatId) {
+        // Our own id, so a repeated create updates the same chat.
+        if (!this._newId) this._newId = [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, '0')).join('');
         const r = await fetch('/api/chats', {
           method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages, job_ids, project_id: this._projectId }),
+          body: JSON.stringify({ id: this._newId, messages, job_ids, project_id: this._projectId }),
         });
         if (!r.ok) return;
         const body = await r.json();
@@ -516,6 +731,7 @@ class GmHomeChat extends LitElement {
   async _openChat(id) {
     if (!id || id === this._chatId) { this._announce(); return; }
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
+    else if (this._saving) { try { await this._saving; } catch (_) { /* ignore */ } }
     let chat = null;
     try {
       const r = await fetch(`/api/chats/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
@@ -530,9 +746,10 @@ class GmHomeChat extends LitElement {
         if (j && typeof j === 'object' && j.id) { jobs[j.id] = { ...j, params: j.params || {} }; return j.id; }
         return String(j);
       });
-      return { role: m.role, text: m.text, images: m.images || [], jobs: ids, ask: m.ask || undefined, meta: m.meta || '' };
+      return { role: m.role, text: m.text, images: m.images || [], jobs: ids, ask: m.ask || undefined, meta: m.meta || '', trace: m.trace || [], took: m.took || 0 };
     });
     this._chatId = chat.id;
+    this._newId = '';
     this._projectId = chat.project_id || '';
     this._jobs = jobs;
     this._panelClosed = false;
@@ -562,43 +779,172 @@ class GmHomeChat extends LitElement {
     ta.setSelectionRange(text.length, text.length);
   }
 
-  // ---------------------------------------------------------------- type chips
+  // ---------------------------------------------------------------- menus
 
-  _pickKind(k) {
-    const cur = (this._ta?.value || '').trim();
-    const isSample = !cur || this._kinds.some((x) => (x.samples || []).includes(cur));
-    if (this._kind === k.kind) {
-      // Same chip again: next sample; after the last one, back to chat.
-      const next = (this._sample[k.kind] ?? 0) + 1;
-      if (next >= (k.samples || []).length || !isSample) {
-        this._kind = '';
-        if (isSample) this._prefill('');
-        return;
-      }
-      this._sample = { ...this._sample, [k.kind]: next };
-      this._prefill(k.samples[next]);
-      return;
-    }
-    this._kind = k.kind;
-    this._sample = { ...this._sample, [k.kind]: 0 };
-    // Fill a sample only over an empty box or another chip's sample.
-    if (isSample && (k.samples || []).length) this._prefill(k.samples[0]);
-    else this._ta?.focus();
+  /**
+   * Open a dropdown under (or above) its button. items: [{ label, value?,
+   * checked?, icon?, hint?, run }]. One menu at a time; Esc, a click outside
+   * or a scroll closes it. Arrow keys move between items.
+   */
+  _openMenu(e, id, items, opts = {}) {
+    e.stopPropagation();
+    if (this._menu && this._menu.id === id) { this._menu = null; return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    const h = Math.min(360, items.length * 40 + 16);
+    const below = window.innerHeight - r.bottom;
+    const up = below < h + 12 && r.top > below;
+    const w = Math.max(opts.width || 220, r.width);
+    const x = Math.min(Math.max(8, opts.alignEnd ? r.right - w : r.left), window.innerWidth - w - 8);
+    this._menu = { id, items, x, w, y: up ? window.innerHeight - r.top + 6 : r.bottom + 6, up, title: opts.title || '' };
+    this.updateComplete.then(() => {
+      const pop = this.renderRoot.querySelector('.pop');
+      (pop?.querySelector('[aria-checked="true"]') || pop?.querySelector('button'))?.focus();
+    });
   }
 
-  _kindChips(compact) {
-    const list = this._kinds;
-    if (!list.length) return nothing;
-    return html`<div class="kinds ${compact ? 'compact' : ''}" role="group" aria-label=${this._s.kinds || 'What to make'}>
-      ${compact ? html`<button type="button" class="kind k-auto" aria-pressed=${this._kind ? 'false' : 'true'}
-          title=${this._s.auto_tip || 'The chat picks what to make'} @click=${() => { this._kind = ''; this._ta?.focus(); }}>
-          <span class="kbody">${svg(ICON.spark, 20)}<span class="ktext"><b>${this._s.auto || 'Auto'}</b></span></span></button>` : nothing}
-      ${list.map((k) => html`<button type="button" class="kind k-${k.kind}" aria-pressed=${this._kind === k.kind ? 'true' : 'false'}
-          title=${k.desc || ''} @click=${() => this._pickKind(k)}>
-          <span class="kmedia" aria-hidden="true">${k.kind === 'music' || k.kind === 'voice' ? html`<span class="eq">${EQ.map((h, i) => html`<i style="--h:${h};--d:${i * -97}ms"></i>`)}</span>` : nothing}</span>
-          <span class="kbody">${svg(ICON[k.kind] || ICON.spark, 20)}<span class="ktext"><b>${k.label}</b>${k.desc ? html`<small>${k.desc}</small>` : nothing}</span></span>
-        </button>`)}
+  _menuKey(e) {
+    const items = [...this.renderRoot.querySelectorAll('.pop button:not(:disabled)')];
+    const at = items.indexOf(this.renderRoot.activeElement);
+    let next = -1;
+    if (e.key === 'ArrowDown') next = (at + 1) % items.length;
+    else if (e.key === 'ArrowUp') next = (at - 1 + items.length) % items.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = items.length - 1;
+    else if (e.key === 'Tab') { this._menu = null; return; }
+    if (next >= 0) { e.preventDefault(); items[next].focus(); }
+  }
+
+  _popover() {
+    const m = this._menu;
+    if (!m) return nothing;
+    const pos = `left:${m.x}px;width:${m.w}px;${m.up ? `bottom:${m.y}px` : `top:${m.y}px`}`;
+    return html`<div class="pop ${m.up ? 'up' : ''}" role="menu" aria-label=${m.title} style=${pos} @keydown=${this._menuKey}>
+      ${m.title ? html`<div class="pop-title">${m.title}</div>` : nothing}
+      ${m.items.map((it) => (it.sep ? html`<div class="pop-sep" role="separator"></div>` : html`
+        <button type="button" role=${it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked=${it.checked === undefined ? nothing : String(!!it.checked)}
+          ?disabled=${!!it.disabled} @click=${() => { const keep = it.keep; if (!keep) this._menu = null; it.run && it.run(); }}>
+          ${it.icon ? svg(it.icon, 18) : nothing}
+          <span class="pop-l">${it.label}${it.hint ? html`<small>${it.hint}</small>` : nothing}</span>
+          ${it.checked ? svg(ICON.check, 18) : it.more ? svg(ICON.chevron, 18) : nothing}
+        </button>`))}
     </div>`;
+  }
+
+  /** A select field as a pill that opens our own menu (no native <select>). */
+  _pill(kind, f, cls = '') {
+    const id = `f-${kind}-${f.name}`;
+    if (f.type === 'toggle') {
+      const on = f.value === 'on';
+      return html`<button type="button" class="pill ${cls} ${on ? 'on' : ''}" role="switch" aria-checked=${on ? 'true' : 'false'}
+        @click=${() => this._setField(kind, f.name, on ? 'off' : 'on')} title=${f.help || f.label}>
+        <span class="pl">${f.label}</span><b>${this._show(f)}</b></button>`;
+    }
+    const items = f.options.map((o) => ({ label: o.label, checked: o.value === f.value, run: () => this._setField(kind, f.name, o.value) }));
+    return html`<button type="button" class="pill ${cls}" data-menu=${id} aria-haspopup="menu" aria-expanded=${this._menu && this._menu.id === id ? 'true' : 'false'}
+      @click=${(e) => this._openMenu(e, id, items, { title: f.label, alignEnd: cls.includes('end') })} title=${f.help || f.label}>
+      <span class="pl">${f.label}</span><b>${this._show(f)}</b>${svg(ICON.caret, 16)}</button>`;
+  }
+
+  /** The row under the box: mode, the type's main settings, Model at the end. */
+  _settingsRow() {
+    const S = this._s;
+    const mode = this._mode;
+    const kinds = this._kinds.filter((k) => this._options[k.kind]);
+    const modeItems = [
+      { label: S.auto || 'Auto', hint: S.auto_tip || 'The chat picks what to make', icon: ICON.spark, checked: !mode, run: () => { this._lock = ''; this._dismissed = this._auto ? this._auto.kind : ''; } },
+      ...kinds.map((k) => ({ label: k.label, hint: k.desc, icon: ICON[k.kind], checked: mode === k.kind, run: () => this._setLock(k.kind) })),
+    ];
+    const detected = mode && !this._lock;
+    const fields = mode ? this._fields(mode).filter((f) => f.tier !== 'advanced' && (f.type !== 'select' || f.options.length > 1)) : [];
+    const model = fields.find((f) => f.name === 'model');
+    const rest = fields.filter((f) => f !== model && (f.type === 'select' || f.type === 'toggle'))
+      .sort((a, b) => (b.name === 'mode') - (a.name === 'mode'));
+    return html`<div class="under" role="group" aria-label=${S.settings || 'Settings'}>
+      <span class="mode-wrap">
+        <button type="button" class="pill mode ${mode ? 'set' : ''}" data-menu="mode" aria-haspopup="menu"
+          @click=${(e) => this._openMenu(e, 'mode', modeItems, { title: S.kinds || 'What to make', width: 260 })}
+          title=${detected ? (S.t_detected || 'You wrote “{word}”').replace('{word}', this._auto.word) : (S.kinds || 'What to make')}>
+          ${svg(mode ? ICON[mode] : ICON.spark, 16)}<b>${mode ? this._kindLabel(mode) : (S.auto || 'Auto')}</b>
+          ${detected ? html`<span class="auto-tag">${S.detected || 'auto'}</span>` : nothing}${svg(ICON.caret, 16)}
+        </button>
+        ${mode ? html`<button type="button" class="pill-x" @click=${() => this._clearMode()} aria-label=${S.clear_mode || 'Back to chat'} title=${S.clear_mode || 'Back to chat'}>${svg(ICON.close, 14)}</button>` : nothing}
+      </span>
+      ${rest.map((f) => this._pill(mode, f))}
+      ${model ? html`<span class="grow"></span>${this._pill(mode, model, 'end')}` : nothing}
+    </div>`;
+  }
+
+  // ---------------------------------------------------------------- + menu
+
+  _plusMenu(e) {
+    const S = this._s;
+    const mode = this._mode;
+    const items = [{ label: S.add_files || 'Add files or photos', icon: ICON.attach, hint: 'Ctrl+U', run: () => this._pick('') }];
+    if (mode) {
+      this._slots(mode).forEach((s) => items.push({ label: `${S.add || 'Add'} ${s.label.toLowerCase()}`, icon: /video/.test(s.accept || '') ? ICON.video : ICON.image, run: () => this._pick(s.name) }));
+    }
+    const done = Object.values(this._jobs).filter((j) => j.status === 'done' && j.kind === 'image' && j.display_url).slice(-4).reverse();
+    if (done.length) {
+      items.push({ sep: true });
+      done.forEach((j) => items.push({ label: `${S.use || 'Use'} ${j.handle}`, hint: j.prompt ? j.prompt.slice(0, 48) : '', icon: ICON.image, run: () => this._useRef(j) }));
+    }
+    const adv = mode ? this._fields(mode).filter((f) => f.tier === 'advanced') : [];
+    items.push({ sep: true });
+    if (adv.length) items.push({ label: S.advanced || 'Advanced settings', icon: ICON.tune, more: true, hint: this._advChanged(mode) ? (S.changed || 'Changed') : '', run: () => { this._adv = true; } });
+    const k = this._kinds.find((x) => x.kind === mode);
+    if (k && k.href) items.push({ label: S.open_studio || 'Open full studio', icon: ICON.open, run: () => this._openFull(k) });
+    this._openMenu(e, 'plus', items, { width: 280 });
+  }
+
+  _advChanged(kind) {
+    return !!kind && this._fields(kind).some((f) => f.tier === 'advanced' && f.dflt !== undefined && String(f.value) !== String(f.dflt));
+  }
+
+  _openFull(k) {
+    const prompt = (this._ta?.value || '').trim();
+    const params = prompt ? { prompt } : {};
+    if (this.navEvent) this.dispatchEvent(new MesopEvent(this.navEvent, { route: k.href, params }));
+    else window.location.assign(k.href + (prompt ? `?prompt=${encodeURIComponent(prompt)}` : ''));
+  }
+
+  /** Advanced settings for the mode: a panel above the box. */
+  _advPanel() {
+    const mode = this._mode;
+    if (!this._adv || !mode) return nothing;
+    const S = this._s;
+    const fields = this._fields(mode).filter((f) => f.tier === 'advanced');
+    return html`<div class="adv" role="dialog" aria-label=${S.advanced || 'Advanced settings'}>
+      <div class="adv-head"><b>${S.advanced || 'Advanced settings'}</b><span>${this._kindLabel(mode)}</span>
+        <button type="button" class="icon sm" @click=${() => { this._adv = false; }} aria-label=${S.close || 'Close'}>${svg(ICON.close, 18)}</button></div>
+      <div class="adv-list">${fields.map((f) => this._advField(mode, f))}</div>
+      ${this._advChanged(mode) ? html`<button type="button" class="act reset" @click=${() => this._resetAdv(mode)}>${svg(ICON.retry, 16)}${S.reset || 'Reset'}</button>` : nothing}
+    </div>`;
+  }
+
+  _advField(kind, f) {
+    const set = (v) => this._setField(kind, f.name, v);
+    let control;
+    if (f.type === 'toggle') {
+      control = html`<button type="button" class="switch ${f.value === 'on' ? 'on' : ''}" role="switch" aria-checked=${f.value === 'on' ? 'true' : 'false'}
+        aria-label=${f.label} @click=${() => set(f.value === 'on' ? 'off' : 'on')}><i></i></button>`;
+    } else if (f.type === 'select') {
+      control = this._pill(kind, f, 'in-adv');
+    } else if (f.type === 'textarea') {
+      control = html`<textarea class="field" rows="3" .value=${String(f.value ?? '')} placeholder=${f.placeholder || ''} aria-label=${f.label}
+        @change=${(e) => set(e.target.value)}></textarea>`;
+    } else {
+      control = html`<input class="field" type=${f.type === 'number' ? 'number' : 'text'} .value=${String(f.value ?? '')} placeholder=${f.placeholder || ''}
+        min=${f.min ?? nothing} max=${f.max ?? nothing} aria-label=${f.label} @change=${(e) => set(e.target.value)}>`;
+    }
+    const wide = f.type === 'textarea' || f.type === 'text';
+    return html`<div class="adv-row ${wide ? 'wide' : ''}"><span class="adv-l">${f.label}${f.help ? html`<small>${f.help}</small>` : nothing}</span>${control}</div>`;
+  }
+
+  _resetAdv(kind) {
+    const mine = { ...(this._settings[kind] || {}) };
+    this._fields(kind).filter((f) => f.tier === 'advanced').forEach((f) => { delete mine[f.name]; });
+    this._settings = { ...this._settings, [kind]: mine };
+    try { localStorage.setItem(SETTINGS, JSON.stringify(this._settings)); } catch (_) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- enhance
@@ -612,7 +958,7 @@ class GmHomeChat extends LitElement {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text, kind: this._kind }),
+        body: JSON.stringify({ prompt: text, kind: this._mode }),
       });
       if (r.ok) {
         const body = await r.json();
@@ -625,10 +971,20 @@ class GmHomeChat extends LitElement {
 
   // ---------------------------------------------------------------- attach
 
-  _pick() { this.renderRoot.querySelector('input[type=file]')?.click(); }
+  /** Open the file picker; slot ('' = let the page choose) says where files go. */
+  _pick(slot = '') {
+    const input = this.renderRoot.querySelector('input[type=file]');
+    if (!input) return;
+    this._pickSlot = slot;
+    const s = slot && this._mode ? this._slots(this._mode).find((x) => x.name === slot) : null;
+    const anyVideo = this._mode && this._slots(this._mode).some((x) => /video/.test(x.accept || ''));
+    input.accept = s ? (s.accept || 'image/*') : `image/png,image/jpeg,image/webp${anyVideo ? ',video/mp4,video/webm,video/quicktime' : ''}`;
+    input.click();
+  }
 
   _onFiles(e) {
-    this._addFiles([...(e.target.files || [])]);
+    this._addFiles([...(e.target.files || [])], this._pickSlot || '');
+    this._pickSlot = '';
     e.target.value = '';
   }
 
@@ -637,29 +993,43 @@ class GmHomeChat extends LitElement {
     if (files.length) { e.preventDefault(); this._addFiles(files); }
   }
 
-  _addFiles(list) {
+  _addFiles(list, slot = '') {
     const room = MAX_FILES - this._files.length;
-    list.filter((f) => /^image\/(png|jpeg|webp)$/.test(f.type)).slice(0, Math.max(0, room)).forEach((file) => {
-      const id = Math.random().toString(36).slice(2, 9);
-      const item = { id, name: file.name, preview: URL.createObjectURL(file), busy: true };
-      this._files = [...this._files, item];
-      const reader = new FileReader();
-      reader.onload = async () => {
-        let patch = { busy: false, error: this._s.attach_failed || 'Could not attach' };
-        try {
-          const r = await fetch('/api/chat/upload', {
-            method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data: reader.result, name: file.name }),
-          });
-          const body = await r.json();
-          if (r.ok && body.job) patch = { busy: false, handle: body.job.handle, url: body.job.display_url };
-          else if (body.detail) patch.error = body.detail;
-        } catch (_) { /* keeps the error */ }
-        this._files = this._files.map((f) => (f.id === id ? { ...f, ...patch } : f));
-      };
-      reader.readAsDataURL(file);
-    });
+    list.filter((f) => /^image\/(png|jpeg|webp)$/.test(f.type) || /^video\/(mp4|webm|quicktime)$/.test(f.type))
+      .slice(0, Math.max(0, room)).forEach((file) => {
+        const id = Math.random().toString(36).slice(2, 9);
+        const video = file.type.startsWith('video/');
+        const item = { id, name: file.name, preview: URL.createObjectURL(file), busy: true, video, slot };
+        this._files = [...this._files, item];
+        const reader = new FileReader();
+        reader.onload = async () => {
+          let patch = { busy: false, error: this._s.attach_failed || 'Could not attach' };
+          try {
+            const r = await fetch('/api/chat/upload', {
+              method: 'POST', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ data: reader.result, name: file.name }),
+            });
+            const body = await r.json();
+            if (r.ok && body.job) patch = { busy: false, handle: body.job.handle, url: body.job.display_url };
+            else if (body.detail) patch.error = body.detail;
+          } catch (_) { /* keeps the error */ }
+          this._files = this._files.map((f) => (f.id === id ? { ...f, ...patch } : f));
+        };
+        reader.readAsDataURL(file);
+      });
+  }
+
+  /** Move an attachment to another slot (first frame, reference...). */
+  _slotMenu(e, f) {
+    const mode = this._mode;
+    const slots = mode ? this._slots(mode).filter((s) => (f.video ? /video/ : /image/).test(s.accept || 'image/*')) : [];
+    if (slots.length < 2) return;
+    const cur = f.slot || this._defaultSlot(mode, f);
+    this._openMenu(e, `slot-${f.id}`, slots.map((s) => ({
+      label: s.label, checked: s.name === cur,
+      run: () => { this._files = this._files.map((x) => (x.id === f.id ? { ...x, slot: s.name } : x)); },
+    })), { title: this._s.use_as || 'Use as' });
   }
 
   _unattach(id) {
@@ -667,7 +1037,6 @@ class GmHomeChat extends LitElement {
     if (gone && gone.preview.startsWith('blob:')) URL.revokeObjectURL(gone.preview);
     this._files = this._files.filter((f) => f.id !== id);
   }
-
   /** Put a finished picture in the box as a reference ("[Attached: image 2]"). */
   _useRef(j) {
     if (!j || j.status !== 'done' || j.kind !== 'image' || !j.display_url) return false;
@@ -722,20 +1091,40 @@ class GmHomeChat extends LitElement {
 
   _attachments() {
     if (!this._files.length) return nothing;
-    return html`<div class="files">${this._files.map((f) => html`
+    const mode = this._mode;
+    return html`<div class="files">${this._files.map((f) => {
+      const slot = mode ? (f.slot || this._defaultSlot(mode, f)) : '';
+      const many = mode && this._slots(mode).filter((s) => (f.video ? /video/ : /image/).test(s.accept || 'image/*')).length > 1;
+      return html`
       <div class="file ${f.error ? 'bad' : ''}" title=${f.error || f.name}>
-        <img src=${f.preview} alt=${f.name}>
+        ${f.video ? html`<video src=${f.preview} muted playsinline preload="metadata"></video>` : html`<img src=${f.preview} alt=${f.name}>`}
         ${f.busy ? html`<span class="file-spin" aria-hidden="true"></span>` : nothing}
+        ${slot ? html`<button type="button" class="file-slot" data-menu=${`slot-${f.id}`} ?disabled=${!many}
+            @click=${(e) => this._slotMenu(e, f)} title=${this._s.use_as || 'Use as'}>${this._slotLabel(mode, slot)}</button>` : nothing}
         <button type="button" class="file-x" @click=${() => this._unattach(f.id)} aria-label=${(this._s.remove || 'Remove') + ' ' + f.name}>${svg(ICON.close, 14)}</button>
-      </div>`)}</div>`;
+      </div>`;
+    })}</div>`;
   }
 
   // ---------------------------------------------------------------- keys
 
   _onInput() {
     this._fit();
-    const has = !!(this._ta?.value || '').trim();
+    const text = this._ta?.value || '';
+    const has = !!text.trim();
     if (has !== this._hasText) this._hasText = has;
+    // Read the mode from the words as they are typed (detect_kind.js).
+    clearTimeout(this._detectTimer);
+    this._detectTimer = setTimeout(() => this._detect(), 120);
+  }
+
+  _detect() {
+    const text = this._ta?.value || '';
+    const found = detectKind(text);
+    const before = this._auto ? this._auto.kind : '';
+    this._auto = found;
+    if (!text.trim()) this._dismissed = '';
+    if ((found ? found.kind : '') !== before && this._dismissed && found && found.kind !== this._dismissed) this._dismissed = '';
   }
 
   _fit() {
@@ -747,6 +1136,11 @@ class GmHomeChat extends LitElement {
 
   _onKey(e) {
     const ta = e.target;
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'u' || e.key === 'U')) {
+      e.preventDefault();
+      this._pick('');
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       this._send();
@@ -798,8 +1192,9 @@ class GmHomeChat extends LitElement {
     const S = this._s;
     const talk = this.talkJson || '{}';
     const ready = this._hasText || this._files.some((f) => f.handle);
-    const kind = this._kinds.find((k) => k.kind === this._kind);
-    const sendLabel = kind ? `${S.send || 'Send'}: ${kind.label}` : (S.send || 'Send');
+    const mode = this._mode;
+    const sendLabel = mode ? `${S.send || 'Send'}: ${this._kindLabel(mode)}` : (S.send || 'Send');
+    const holder = (mode && S[`ph_${mode}`]) || S.placeholder || 'Ask me anything';
     // One round slot: Live while empty, Send once there is something to send.
     let slot;
     if (this._busy) {
@@ -816,12 +1211,13 @@ class GmHomeChat extends LitElement {
         @dragover=${this._onDragOver} @dragleave=${this._onDragLeave} @drop=${this._onDrop}>
         ${this._attachments()}
         <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change=${this._onFiles}>
+        <textarea rows="1" @paste=${this._onPaste} .placeholder=${holder}
+          aria-label=${S.placeholder || 'Ask me anything'}
+          @keydown=${this._onKey} @input=${this._onInput}></textarea>
         <div class="row">
-          <button class="icon" type="button" @click=${this._pick} ?disabled=${this._files.length >= MAX_FILES}
-            aria-label=${S.attach || 'Add a picture'} title=${S.attach_tip || 'Add a picture to edit or animate'}>${svg(ICON.plus, 24)}</button>
-          <textarea rows="1" @paste=${this._onPaste} .placeholder=${S.placeholder || 'Ask me anything'}
-            aria-label=${S.placeholder || 'Ask me anything'}
-            @keydown=${this._onKey} @input=${this._onInput}></textarea>
+          <button class="icon plus ${this._advChanged(mode) ? 'dot-on' : ''}" type="button" data-menu="plus" aria-haspopup="menu"
+            @click=${(e) => this._plusMenu(e)} aria-label=${S.more || 'Add files and more'} title=${S.more || 'Add files and more'}>${svg(ICON.plus, 24)}</button>
+          <span class="grow"></span>
           <div class="tools">
             ${this._hasText ? html`<button class="icon ${this._enhancing ? 'working' : ''}" type="button" @click=${this._enhance}
                 ?disabled=${this._enhancing} aria-label=${enhanceLabel} title=${enhanceLabel}>${svg(ICON.spark, 20)}</button>` : nothing}
@@ -833,26 +1229,8 @@ class GmHomeChat extends LitElement {
             ${slot}
           </div>
         </div>
-        ${this._controls()}
         ${this._note ? html`<div class="note" role="status">${this._note}</div>` : nothing}
       </div>`;
-  }
-
-  /** The picked type's settings, sliding open under the text. */
-  _controls() {
-    const kind = this._options[this._kind] ? this._kind : '';
-    const fields = kind ? this._fields(kind).filter((f) => f.options.length > 1) : [];
-    return html`<div class="ctl-wrap ${fields.length ? 'open' : ''}" aria-hidden=${fields.length ? 'false' : 'true'}>
-      <div class="ctl-in"><div class="controls" role="group" aria-label=${this._s.settings || 'Settings'}>
-        ${fields.map((f) => html`<label class="ctl" title=${f.label}>
-          <span class="ctl-l">${f.label}</span>
-          <select .value=${f.value} @change=${(e) => this._setField(kind, f.name, e.target.value)} ?disabled=${!fields.length}>
-            ${f.options.map((o) => html`<option value=${o.value} ?selected=${o.value === f.value}>${o.label}</option>`)}
-          </select>
-          <svg class="caret" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 10l5 5 5-5z"></path></svg>
-        </label>`)}
-      </div></div>
-    </div>`;
   }
 
   _media(j) {
@@ -860,13 +1238,13 @@ class GmHomeChat extends LitElement {
     const mime = j.mime_type || '';
     if (!url) return nothing;
     if (mime.startsWith('video/') || j.kind === 'video' || (j.kind === 'story' && j.params && j.params.has_film)) {
-      return html`<video class="media" src=${url} controls playsinline preload="metadata"></video>`;
+      return html`<div class="stage"><video class="media" src=${url} controls playsinline preload="metadata"></video></div>`;
     }
     if (mime.startsWith('audio/') || j.kind === 'music' || j.kind === 'voice') {
-      return html`<audio class="audio" src=${url} controls preload="metadata"></audio>`;
+      return html`<gm-audio class="audio" .src=${url} .label=${j.handle || ''} ?speed=${j.kind === 'voice'}></gm-audio>`;
     }
     if (mime.startsWith('image/') || j.kind === 'image') {
-      return html`<a href=${url} target="_blank" rel="noopener"><img class="media" src=${url} alt=${j.prompt || j.handle} loading="lazy"></a>`;
+      return html`<div class="stage"><a href=${url} target="_blank" rel="noopener"><img class="media" src=${url} alt=${j.prompt || j.handle} loading="lazy"></a></div>`;
     }
     return nothing;
   }
@@ -905,9 +1283,10 @@ class GmHomeChat extends LitElement {
           <span class="job-name">${name}</span>
           <span class="job-state">${running ? (S.making || 'Making…') : j.status === 'failed' ? (S.failed || 'Failed') : (S.ready || 'Ready')}</span>
         </div>
-        ${running ? html`<div class="shimmer ${j.kind}" aria-hidden="true"></div>` : nothing}
+        ${running ? this._skeleton(j) : nothing}
         ${j.status === 'done' ? this._media(j) : nothing}
         ${isStory ? this._storySteps(j) : nothing}
+        ${this._progress(j)}
         ${j.status === 'failed' ? html`<p class="job-error">${j.error || ''}</p>` : nothing}
         ${j.status === 'done' || j.status === 'failed' ? html`<div class="job-actions">
           ${isStory ? this._filmButtons(j, 'act') : nothing}
@@ -915,9 +1294,83 @@ class GmHomeChat extends LitElement {
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._prefill(`${S.edit_prefix || 'Edit'} ${j.handle}: `)}>${svg(ICON.edit, 18)}${S.edit || 'Edit'}</button>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._animate(j)}>${svg(ICON.spark, 18)}${S.animate || 'Animate'}</button>` : nothing}
           ${j.status === 'done' ? (() => { const href = this._studio(j); return html`<a class="act" href=${href} @click=${(e) => this._openStudio(e, href)}>${svg(ICON.open, 18)}${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}</a>`; })() : nothing}
-          ${j.status === 'failed' ? html`<button class="act" type="button" @click=${() => this._send(j.prompt)}>${svg(ICON.retry, 18)}${S.retry || 'Try again'}</button>` : nothing}
+          ${j.status === 'failed' ? html`<button class="act" type="button" @click=${() => this._retry(j)}>${svg(ICON.retry, 18)}${S.retry || 'Try again'}</button>` : nothing}
         </div>` : nothing}
       </div>`;
+  }
+
+  /** Try a failed job again: same type and prompt when the type has settings. */
+  _retry(j) {
+    if (this._busy) return;
+    if (j.kind && this._options[j.kind] && j.kind !== 'story') this._make(j.kind, j.prompt || '', []);
+    else this._send(j.prompt);
+  }
+
+  /** A placeholder in the shape being made (from the job's settings). */
+  _skeleton(j) {
+    const set = (j.params && j.params.settings) || {};
+    const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(String(set.aspect || set.aspect_ratio || set.shape || ''));
+    const ratio = m ? `${m[1]} / ${m[2]}` : (j.kind === 'image' ? '1 / 1' : '16 / 9');
+    if (j.kind === 'music' || j.kind === 'voice') return html`<div class="shimmer audio-sk" aria-hidden="true">${EQ.concat(EQ).map((h) => html`<i style="--h:${h}"></i>`)}</div>`;
+    if (j.kind === 'story') return nothing;
+    return html`<div class="stage"><div class="shimmer" style="aspect-ratio:${ratio}" aria-hidden="true"></div></div>`;
+  }
+
+  /**
+   * The job's steps as they happen (live_jobs stages): done ✓, the current one
+   * pulsing, the rest waiting; an elapsed timer and an estimate bar. Film jobs
+   * list their own tasks.
+   */
+  _progress(j) {
+    const S = this._s;
+    const stages = Array.isArray(j.stages) ? j.stages : [];
+    const tasks = Array.isArray(j.tasks) ? j.tasks : [];
+    const running = j.status !== 'done' && j.status !== 'failed';
+    if (!stages.length && !tasks.length) return nothing;
+    const at = Math.max(0, Math.min(stages.length - 1, Number(j.stage) || 0));
+    const started = Number(j.started_at) || 0;
+    const ended = Number(j.finished_at) || 0;
+    const secs = started ? Math.max(0, Math.round(((running ? Date.now() / 1000 : (ended || Date.now() / 1000)) - started))) : 0;
+    const typical = Number(j.typical_seconds) || 0;
+    const pct = running && typical ? Math.min(95, Math.round((secs / typical) * 100)) : 100;
+    const state = (i) => {
+      if (j.status === 'done') return 'done';
+      if (i < at) return 'done';
+      if (i === at) return j.status === 'failed' ? 'bad' : 'now';
+      return '';
+    };
+    const time = secs ? `${secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min ${secs % 60} s`}${running && typical ? ` · ${(S.about || 'about {n} s').replace('{n}', typical)}` : ''}` : '';
+    const shownTasks = tasks.slice(0, 8);
+    const doneTasks = tasks.filter((t) => t.status === 'done').length;
+    return html`<details class="prog ${running ? 'live' : ''}" ?open=${running || j.status === 'failed'}>
+      <summary>
+        <span class="prog-t">${running ? (stages[at] || S.making || 'Making…') : j.status === 'failed' ? (S.failed || 'Failed') : (S.steps_done || 'Steps')}</span>
+        ${tasks.length ? html`<span class="prog-n">${doneTasks} / ${tasks.length}</span>` : nothing}
+        <span class="prog-time">${time}</span>
+      </summary>
+      ${running ? html`<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${pct}><i style="width:${pct}%"></i></div>` : nothing}
+      ${stages.length ? html`<ol class="stages">${stages.map((s, i) => html`<li class="st ${state(i)}">${state(i) === 'done' ? svg(ICON.check, 14) : html`<i aria-hidden="true"></i>`}<span>${s}</span></li>`)}</ol>` : nothing}
+      ${shownTasks.length ? html`<ol class="stages tasks">${shownTasks.map((t) => html`<li class="st ${t.status === 'done' ? 'done' : t.status === 'running' ? 'now' : t.status === 'failed' ? 'bad' : ''}">
+          ${t.status === 'done' ? svg(ICON.check, 14) : html`<i aria-hidden="true"></i>`}<span>${t.label}</span></li>`)}
+        ${tasks.length > shownTasks.length ? html`<li class="st more">+${tasks.length - shownTasks.length}</li>` : nothing}</ol>` : nothing}
+    </details>`;
+  }
+
+  /** The chat's thinking: live while it works, folded into one line after. */
+  _think(steps, live, took) {
+    const S = this._s;
+    if (!steps || (!steps.length && !live)) return nothing;
+    const secs = live ? Math.max(1, Math.round((Date.now() - live) / 1000)) : took;
+    const head = live ? (S.thinking || 'Thinking') : (S.thought || 'Thought for {n} s').replace('{n}', String(secs || 1));
+    return html`<details class="think ${live ? 'live' : ''}" ?open=${!!live}>
+      <summary>${svg(ICON.spark, 16)}<span>${head}</span>${live ? html`<span class="think-dots"><i></i><i></i><i></i></span>` : html`<span class="think-n">${steps.length}</span>`}${svg(ICON.caret, 16)}</summary>
+      <ol class="think-list">
+        ${steps.map((s, i) => html`<li class=${live && i === steps.length - 1 ? 'now' : 'done'}>
+          ${live && i === steps.length - 1 ? html`<i aria-hidden="true"></i>` : svg(ICON.check, 14)}
+          <span><b>${s.label}</b>${s.detail ? html`<small>${s.detail}</small>` : nothing}</span></li>`)}
+        ${live && !steps.length ? html`<li class="now"><i aria-hidden="true"></i><span><b>${S.t_read || 'Reading your message'}</b></span></li>` : nothing}
+      </ol>
+    </details>`;
   }
 
   // ---------------------------------------------------------------- jobs panel
@@ -933,7 +1386,7 @@ class GmHomeChat extends LitElement {
         @mouseenter=${(e) => e.target.play().catch(() => {})} @mouseleave=${(e) => e.target.pause()}></video>`;
     }
     if (mime.startsWith('audio/') || j.kind === 'music' || j.kind === 'voice') {
-      return html`<audio class="pj-audio" src=${url} controls preload="metadata"></audio>`;
+      return html`<gm-audio class="pj-audio" compact .src=${url} .label=${j.handle || ""}></gm-audio>`;
     }
     if (mime.startsWith('image/') || j.kind === 'image') {
       return html`<img class="pj-img" src=${url} alt=${j.prompt || j.handle} loading="lazy" draggable="false">`;
@@ -966,7 +1419,7 @@ class GmHomeChat extends LitElement {
           ${done ? html`<a class="pa ${isStory ? '' : 'icon'}" href=${href} @click=${(e) => this._openStudio(e, href)}
               aria-label=${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}
               title=${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}>${svg(ICON.open, 18)}${isStory ? (S.open_short || 'Open') : nothing}</a>` : nothing}
-          ${j.status === 'failed' ? html`<button class="pa" type="button" @click=${() => this._send(j.prompt)}>${svg(ICON.retry, 16)}${S.retry || 'Try again'}</button>` : nothing}
+          ${j.status === 'failed' ? html`<button class="pa" type="button" @click=${() => this._retry(j)}>${svg(ICON.retry, 16)}${S.retry || 'Try again'}</button>` : nothing}
         </div>` : nothing}
       </li>`;
   }
@@ -1002,16 +1455,27 @@ class GmHomeChat extends LitElement {
   }
 
   _thread() {
+    const live = this._thinking;
     return html`<div class="thread" role="log" aria-label=${this._s.thread || 'Conversation'}>
       ${this._msgs.map((m) => m.role === 'user'
         ? html`<div class="msg user"><div class="user-col">
             ${(m.images || []).length ? html`<div class="sent">${m.images.map((u) => html`<img src=${u} alt="">`)}</div>` : nothing}
-            <div class="bubble">${m.text}</div></div></div>`
+            ${m.text ? html`<div class="bubble">${m.text}</div>` : nothing}</div></div>`
         : html`<div class="msg bot"><span class="avatar" aria-hidden="true">${svg(ICON.spark, 18)}</span>
-            <div class="bot-body"><div class="text">${m.text}</div>${m.meta ? html`<div class="meta">${m.meta}</div>` : nothing}${(m.jobs || []).map((id) => this._job(id))}</div></div>`)}
-      ${this._busy ? html`<div class="msg bot"><span class="avatar" aria-hidden="true">${svg(ICON.spark, 18)}</span>
-          <div class="typing" aria-label=${this._s.thinking || 'Thinking'}><i></i><i></i><i></i></div></div>` : nothing}
+            <div class="bot-body">${this._think(m.trace, 0, m.took)}${m.text ? html`<div class="text">${m.text}</div>` : nothing}${m.meta ? html`<div class="meta">${m.meta}</div>` : nothing}${(m.jobs || []).map((id) => this._job(id))}</div></div>`)}
+      ${this._busy ? html`<div class="msg bot"><span class="avatar busy" aria-hidden="true">${svg(ICON.spark, 18)}</span>
+          <div class="bot-body">${this._think(live ? live.steps : [], live ? live.start : Date.now(), 0)}</div></div>` : nothing}
       <div class="end"></div>
+    </div>`;
+  }
+
+  /** Starter prompts on the empty page; the mode follows the words. */
+  _starters() {
+    const list = this._kinds.filter((k) => (k.samples || []).length).slice(0, 4);
+    if (!list.length) return nothing;
+    return html`<div class="starters" role="group" aria-label=${this._s.try || 'Try:'}>
+      ${list.map((k) => html`<button type="button" class="starter" @click=${() => { this._prefill(k.samples[0]); this._detect(); }}>
+        ${svg(ICON[k.kind] || ICON.spark, 16)}<span>${k.samples[0]}</span></button>`)}
     </div>`;
   }
 
@@ -1027,11 +1491,25 @@ class GmHomeChat extends LitElement {
         <div class="dock">
           ${chatting ? html`<div class="dock-top">${this._jobsPill('inline')}<button class="ghost newchat" type="button" @click=${() => this._newChat(this._projectId)} title=${S.new_chat_tip || 'Start over with an empty chat'}>
               ${svg(ICON.newchat, 18)}<span>${S.new_chat || 'New chat'}</span></button></div>` : nothing}
+          ${this._advPanel()}
           ${this._box()}
-          ${this._kindChips(chatting || this._hasText)}
+          ${this._settingsRow()}
+          ${chatting ? nothing : this._starters()}
         </div>
       </div>
-      ${this._jobsPanel()}`;
+      ${this._jobsPanel()}
+      ${this._popover()}`;
+  }
+
+  updated(changed) {
+    this._afterUpdate(changed);
+    // Tell the side menu which type is on, so its row lights up.
+    const mode = this._mode;
+    if (mode !== this._shownMode) {
+      this._shownMode = mode;
+      window.gmKind = mode;
+      window.dispatchEvent(new CustomEvent('gm-kind-changed', { detail: { kind: mode } }));
+    }
   }
 
   willUpdate() {
@@ -1045,7 +1523,7 @@ class GmHomeChat extends LitElement {
     .wrap { display: flex; flex-direction: column; align-items: center; width: 100%; margin: 0 auto; }
     /* Empty: everything centred on the screen (topbar 60px, frame padding). */
     .wrap.empty { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: center; gap: clamp(28px, 5vh, 48px); padding-bottom: 8vh; }
-    .wrap.chat { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: flex-end; max-width: 860px; }
+    .wrap.chat { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: flex-end; max-width: 820px; }
 
     .hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: clamp(8px, 1.6vh, 14px); }
     .title {
@@ -1057,8 +1535,12 @@ class GmHomeChat extends LitElement {
 
     /* The prompt box (same glass as the studios' composer). */
     .dock { width: 100%; max-width: 820px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
-    .wrap.empty .dock { gap: clamp(24px, 4vh, 36px); }
-    .wrap.chat .dock { position: sticky; bottom: 0; padding: 10px 0 16px; }
+    .wrap.empty .dock { gap: 10px; }
+    .wrap.empty .starters { margin-top: clamp(14px, 3vh, 28px); }
+    /* Results line up with the box: the card spans the column, not just the reply. */
+    .bot-body > .job { margin-inline-start: -44px; width: calc(100% + 44px); }
+    .wrap.chat .dock { position: sticky; bottom: 0; padding: 18px 0 12px;
+      background: linear-gradient(to bottom, transparent 0, color-mix(in srgb, var(--sys-background, #0d0e11) 92%, transparent) 26px); }
     /* A solid box in the open rail's colour (--gm-panel), like Gemini's: it
        stands out from the page instead of blending in as glass. */
     .box {
@@ -1069,12 +1551,13 @@ class GmHomeChat extends LitElement {
     }
     .box:focus-within { border-color: color-mix(in srgb, var(--sys-on-surface, #e8eaed) 14%, transparent); }
     .box .files { padding: 4px 8px 0; }
-    /* One row: + | text | Enhance, Dictate, Live/Send. The buttons stay on
-       the last line when the text grows. */
-    .row { display: flex; align-items: flex-end; gap: 4px; }
+    /* Like Claude's box: the text on top, then one row with + on the left and
+       Enhance, Dictate, Live/Send on the right. */
+    .row { display: flex; align-items: center; gap: 4px; }
+    .grow { flex: 1 1 auto; }
     textarea {
-      flex: 1 1 auto; min-width: 0; height: 44px; min-height: 44px; max-height: 220px; resize: none; border: 0; outline: 0;
-      background: transparent; color: inherit; font: inherit; font-size: 18px; line-height: 24px; padding: 10px 8px;
+      display: block; width: 100%; min-width: 0; height: 52px; min-height: 52px; max-height: 220px; resize: none; border: 0; outline: 0;
+      background: transparent; color: inherit; font: inherit; font-size: 17px; line-height: 24px; padding: 14px 14px 4px;
     }
     textarea::placeholder { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9; }
     .tools { flex: none; display: flex; align-items: center; gap: 4px; }
@@ -1119,53 +1602,6 @@ class GmHomeChat extends LitElement {
     button:focus-visible, a:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 2px; }
     textarea:focus, textarea:focus-visible { outline: none; }
 
-    /* Type tiles under the box. Hover plays a sample inside the tile; a
-       click fills a sample prompt. With text or a conversation they shrink
-       into a row of buttons. */
-    .kinds { width: 100%; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
-    .kind {
-      position: relative; overflow: hidden; isolation: isolate; height: 118px; padding: 14px; border: 0; border-radius: 22px;
-      display: flex; align-items: flex-end; text-align: start; cursor: pointer; font-size: 14px;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #15171c);
-      transition: height 280ms cubic-bezier(0.2, 0.8, 0.2, 1), border-radius 280ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
-    }
-    .kind:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
-    .kbody { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-    .kbody svg { flex: none; fill: currentColor; opacity: 0.85; }
-    .ktext { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .ktext b { font-size: 15px; font-weight: 600; }
-    .ktext small { font-size: 12.5px; color: var(--sys-on-surface-variant, #6b7280); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    /* The sample: hidden at rest, it fades in behind the label on hover. */
-    .kmedia { position: absolute; inset: 0; z-index: 0; opacity: 0; transform: scale(1.06); background-size: cover; background-position: center;
-      transition: opacity 260ms ease, transform 700ms ease; }
-    .kmedia::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 20%, rgba(0, 0, 0, 0.7)); }
-    .kinds:not(.compact) .kind:hover .kmedia, .kinds:not(.compact) .kind:focus-visible .kmedia, .kinds:not(.compact) .kind[aria-pressed='true'] .kmedia { opacity: 1; transform: scale(1); }
-    .kinds:not(.compact) .kind:hover, .kinds:not(.compact) .kind:focus-visible, .kinds:not(.compact) .kind[aria-pressed='true'] { color: #fff; }
-    .kinds:not(.compact) .kind:hover small, .kinds:not(.compact) .kind:focus-visible small, .kinds:not(.compact) .kind[aria-pressed='true'] small { color: rgba(255, 255, 255, 0.82); }
-    .kinds:not(.compact) .kind[aria-pressed='true'] { box-shadow: 0 0 0 2px var(--sys-on-surface, #e8eaed); }
-    .k-image .kmedia { background-image: url('/ui/posters/gemini-image__page-cover.webp'); background-position: 90% 10%; background-size: 260%; }
-    .k-video .kmedia { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
-    .k-video:hover .kmedia, .k-video[aria-pressed='true'] .kmedia { background-image: url('/ui/home/word-video.webp'); }
-    .k-film .kmedia { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
-    .k-film:hover .kmedia, .k-film[aria-pressed='true'] .kmedia { background-image: url('/ui/home/word-film.webp'); }
-    .k-music .kmedia { background-image: url('/ui/posters/lyria_header.webp'); }
-    .k-voice .kmedia { background-image: url('/ui/posters/capability__native-audio_16-9.webp'); }
-    /* Music and Voice: an equaliser that moves like sound over the picture. */
-    .eq { position: absolute; z-index: 1; left: 14px; right: 14px; top: 14px; height: 40%; display: flex; align-items: center; justify-content: space-between; }
-    .eq i { width: 4px; height: calc(var(--h) * 100%); border-radius: 4px; background: rgba(255, 255, 255, 0.92); transform: scaleY(0.4); transform-origin: 50% 50%; }
-    .kind:hover .eq i, .kind:focus-visible .eq i, .kind[aria-pressed='true'] .eq i { animation: sound 640ms ease-in-out var(--d) infinite alternate; }
-    .k-voice .eq i { animation-duration: 380ms !important; }
-    @keyframes sound { from { transform: scaleY(0.25); } to { transform: scaleY(1); } }
-
-    /* Compact: one row of buttons under the box. */
-    .kinds.compact { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-    .kinds.compact .kind { height: 40px; padding: 0 16px 0 12px; border-radius: 999px; align-items: center; font-weight: 500; }
-    .kinds.compact .kbody { flex-direction: row; align-items: center; gap: 8px; }
-    .kinds.compact .kbody svg { width: 18px; height: 18px; }
-    .kinds.compact .ktext b { font-size: 14px; font-weight: 500; }
-    .kinds.compact small, .kinds.compact .kmedia { display: none; }
-    .kinds.compact .kind[aria-pressed='true'] { background: var(--sys-on-surface, #e8eaed); color: var(--sys-surface, #15171c); }
-
     /* Conversation */
     .thread { width: 100%; display: flex; flex-direction: column; gap: 18px; padding: 12px 0 8px; }
     .msg { display: flex; gap: 12px; align-items: flex-start; }
@@ -1187,7 +1623,7 @@ class GmHomeChat extends LitElement {
     @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 
     .job {
-      display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 18px; max-width: 560px;
+      display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 18px; width: 100%;
       background: var(--gm-glass-fill, rgba(30, 33, 48, 0.5)); border: 1px solid var(--gm-glass-border, rgba(255, 255, 255, 0.1));
     }
     .job-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px; font-size: 14px; }
@@ -1204,17 +1640,22 @@ class GmHomeChat extends LitElement {
     .shimmer.story { aspect-ratio: auto; height: 72px; }
     @keyframes shim { from { background-position: 100% 0; } to { background-position: -150% 0; } }
     @media (prefers-reduced-motion: reduce) {
-      .shimmer, .typing i, .spin, .icon.working svg, .eq i { animation: none !important; }
-      .kind, .kmedia { transition: none; }
-      .k-video:hover .kmedia, .k-video[aria-pressed='true'] .kmedia { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
-      .k-film:hover .kmedia, .k-film[aria-pressed='true'] .kmedia { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
+      .shimmer, .typing i, .spin, .icon.working svg, .audio-sk i, .think li.now i, .st.now i, .think-dots i, .bar i { animation: none !important; }
+      .pop, .adv { animation: none !important; }
     }
-    /* The picture at its own shape: no letterbox bars around it. */
-    .media { display: block; width: auto; height: auto; max-width: 100%; max-height: 480px; border-radius: 12px; }
-    .job > a { align-self: flex-start; line-height: 0; max-width: 100%; }
-    .job > .media { align-self: flex-start; }
-    .job:has(> a > img.media, > video.media) { width: fit-content; min-width: 300px; }
-    .audio { width: 100%; }
+    /* Results fill the card, which is as wide as the box; the picture sits
+       centred at its own shape on a quiet stage. */
+    .stage { display: flex; justify-content: center; align-items: center; width: 100%; border-radius: 14px; overflow: hidden;
+      background: color-mix(in srgb, var(--sys-on-surface, #15171c) 5%, transparent); }
+    .stage > a { line-height: 0; max-width: 100%; }
+    .media { display: block; width: auto; height: auto; max-width: 100%; max-height: 440px; border-radius: 0; margin: 0 auto; }
+    .stage .shimmer { height: 320px; width: auto; max-width: 100%; border-radius: 0; }
+    .audio { display: block; width: 100%; }
+    .audio-sk { height: 56px; display: flex; align-items: center; gap: 4px; padding: 0 18px; border-radius: 14px; }
+    .audio-sk i { flex: 1; height: calc(var(--h) * 70%); border-radius: 3px; background: rgba(127, 127, 127, 0.28);
+      animation: sound 900ms ease-in-out infinite alternate; transform-origin: 50% 50%; }
+    .audio-sk i:nth-child(3n) { animation-delay: -300ms; } .audio-sk i:nth-child(3n+1) { animation-delay: -600ms; }
+    @keyframes sound { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
     .job-note, .job-error { margin: 0 4px; font-size: 14px; line-height: 1.5; color: var(--sys-on-surface-variant, #6b7280); }
     .job-error { color: #d93025; }
     .job-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1223,33 +1664,157 @@ class GmHomeChat extends LitElement {
       background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #15171c); text-decoration: none; font-size: 13.5px; font-weight: 500; cursor: pointer;
     }
     .act:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
-    /* Type controls: a row of settings that slides open under the text. */
-    .ctl-wrap { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 300ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease; }
-    .ctl-wrap.open { grid-template-rows: 1fr; opacity: 1; }
-    .ctl-in { overflow: hidden; min-height: 0; }
-    .controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 6px 4px 52px; }
-    .ctl { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 30px 0 12px; border-radius: 999px;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); font-size: 13px; cursor: pointer; max-width: 100%; }
-    .ctl:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.18)); }
-    .ctl:focus-within { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 1px; }
-    .ctl-l { color: var(--sys-on-surface-variant, #6b7280); white-space: nowrap; }
-    .ctl select { appearance: none; -webkit-appearance: none; border: 0; outline: 0; background: transparent; color: var(--sys-on-surface, #15171c);
-      font: inherit; font-weight: 500; cursor: pointer; padding: 0; max-width: 180px; text-overflow: ellipsis; }
-    .ctl select option { color: #15171c; background: #fff; }
-    .ctl .caret { position: absolute; inset-inline-end: 9px; fill: currentColor; opacity: 0.6; pointer-events: none; }
-    :host-context([dir='rtl']) .ctl { padding: 0 12px 0 30px; }
-    .note { margin: 0 12px 4px 52px; font-size: 13px; color: var(--sys-on-surface-variant, #6b7280); }
+    .note { margin: 0 14px 4px; font-size: 13px; color: var(--sys-on-surface-variant, #6b7280); }
     .meta { font-size: 13px; color: var(--sys-on-surface-variant, #6b7280); margin-top: -6px; }
+
+    /* Under the box, like Claude's row: quiet pills that open our own menus.
+       Mode first, the type's main settings, Model at the end. */
+    .under { width: 100%; display: flex; align-items: center; gap: 6px; padding: 0 6px; min-height: 34px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 12px; border: 0; border-radius: 999px; flex: none;
+      background: transparent; color: var(--sys-on-surface-variant, #5f6368); font-size: 13px; cursor: pointer; white-space: nowrap; max-width: 260px;
+      transition: background 140ms ease, color 140ms ease;
+    }
+    .pill svg { fill: currentColor; opacity: 0.75; flex: none; }
+    .pill b { font-weight: 500; color: var(--sys-on-surface, #15171c); overflow: hidden; text-overflow: ellipsis; }
+    .pill .pl { opacity: 0.85; }
+    .pill:hover, .pill[aria-expanded='true'] { background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); }
+    .pill[role='switch'] { padding-inline-end: 12px; }
+    .pill[role='switch'].on b { color: var(--sys-primary, #1a73e8); }
+    .pill.mode { background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); padding-inline-start: 10px; }
+    .pill.mode.set { background: color-mix(in srgb, var(--sys-primary, #1a73e8) 16%, transparent); color: var(--sys-on-surface, #15171c); }
+    .pill.mode.set svg { opacity: 1; color: var(--sys-primary, #1a73e8); }
+    .mode-wrap { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+    .pill-x { width: 26px; height: 26px; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer; padding: 0;
+      background: transparent; color: var(--sys-on-surface-variant, #5f6368); }
+    .pill-x svg { fill: currentColor; }
+    .pill-x:hover { background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); }
+    .auto-tag { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--sys-primary, #1a73e8) 22%, transparent);
+      color: var(--sys-on-surface, #15171c); animation: tag-in 260ms ease; }
+    @keyframes tag-in { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: none; } }
+    .pill.in-adv { background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); max-width: 220px; }
+    .pill.in-adv .pl { display: none; }
+
+    /* Our dropdown: one at a time, under or above its pill, on the panel fill. */
+    .pop {
+      position: fixed; z-index: 60; max-height: min(360px, 60vh); overflow-y: auto; padding: 6px; border-radius: 16px;
+      background: var(--gm-panel, #1d1f25); color: var(--sys-on-surface, #e8eaed);
+      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.32), 0 0 0 1px color-mix(in srgb, var(--sys-on-surface, #e8eaed) 8%, transparent);
+      animation: pop-in 140ms ease-out; scrollbar-width: thin;
+    }
+    .pop.up { animation-name: pop-up; }
+    @keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    @keyframes pop-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .pop-title { padding: 6px 10px 4px; font-size: 12px; color: var(--sys-on-surface-variant, #9aa0a6); }
+    .pop button {
+      width: 100%; display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 6px 10px; border: 0; border-radius: 10px;
+      background: transparent; color: inherit; text-align: start; cursor: pointer; font-size: 14px;
+    }
+    .pop button svg { fill: currentColor; flex: none; opacity: 0.8; }
+    .pop button:hover, .pop button:focus-visible { background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); outline: none; }
+    .pop button:disabled { opacity: 0.45; cursor: default; }
+    .pop-l { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .pop-l small { font-size: 12px; color: var(--sys-on-surface-variant, #9aa0a6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pop-sep { height: 1px; margin: 5px 8px; background: color-mix(in srgb, var(--sys-on-surface, #e8eaed) 10%, transparent); }
+    .plus { position: relative; }
+    .plus.dot-on::after { content: ''; position: absolute; top: 9px; inset-inline-end: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--sys-primary, #1a73e8); }
+
+    /* Advanced settings: a card above the box. */
+    .adv {
+      width: 100%; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 12px; border-radius: 22px;
+      background: var(--gm-panel, #1d1f25); box-shadow: 0 10px 34px rgba(0, 0, 0, 0.22); animation: pop-up 180ms ease-out;
+    }
+    .adv-head { display: flex; align-items: center; gap: 8px; padding: 0 2px 4px 6px; font-size: 14px; }
+    .adv-head span { flex: 1; color: var(--sys-on-surface-variant, #6b7280); font-size: 13px; }
+    .adv-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 12px; }
+    .adv-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 4px 6px; border-radius: 12px; }
+    .adv-row.wide { grid-column: 1 / -1; flex-direction: column; align-items: stretch; }
+    .adv-l { display: flex; flex-direction: column; font-size: 14px; }
+    .adv-l small { font-size: 12px; color: var(--sys-on-surface-variant, #6b7280); }
+    .field { width: 100%; border: 0; border-radius: 12px; padding: 9px 12px; font: inherit; font-size: 14px; color: inherit; resize: vertical;
+      background: var(--gm-field-bg, var(--gm-tonal, rgba(127, 127, 127, 0.12))); }
+    .adv-row:not(.wide) .field { width: 120px; }
+    .field:focus { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 0; }
+    .switch { position: relative; width: 40px; height: 24px; flex: none; border: 0; border-radius: 999px; padding: 0; cursor: pointer;
+      background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.28)); transition: background 160ms ease; }
+    .switch i { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform 160ms ease; }
+    .switch.on { background: var(--sys-primary, #1a73e8); }
+    .switch.on i { transform: translateX(16px); }
+    :host-context([dir='rtl']) .switch.on i { transform: translateX(-16px); }
+    .reset { align-self: flex-start; margin: 4px 0 0 4px; height: 32px; }
+
+    /* Attachments show which slot they fill (first frame, reference...). */
+    .file video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .file-slot { position: absolute; left: 3px; right: 3px; bottom: 3px; height: 18px; border: 0; border-radius: 6px; padding: 0 4px;
+      font-size: 10.5px; line-height: 18px; color: #fff; background: rgba(0, 0, 0, 0.62); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-slot:disabled { cursor: default; }
+
+    /* Starter prompts on the empty page. */
+    .starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 100%; }
+    .starter { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 11px; border: 0; border-radius: 999px; cursor: pointer;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface-variant, #5f6368); font-size: 13.5px; max-width: 100%; }
+    .starter span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .starter svg { fill: currentColor; flex: none; }
+    .starter:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); color: var(--sys-on-surface, #15171c); }
+
+    /* The chat's thinking: live steps, folded to one line when done. */
+    .think { font-size: 14px; color: var(--sys-on-surface-variant, #6b7280); }
+    .think summary { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; padding: 4px 10px 4px 8px; margin-inline-start: -8px;
+      border-radius: 999px; user-select: none; }
+    .think summary::-webkit-details-marker { display: none; }
+    .think summary:hover { background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); }
+    .think summary svg { fill: currentColor; }
+    .think summary svg:last-child { transition: transform 160ms ease; opacity: 0.7; }
+    .think[open] summary svg:last-child { transform: rotate(180deg); }
+    .think.live summary span:first-of-type { background: linear-gradient(90deg, var(--sys-on-surface-variant, #6b7280) 0%, var(--sys-on-surface, #15171c) 50%, var(--sys-on-surface-variant, #6b7280) 100%);
+      background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shim 1.6s linear infinite; }
+    .think-n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; font-size: 11.5px; background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); }
+    .think-dots { display: inline-flex; gap: 3px; }
+    .think-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: blink 1.2s infinite both; }
+    .think-dots i:nth-child(2) { animation-delay: 0.15s; } .think-dots i:nth-child(3) { animation-delay: 0.3s; }
+    .think-list { list-style: none; margin: 6px 0 2px; padding: 0 0 0 4px; display: flex; flex-direction: column; gap: 8px;
+      border-inline-start: 2px solid var(--gm-tonal, rgba(127, 127, 127, 0.16)); padding-inline-start: 12px; }
+    .think-list li { display: flex; gap: 8px; align-items: flex-start; animation: step-in 240ms ease-out; }
+    @keyframes step-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .think-list li svg { fill: #1e8e3e; flex: none; margin-top: 3px; }
+    .think-list li > i { width: 10px; height: 10px; margin: 5px 2px 0; border-radius: 50%; flex: none; background: var(--sys-primary, #1a73e8); animation: pulse 900ms ease-in-out infinite alternate; }
+    .think-list span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .think-list b { font-weight: 500; color: var(--sys-on-surface, #15171c); }
+    .think-list small { font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+    /* A job's steps (the studios' progress card): stages, timer, estimate bar. */
+    .prog { font-size: 13.5px; color: var(--sys-on-surface-variant, #6b7280); padding: 0 4px; }
+    .prog summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; padding: 2px 0; }
+    .prog summary::-webkit-details-marker { display: none; }
+    .prog-t { flex: 1; color: var(--sys-on-surface, #15171c); font-weight: 500; }
+    .prog.live .prog-t { animation: pulse 900ms ease-in-out infinite alternate; }
+    .prog-time, .prog-n { font-variant-numeric: tabular-nums; font-size: 12.5px; }
+    .bar { height: 4px; margin: 6px 0 8px; border-radius: 999px; overflow: hidden; background: var(--gm-tonal, rgba(127, 127, 127, 0.16)); }
+    .bar i { display: block; height: 100%; border-radius: inherit; background: var(--sys-primary, #1a73e8); transition: width 900ms linear;
+      background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent); background-size: 60% 100%; background-repeat: no-repeat;
+      animation: bar-glint 1.6s linear infinite; }
+    @keyframes bar-glint { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+    .stages { list-style: none; margin: 4px 0 2px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+    .stages.tasks { flex-direction: column; gap: 4px; }
+    .st { display: inline-flex; align-items: center; gap: 6px; }
+    .st i { width: 8px; height: 8px; border-radius: 50%; background: rgba(127, 127, 127, 0.35); flex: none; margin: 0 3px; }
+    .st svg { fill: #1e8e3e; flex: none; }
+    .st.done { color: var(--sys-on-surface, #15171c); }
+    .st.now { color: var(--sys-on-surface, #15171c); font-weight: 500; }
+    .st.now i { background: var(--sys-primary, #1a73e8); animation: pulse 900ms ease-in-out infinite alternate; }
+    .st.bad i { background: #d93025; }
+    .st.more { opacity: 0.7; padding-inline-start: 20px; }
+    .avatar.busy { animation: pulse 900ms ease-in-out infinite alternate; }
+
     @media (max-width: 600px) {
-      .controls { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-inline-start: 4px; }
-      .controls::-webkit-scrollbar { display: none; }
-      .ctl { flex: none; }
+      .under { overflow-x: auto; scrollbar-width: none; padding: 0 2px; }
+      .under::-webkit-scrollbar { display: none; }
       .note { margin-inline-start: 8px; }
+      .adv-row:not(.wide) .field { width: 96px; }
     }
     /* The buttons above the box float over the thread: give them the box's fill. */
     .dock-top .ghost, .dock-top .jobs-pill { background: var(--gm-panel, #1d1f25); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14); }
     .dock-top .ghost:hover, .dock-top .jobs-pill:hover { filter: brightness(1.06); }
-    @media (prefers-reduced-motion: reduce) { .ctl-wrap { transition: none; } }
     /* Film steps on a story job's card. */
     .steps { list-style: none; margin: 0; padding: 0 4px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--sys-on-surface-variant, #6b7280); }
     .step { display: inline-flex; align-items: center; gap: 6px; }
@@ -1261,7 +1826,6 @@ class GmHomeChat extends LitElement {
     .step.bad i { background: #d93025; }
     .act:disabled, .pa:disabled { opacity: 0.5; cursor: default; }
     /* In the thread, results stay small; the jobs panel holds the rest. */
-    .job .media { max-height: 360px; }
 
     /* Dropping a picture or a job card on the box. */
     .box.drop { border-color: var(--sys-primary, #1a73e8); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sys-primary, #1a73e8) 30%, transparent); }
@@ -1316,9 +1880,6 @@ class GmHomeChat extends LitElement {
     .jobs-pill:hover { filter: brightness(1.08); }
     .jobs-pill.inline { display: none; position: static; box-shadow: none; background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); }
     .dock-top { align-self: stretch; display: flex; justify-content: flex-end; gap: 8px; }
-    .job .shimmer { width: 420px; max-width: 100%; }
-    .job .shimmer.image { width: 300px; }
-    .job:has(> .shimmer) { width: fit-content; max-width: 100%; }
     @media (max-width: 760px) {
       .jobs { top: auto; bottom: 0; inset-inline: 0; width: auto; max-height: 72dvh; border-radius: 24px 24px 0 0; animation-name: sheet-in; }
       @keyframes sheet-in { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -1334,10 +1895,6 @@ class GmHomeChat extends LitElement {
       .wrap.empty { gap: 18px; padding-bottom: 0; }
       .box { padding: 6px; border-radius: 26px; }
       textarea { font-size: 16px; padding: 10px 4px; }
-      .kinds:not(.compact) { display: flex; overflow-x: auto; scrollbar-width: none; gap: 10px; padding-bottom: 2px; }
-      .kinds:not(.compact) .kind { flex: 0 0 132px; height: 104px; }
-      .kinds.compact { gap: 6px; }
-      .kinds.compact .kind { padding: 0 12px 0 10px; }
       .bubble { max-width: 88%; }
     }
   `;

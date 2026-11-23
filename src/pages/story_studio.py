@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Story Studio (/story): idea -> scenario -> storyboard -> editor -> film.
+"""Story Studio (/story): Stories -> Setup -> Director's Desk -> Timeline & Export.
 
 The page only edits small state (ids, text, URIs). Generation runs in
 background jobs (services/story_jobs.py); a ticker polls them once a second so
@@ -25,8 +25,8 @@ import json
 
 import mesop as me
 
-from common.analytics import get_logger
 from common import brand_kit
+from common.analytics import get_logger
 from common.notify import notify
 from common.prompt_prefill import (
     is_new_prompt_arrival,
@@ -38,47 +38,53 @@ from components.header import header
 from components.library.events import LibrarySelectionChangeEvent
 from components.library.library_chooser_button import library_chooser_button
 from components.page_scaffold import page_frame, page_scaffold
+from components.story_studio import director_desk as desk_view
+from components.story_studio import setup_view, timeline_view
 from components.story_studio.set_cards import (
     SetHandlers,
-    asset_card,
-    card_key,
     parse_key,
 )
 from components.story_studio.widgets import (
     film_compare,
-    story_idea_watch,
     story_stepper,
-    story_style_picker,
     story_ticker,
-    story_timeline,
 )
-from config.default import Default
-from services import story_autoset, story_fix, story_jobs, story_subtitles, story_versions
+from services import (
+    story_autoset,
+    story_director,
+    story_export,
+    story_fix,
+    story_jobs,
+    story_refs,
+    story_subtitles,
+    story_versions,
+)
+from services import story_timeline as timeline_mod
 from services.story_models import (
-    ASPECT_RATIOS,
     CAMERA_IDS,
-    CAMERA_PRESETS,
-    LANGUAGES,
+    PACING_IDS,
+    SHOT_SIZE_IDS,
     STEP_IDS,
-    STEPS,
+    STORY_VIDEO_ENGINES,
     STYLE_BY_ID,
-    STYLES,
-    SPEECH_HINTS,
     SPEECH_MODES,
+    STYLES,
+    TRANSITION_IDS,
     VOICES,
+    Scene,
     Story,
     apply_caps,
     can_enter,
     default_music_prompt,
     furthest_step,
+    frame_scenes,
+    frames_ready,
     max_words,
     reachable_steps,
-    set_text_from_cast,
-    supported_durations,
+    resolution_options,
+    take_groups,
 )
-from services import story_timeline as timeline_mod
 from services.story_service import (
-    AUDIO_MIME_TYPES,
     display_url,
     get_backend,
     is_mock_mode,
@@ -96,6 +102,7 @@ from services.story_sets import (
 from services.story_sets import duplicate as set_duplicate
 from services.story_store import StoryAccessError, get_store
 from state.state import AppState
+from state.story_export_state import StoryExportState
 from state.story_state import StoryState
 
 logger = get_logger(__name__)
@@ -104,23 +111,13 @@ logger = get_logger(__name__)
 # or the person on screen speaking (Omni renders the speech).
 AUDIO_VOICEOVER, AUDIO_ON_CAMERA = "voiceover", "camera"
 
-EXAMPLE_IDEAS = [
-    "A lighthouse keeper befriends a lost baby whale and helps it find its family.",
-    "A tiny robot opens a coffee shop on Mars and its first customer is a dust storm.",
-    "A grandmother's recipe book comes alive the night before the village festival.",
-]
-EXAMPLE_LABELS = [
-    "Lighthouse and whale",
-    "Robot café on Mars",
-    "The living recipe book",
-]
-
 STATUS_LABEL = {
     "queued": "Queued",
     "running": "Working",
     "done": "Done",
     "failed": "Failed",
     "skipped": "Skipped",
+    "cancelled": "Cancelled",
 }
 
 
@@ -141,6 +138,8 @@ def on_load(e: me.LoadEvent):
             step = me.query_params.get("step", "")
             if step and can_enter(step, _story()):
                 s.step = step
+                s.desk_tab = "set" if step == "set" else "shots"
+    _refresh_brands()  # a brand made on /brand shows up on return
     filled = _prefill_idea()
     yield
     if take_autostart(filled):  # Home type chip: write the scenario now
@@ -152,6 +151,7 @@ _JOB_STEP = {
     "scenario": "scenario",
     "set": "set",
     "storyboard": "storyboard",
+    "clips": "editor",
     "video": "video",
     "fix": "video",
 }
@@ -172,6 +172,7 @@ def open_for_agent(story_id: str, step: str = "") -> None:
     running = s.job_running and _JOB_STEP.get(s.job_kind) == step
     if step and (running or can_enter(step, _story())):
         s.step = step
+        s.desk_tab = "set" if step == "set" else "shots"
 
 
 def _prefill_idea() -> bool:
@@ -244,14 +245,8 @@ def story_studio_content():
             stories_step()
         elif step == "create":
             create_step(story)
-        elif step == "scenario" and story:
-            scenario_step(story)
-        elif step == "set" and story:
-            set_step(story)
-        elif step == "storyboard" and story:
-            storyboard_step(story)
-        elif step == "editor" and story:
-            editor_step(story)
+        elif step in ("scenario", "set", "storyboard", "editor") and story:
+            director_desk(story)
         elif step == "video" and story:
             video_step(story)
         else:
@@ -325,18 +320,31 @@ def _refresh_stories() -> None:
 
 def _load_form(story: Story) -> None:
     s = me.state(StoryState)
+    s.input_mode = getattr(story, "input_mode", "idea") or "idea"
+    s.raw_script = getattr(story, "raw_script", "") or ""
+    s.target_seconds = int(getattr(story, "target_seconds", 0) or 0)
+    s.pacing = getattr(story, "pacing", "cinematic") or "cinematic"
+    s.video_model = getattr(story, "video_model", "") or ""
     s.idea = story.idea
     s.character = story.character
     s.language = story.language
     s.speech_mode = story.speech_mode
-    s.use_brand = bool(story.brand_json)
+    s.brand_id = story.brand_id or ("none" if not story.brand_json else "")
+    s.duration_text = (
+        f"{story.target_seconds}s" if getattr(story, "target_seconds", 0) else ""
+    )
+    s.resolution = getattr(story, "resolution", "") or ""
+    s.style_text = getattr(story, "style_prompt", "") or ""
+    s.refs_json = story_refs.dump(story_refs.parse(getattr(story, "references_json", "")))
+    s.ref_menu_open = False
     s.scene_count = story.scene_count
     s.duration = story.duration
     s.aspect_ratio = story.aspect_ratio
     s.style = story.style
     s.camera = story.camera
     s.reference_uri = story.reference_uri
-    s.create_set_id = story.set_id
+    # A set made from Setup references is shown again as its references.
+    s.create_set_id = "" if s.refs_json != "[]" else story.set_id
     s.auto_json = ""
     s.pinned_json = "[]"
 
@@ -355,6 +363,11 @@ def _open_story(story_id: str) -> None:
     _load_form(story)
     _load_set(story, force=True)
     s.step = furthest_step(story)
+    s.desk_tab = "set" if s.step == "set" else "shots"
+    s.seq_filter = "all"
+    s.animatic_index = 0
+    s.expanded_shots_json = "[]"
+    s.soundtrack_open = False
     job = story_jobs.latest_job_for(story.id, _owner())
     if job is not None:
         _watch(job.id)
@@ -429,24 +442,56 @@ def _scene_task(kind: str, index: int) -> dict | None:
 
 
 def _stepper_steps(story: Story | None) -> list[dict]:
+    """4-stage visual stepper: Stories -> Setup -> Director's Desk -> Timeline & Export."""
     s = me.state(StoryState)
     reach = reachable_steps(story)
     current = s.step if s.step in STEP_IDS else "stories"
-    furthest = furthest_step(story) if story else "stories"
-    cur_i = STEP_IDS.index(current)
-    far_i = max(STEP_IDS.index(furthest), cur_i)
-    out = []
-    for i, (sid, label, _icon) in enumerate(STEPS):
-        if sid == current:
-            state = "current"
-        elif (i < far_i and sid in reach) or (
-            sid == "video" and story and story.final_uri
-        ):
-            state = "done"
-        else:
-            state = "upcoming"
-        out.append({"id": sid, "label": label, "state": state, "enabled": sid in reach})
-    return out
+    desk_active = current in ("scenario", "set", "storyboard", "editor")
+    desk_enabled = any(
+        sid in reach for sid in ("scenario", "set", "storyboard", "editor")
+    )
+    video_enabled = "video" in reach
+    has_film = bool(story and story.final_uri)
+
+    return [
+        {
+            "id": "stories",
+            "label": "Stories",
+            "state": "current"
+            if current == "stories"
+            else ("done" if story is not None or current != "stories" else "upcoming"),
+            "enabled": True,
+        },
+        {
+            "id": "create",
+            "label": "Setup",
+            "state": "current"
+            if current == "create"
+            else (
+                "done"
+                if (desk_active or current == "video" or desk_enabled)
+                and current != "stories"
+                else "upcoming"
+            ),
+            "enabled": True,
+        },
+        {
+            "id": "editor",
+            "label": "Director's Desk",
+            "state": "current"
+            if desk_active
+            else ("done" if (current == "video" or has_film) and desk_enabled else "upcoming"),
+            "enabled": desk_enabled,
+        },
+        {
+            "id": "video",
+            "label": "Timeline & Export",
+            "state": "current"
+            if current == "video"
+            else ("done" if has_film else "upcoming"),
+            "enabled": video_enabled,
+        },
+    ]
 
 
 def _section_title(title: str, subtitle: str = "") -> None:
@@ -485,8 +530,18 @@ def on_step_select(e: me.WebEvent):
     if target == "stories":
         _refresh_stories()
         s.step = "stories"
-    elif target == "create" or can_enter(target, story):
+    elif target == "create":
+        s.step = "create"
+    elif target == "editor":
+        for cand in ("editor", "storyboard", "set", "scenario"):
+            if can_enter(cand, story):
+                s.step = cand
+                s.desk_tab = "set" if cand == "set" else "shots"
+                break
+    elif can_enter(target, story):
         s.step = target
+        if target in ("scenario", "set", "storyboard"):
+            s.desk_tab = "set" if target == "set" else "shots"
     yield
 
 
@@ -499,7 +554,9 @@ def _outputs_ready(story: Story | None, kind: str) -> bool:
     if story is None:
         return True
     if kind == "storyboard":
-        return bool(story.scenes) and all(sc.frame_uri for sc in story.scenes)
+        return frames_ready(story)
+    if kind == "clips":
+        return bool(story.scenes) and any(sc.clip_uri for sc in story.scenes)
     if kind in ("video", "export", "fix"):
         return bool(story.final_uri)
     if kind == "scenario":
@@ -508,11 +565,7 @@ def _outputs_ready(story: Story | None, kind: str) -> bool:
 
 
 def _on_missing_job(s: StoryState) -> None:
-    """A job lives in the memory of the server instance that started it. A
-    tick served by another instance (or after a restart) cannot see it, which
-    used to stop polling with a stale story on screen ("No frame yet" until
-    you left the step and came back). Show what the store has, and keep
-    checking it for a while in case the job is still running elsewhere."""
+    """A job lives in the memory of the server instance that started it."""
     s.job_json = ""
     s.job_misses += 1
     story = _reload_story()
@@ -524,7 +577,15 @@ def _on_missing_job(s: StoryState) -> None:
 
 
 # Jobs worth a browser notification (common/notify.py): the long ones.
-NOTIFY_KINDS = ("scenario", "storyboard", "video", "export", "music", "subtitles", "fix")
+NOTIFY_KINDS = (
+    "scenario",
+    "storyboard",
+    "video",
+    "export",
+    "music",
+    "subtitles",
+    "fix",
+)
 
 
 def on_tick(e: me.WebEvent):
@@ -547,10 +608,18 @@ def on_tick(e: me.WebEvent):
         story = _reload_story()
         if snap["kind"] in ("set", "scenario"):
             _load_set(story)
+    if snap["status"] != "running" and snap.get("next_job"):
+        # Setup's guided flow: the breakdown is written, frames paint now.
+        _watch(snap["next_job"])
+        s.selected_shot = 0
+        _reload_story()
+        return
     if snap["status"] != "running":
         s.job_running = False
         story = _story()
-        if (
+        if snap["status"] == "cancelled":
+            s.notice = "Job cancelled. Finished work was kept."
+        elif (
             snap["kind"] == "video"
             and story
             and story.final_uri
@@ -593,6 +662,19 @@ def on_retry_job(e: me.ClickEvent):
         _watch(job.id)
 
 
+def on_cancel_job(e: me.ClickEvent):
+    s = me.state(StoryState)
+    if not s.job_id:
+        return
+    cancel_fn = getattr(story_jobs, "cancel_job", None)
+    if callable(cancel_fn):
+        cancel_fn(s.job_id, _owner())
+        snap = story_jobs.job_snapshot(s.job_id, _owner())
+        s.job_json = json.dumps(snap) if snap else ""
+        s.job_running = bool(snap and snap["status"] == "running")
+        s.notice = "Cancelling current job…"
+
+
 # ---------------------------------------------------------------------------
 # Progress panel
 # ---------------------------------------------------------------------------
@@ -630,6 +712,7 @@ def progress_panel(title: str, kinds: tuple[str, ...]) -> None:
                     "running": "In progress",
                     "done": "Complete",
                     "failed": "Needs attention",
+                    "cancelled": "Cancelled",
                 }.get(status, status),
                 f"ss-chip-{status}",
             )
@@ -672,7 +755,24 @@ def progress_panel(title: str, kinds: tuple[str, ...]) -> None:
                             white_space="nowrap",
                         ),
                     )
-        if status == "failed":
+        if status == "running":
+            with me.box(classes="ss-panel-foot"):
+                me.text(
+                    "Running in the background. You can cancel remaining tasks at any time.",
+                    style=me.Style(
+                        font_size=13,
+                        color=me.theme_var("on-surface-variant"),
+                        flex_grow=1,
+                    ),
+                )
+                me.button(
+                    "Cancel",
+                    type="stroked",
+                    color="warn",
+                    on_click=on_cancel_job,
+                    key="ss-panel-cancel",
+                )
+        elif status == "failed":
             with me.box(classes="ss-panel-foot"):
                 me.text(
                     job.get("message") or "Some steps failed.",
@@ -698,7 +798,7 @@ def stories_step() -> None:
     rows = json.loads(s.stories_json or "[]")
     _section_title(
         "Your stories",
-        "Pick up where you left off, or start a new film from one idea.",
+        "Pick up where you left off, or start a new film from an idea or script.",
     )
     with me.box(classes="ss-stories"):
         with me.box(classes="ss-new", on_click=on_new_story):
@@ -754,7 +854,7 @@ def story_card(r: dict) -> None:
             )
             with me.box(classes="ss-meta"):
                 _chip(style["chip"])
-                me.text(f"{r['scenes']} scenes", style=me.Style(font_size=13))
+                me.text(f"{r['scenes']} shots", style=me.Style(font_size=13))
                 me.text("·", style=me.Style(font_size=13))
                 me.text(
                     f"Updated {_fmt_date(r['updated'])}", style=me.Style(font_size=13)
@@ -796,12 +896,23 @@ def on_new_story(e: me.ClickEvent):
 
 
 def _start_new_story() -> None:
-    """Clear the draft and open the Create step for a new story."""
+    """Clear the draft and open the Setup step for a new story."""
     s = me.state(StoryState)
     _set_story(None)
+    s.input_mode = "idea"
+    s.raw_script = ""
+    s.target_seconds = 0
+    s.duration_text = ""
+    s.pacing = "cinematic"
+    s.video_model = ""
+    s.resolution = ""
+    s.style_text = ""
     s.idea = ""
     s.character = ""
     s.reference_uri = ""
+    s.refs_json = "[]"
+    s.ref_menu_open = False
+    s.brand_id = ""
     s.create_set_id = ""
     s.auto_json = ""
     s.pinned_json = "[]"
@@ -809,8 +920,18 @@ def _start_new_story() -> None:
     s.job_id = ""
     s.job_json = ""
     s.job_running = False
+    s.desk_tab = "shots"
+    s.seq_filter = "all"
+    s.soundtrack_open = False
+    s.animatic_index = 0
+    s.expanded_shots_json = "[]"
+    s.selected_shot = 0
+    s.refs_open = False
+    s.preview_open = False
+    s.redo_note = ""
     s.error = ""
     s.step = "create"
+    _refresh_brands()
 
 
 def on_continue_story(e: me.ClickEvent):
@@ -837,271 +958,110 @@ def on_confirm_delete(e: me.ClickEvent):
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Create
+# Step 2: Setup (Create)
 # ---------------------------------------------------------------------------
+
+
+_SETUP_HANDLERS: setup_view.SetupHandlers | None = None
+
+
+def _setup_handlers() -> setup_view.SetupHandlers:
+    global _SETUP_HANDLERS
+    if _SETUP_HANDLERS is None:
+        _SETUP_HANDLERS = setup_view.SetupHandlers(
+            on_input_mode=on_input_mode,
+            on_idea_live=on_idea_live,
+            on_idea_blur=on_idea_blur,
+            on_script_blur=on_script_blur,
+            on_duration_live=on_duration_live,
+            on_duration_blur=on_duration_blur,
+            on_pacing=on_pacing,
+            on_video_model=on_video_model,
+            on_aspect=on_aspect,
+            on_language=on_language,
+            on_resolution=on_resolution,
+            on_style_chip=on_style_chip,
+            on_style_blur=on_style_blur,
+            on_pick_set=on_pick_set,
+            on_brand=on_brand,
+            on_ref_menu=on_ref_menu,
+            on_add_ref=on_add_ref,
+            on_ref_tag=on_ref_tag,
+            on_ref_role=on_ref_role,
+            on_ref_voice=on_ref_voice,
+            on_ref_upload=on_ref_upload,
+            on_ref_mention=on_ref_mention,
+            on_ref_remove=on_ref_remove,
+            on_generate_scenario=on_generate_scenario,
+            render_auto_note=_auto_note,
+            fmt_secs=_fmt_secs,
+        )
+    return _SETUP_HANDLERS
 
 
 def create_step(story: Story | None) -> None:
     s = me.state(StoryState)
-    caps = apply_caps(s.scene_count, s.duration)
     busy = _job_active_for("scenario")
-    with me.box(classes="ss-create"):
-        with me.box(classes="ss-card ss-create-main"):
-            _section_title(
-                "What's your story?",
-                "One or two sentences is enough. Gemini writes the scenes.",
-            )
-            story_idea_watch(on_idea=on_idea_live, key="ss-idea-watch")
-            with me.box(classes="ss-idea-field"):
-                me.textarea(
-                    label="Your idea",
-                    value=s.idea,
-                    rows=4,
-                    appearance="outline",
-                    placeholder="A lighthouse keeper befriends a lost baby whale…",
-                    on_blur=on_idea_blur,
-                    style=me.Style(width="100%"),
-                    key="ss-idea",
-                )
-            _auto_note()
-            with me.box(classes="ss-examples"):
-                me.text(
-                    "Try:",
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
-                for i, idea in enumerate(EXAMPLE_IDEAS):
-                    me.button(
-                        EXAMPLE_LABELS[i],
-                        type="stroked",
-                        on_click=on_example,
-                        key=f"ex-{i}",
-                    )
-            set_rows = _sets_rows()
-            picked = next((r for r in set_rows if r["id"] == s.create_set_id), None)
-            me.select(
-                label="Set",
-                options=[
-                    me.SelectOption(label="None (make one from my story)", value="none")
-                ]
-                + [
-                    me.SelectOption(
-                        label=f"{r['name']} · {r['summary']}", value=r["id"]
-                    )
-                    for r in set_rows
-                ],
-                value=picked["id"] if picked else "none",
-                appearance="outline",
-                on_selection_change=on_pick_set,
-                style=me.Style(width="100%"),
-                key="ss-set-pick",
-            )
-            if picked is None:
-                me.input(
-                    label="Main character (optional)",
-                    value=s.character,
-                    appearance="outline",
-                    placeholder="e.g. an old keeper with a grey beard and a yellow raincoat",
-                    on_blur=on_character_blur,
-                    style=me.Style(width="100%"),
-                    key="ss-character",
-                )
-            with me.box(classes="ss-fields"):
-                me.select(
-                    label="Language",
-                    options=[me.SelectOption(label=k, value=k) for k in LANGUAGES],
-                    value=s.language,
-                    appearance="outline",
-                    on_selection_change=on_language,
-                    key="ss-lang",
-                )
-                me.select(
-                    label="Who speaks",
-                    options=[
-                        me.SelectOption(label=label, value=k)
-                        for k, label in SPEECH_MODES.items()
-                    ],
-                    value=s.speech_mode,
-                    appearance="outline",
-                    on_selection_change=on_speech_mode,
-                    key="ss-speech",
-                )
-                cfg = Default()
-                me.select(
-                    label="Scenes",
-                    options=[
-                        me.SelectOption(label=f"{n} scenes", value=str(n))
-                        for n in range(cfg.STORY_MIN_SCENES, cfg.STORY_MAX_SCENES + 1)
-                    ],
-                    value=str(s.scene_count),
-                    appearance="outline",
-                    on_selection_change=on_scene_count,
-                    key="ss-count",
-                )
-                me.select(
-                    label="Scene length",
-                    options=[
-                        me.SelectOption(label=f"{d} seconds", value=str(d))
-                        for d in supported_durations()
-                    ],
-                    value=str(s.duration),
-                    appearance="outline",
-                    on_selection_change=on_duration,
-                    key="ss-dur",
-                )
-                me.select(
-                    label="Aspect ratio",
-                    options=[
-                        me.SelectOption(
-                            label=f"{a} {'landscape' if a == '16:9' else 'portrait'}",
-                            value=a,
-                        )
-                        for a in ASPECT_RATIOS
-                    ],
-                    value=s.aspect_ratio,
-                    appearance="outline",
-                    on_selection_change=on_aspect,
-                    key="ss-aspect",
-                )
-                me.select(
-                    label="Camera motion",
-                    options=[
-                        me.SelectOption(label=v["label"], value=k)
-                        for k, v in CAMERA_PRESETS.items()
-                    ],
-                    value=s.camera,
-                    appearance="outline",
-                    on_selection_change=on_camera,
-                    key="ss-camera",
-                )
-            me.text(
-                SPEECH_HINTS.get(s.speech_mode, ""),
-                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-            )
-            with me.box(classes="ss-brand-row"):
-                me.slide_toggle(
-                    "Use my brand",
-                    checked=s.use_brand,
-                    on_change=on_use_brand,
-                    key="ss-use-brand",
-                )
-                me.link(text="Edit my brand", url="/brand", open_in_new_tab=True)
-            story_style_picker(
-                options=[
-                    {
-                        "id": st["id"],
-                        "label": st["label"],
-                        "src": f"/ui/story/{st['id']}.svg",
-                    }
-                    for st in STYLES
-                ],
-                value=s.style,
-                label="Style",
-                on_change=on_style,
-                key="ss-style",
-            )
-            with me.box(classes="ss-ref" + (" is-hidden" if picked else "")):
-                with me.box(classes="ss-ref-text"):
-                    me.text(
-                        "Character reference (optional)",
-                        style=me.Style(font_weight=600, font_size=14),
-                    )
-                    me.text(
-                        "Upload a photo or drawing to keep the same look in every frame.",
-                        style=me.Style(
-                            font_size=13, color=me.theme_var("on-surface-variant")
-                        ),
-                    )
-                if s.reference_uri:
-                    me.image(
-                        src=display_url(s.reference_uri),
-                        alt="Character reference",
-                        style=me.Style(
-                            width=72, height=72, object_fit="cover", border_radius=10
-                        ),
-                    )
-                    me.button("Remove", type="stroked", on_click=on_remove_reference)
-                else:
-                    me.uploader(
-                        label="Upload image",
-                        accepted_file_types=["image/png", "image/jpeg", "image/webp"],
-                        type="stroked",
-                        on_upload=on_upload_reference,
-                        key="ss-upload",
-                    )
+    setup_view.render_setup(
+        s,
+        story,
+        busy=busy,
+        set_rows=_sets_rows(),
+        h=_setup_handlers(),
+    )
 
-        with me.box(classes="ss-card ss-summary"):
-            me.text(
-                "Your film",
-                style=me.Style(
-                    font_size=14,
-                    font_weight=600,
-                    color=me.theme_var("on-surface-variant"),
-                ),
-            )
-            me.text(
-                f"≈ {caps.scene_count * caps.duration}s",
-                style=me.Style(font_size=40, font_weight=700, line_height="1.1"),
-            )
-            with me.box(classes="ss-summary-lines"):
-                me.text(f"{caps.scene_count} scenes × {caps.duration}s")
-                me.text(
-                    f"{s.aspect_ratio} · {caps.resolution} · {STYLE_BY_ID.get(s.style, STYLES[0])['label']}"
-                )
-                me.text(
-                    f"Camera: {CAMERA_PRESETS.get(s.camera, CAMERA_PRESETS['auto'])['label']}"
-                )
-            for note in caps.notes:
-                me.text(
-                    note,
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
-            with me.box(classes="ss-next"):
-                me.text(
-                    "What happens next", style=me.Style(font_size=13, font_weight=600)
-                )
-                for icon, line in [
-                    ("description", "Gemini writes the scenes. You edit and approve."),
-                    (
-                        "view_carousel",
-                        "One still per scene, same character throughout.",
-                    ),
-                    (
-                        "movie",
-                        "Gemini Omni films each still with sound, then we add music and voice.",
-                    ),
-                ]:
-                    with me.box(classes="ss-next-row"):
-                        me.icon(
-                            icon,
-                            style=me.Style(
-                                font_size=18, width=18, height=18, flex_shrink=0
-                            ),
-                        )
-                        me.text(line, style=me.Style(font_size=13))
-            if story and story.scenes and not busy:
-                me.text(
-                    "This writes a new scenario and replaces the current scenes.",
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
-            me.button(
-                "Writing scenario…" if busy else "Generate scenario",
-                type="flat",
-                color="primary",
-                disabled=busy,
-                on_click=on_generate_scenario,
-                style=me.Style(width="100%", height=48, font_size=15),
-                key="ss-generate",
-            )
+
+def on_input_mode(e: me.ButtonToggleChangeEvent):
+    if e.value in ("idea", "script"):
+        me.state(StoryState).input_mode = e.value
 
 
 def on_idea_blur(e: me.InputBlurEvent):
     me.state(StoryState).idea = e.value
+
+
+def on_script_blur(e: me.InputBlurEvent):
+    me.state(StoryState).raw_script = e.value
+
+
+def _set_duration_text(text: str) -> None:
+    s = me.state(StoryState)
+    s.duration_text = " ".join(str(text or "").split())[:24]
+    secs = story_director.parse_duration_text(s.duration_text)
+    s.target_seconds = int(secs or 0)
+    if secs:
+        _pin("film_seconds")
+
+
+def on_duration_live(e: me.WebEvent):
+    """Typing paused in the duration box: the blueprint updates."""
+    _set_duration_text(str((e.value or {}).get("value", "")))
+
+
+def on_duration_blur(e: me.InputBlurEvent):
+    _set_duration_text(e.value)
+
+
+def on_pacing(e: me.ClickEvent):
+    value = (e.key or "").split("-", 1)[-1]
+    if value in PACING_IDS:
+        me.state(StoryState).pacing = value
+        _pin("pacing")
+
+
+def on_video_model(e: me.SelectSelectionChangeEvent):
+    if e.value in STORY_VIDEO_ENGINES:
+        s = me.state(StoryState)
+        s.video_model = e.value
+        if s.resolution and s.resolution not in resolution_options(e.value):
+            s.resolution = ""
+        _pin("video_model")
+
+
+def on_resolution(e: me.SelectSelectionChangeEvent):
+    s = me.state(StoryState)
+    if e.value in resolution_options(setup_view.engine_of(s)):
+        s.resolution = e.value
 
 
 # -- Auto settings: read the film settings out of the idea while typing --
@@ -1131,9 +1091,7 @@ def _apply_auto(found: dict) -> None:
 
 
 def on_idea_live(e: me.WebEvent):
-    """Typing paused in the idea field: update the settings from it. The
-    rules pass is instant and free; then the small live model (if on)
-    refines it. The idea field itself is not touched, so typing goes on."""
+    """Typing paused in the idea field: update the settings from it."""
     text = str((e.value or {}).get("value", ""))
     rules = story_autoset.infer_settings(text)
     _apply_auto(rules)
@@ -1151,8 +1109,7 @@ def on_idea_live(e: me.WebEvent):
 
 
 def _reapply_auto() -> None:
-    """Apply the last settings read from the idea again (after a pin
-    changed): a film length is planned afresh around what is pinned."""
+    """Apply the last settings read from the idea again."""
     s = me.state(StoryState)
     try:
         found = json.loads(s.auto_json) if s.auto_json else {}
@@ -1177,36 +1134,26 @@ def _auto_note() -> None:
         found = json.loads(s.auto_json) if s.auto_json else {}
     except ValueError:
         found = {}
-    pinned = _pinned()
-    summary = story_autoset.describe(found)
-    if not summary and not pinned:
+    shown = {k: v for k, v in found.items() if k in _AUTO_SHOWN}
+    summary = story_autoset.describe(shown)
+    if not summary:
         return
     with me.box(classes="ss-auto-note", key="ss-auto-note"):
         me.icon("auto_awesome", style=me.Style(font_size=18, width=18, height=18))
         with me.box(classes="ss-auto-text"):
-            me.text(
-                f"Set from your idea: {summary}"
-                if summary
-                else "Settings you picked stay as they are."
-            )
-        if pinned:
+            me.text(f"From your idea: {summary}")
+        if _pinned():
             me.button(
                 "Use auto", type="stroked", on_click=on_reset_auto, key="ss-auto-reset"
             )
 
 
-def on_character_blur(e: me.InputBlurEvent):
-    me.state(StoryState).character = e.value
+# What the note under the idea mentions (fields still on the Setup screen).
+_AUTO_SHOWN = ("film_seconds", "aspect_ratio", "language", "style", "pacing", "video_model")
 
 
 def on_pick_set(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).create_set_id = "" if e.value == "none" else e.value
-
-
-def on_example(e: me.ClickEvent):
-    idea = EXAMPLE_IDEAS[int(e.key.split("-")[1])]
-    me.state(StoryState).idea = idea
-    _apply_auto(story_autoset.infer_settings(idea))
 
 
 def on_language(e: me.SelectSelectionChangeEvent):
@@ -1214,99 +1161,262 @@ def on_language(e: me.SelectSelectionChangeEvent):
     _pin("language")
 
 
-def _brand_json(owner: str) -> str:
-    kit = brand_kit.load(owner)
-    return "" if brand_kit.is_empty(kit) else json.dumps(kit)
-
-
-def on_use_brand(e: me.SlideToggleChangeEvent):  # pylint: disable=unused-argument
-    s = me.state(StoryState)
-    if s.use_brand:
-        s.use_brand = False
-        return
-    if not _brand_json(_owner()):
-        s.error = "Your brand is empty. Set it up on the My brand page first."
-        return
-    s.error = ""
-    s.use_brand = True
-
-
-def on_speech_mode(e: me.SelectSelectionChangeEvent):
-    me.state(StoryState).speech_mode = e.value
-    _pin("speech_mode")
-
-
-def on_scene_count(e: me.SelectSelectionChangeEvent):
-    me.state(StoryState).scene_count = int(e.value)
-    _pin("scene_count")
-    _reapply_auto()  # keep the film length the idea asked for
-
-
-def on_duration(e: me.SelectSelectionChangeEvent):
-    me.state(StoryState).duration = int(e.value)
-    _pin("duration")
-    _reapply_auto()  # keep the film length the idea asked for
-
-
 def on_aspect(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).aspect_ratio = e.value
     _pin("aspect_ratio")
 
 
-def on_camera(e: me.SelectSelectionChangeEvent):
-    me.state(StoryState).camera = e.value
-    _pin("camera")
-
-
-def on_style(e: me.WebEvent):
-    value = (e.value or {}).get("value", "")
+def on_style_chip(e: me.ClickEvent):
+    value = (e.key or "").split("-", 1)[-1]
     if value in STYLE_BY_ID:
-        me.state(StoryState).style = value
+        s = me.state(StoryState)
+        s.style = value
+        s.style_text = STYLE_BY_ID[value]["prompt"]
         _pin("style")
 
 
-def on_upload_reference(e: me.UploadEvent):
+def on_style_blur(e: me.InputBlurEvent):
+    s = me.state(StoryState)
+    text = " ".join((e.value or "").split())[:400]
+    preset = next((st["id"] for st in STYLES if st["prompt"] == text), "")
+    if preset:
+        s.style = preset
+    s.style_text = text
+    _pin("style")
+
+
+# -- Brands --
+
+
+def _refresh_brands() -> None:
     s = me.state(StoryState)
     try:
-        s.reference_uri = get_backend().save_upload(e.file.getvalue(), e.file.mime_type)
+        s.brands_json = json.dumps(brand_kit.list_brands(_owner()))
+    except Exception:
+        logger.exception("Story Studio: could not list brands")
+        s.brands_json = "[]"
+
+
+def _brand_snapshot(owner: str, brand_id: str) -> tuple[str, str]:
+    """(brand_id, snapshot JSON) for the story; ("", "") for no brand.
+    "" means the owner's default brand."""
+    if brand_id == "none":
+        return "", ""
+    brand = (
+        brand_kit.get_brand(owner, brand_id)
+        if brand_id
+        else brand_kit.default_brand(owner)
+    )
+    snap = brand_kit.snapshot(brand)
+    return (brand["id"], snap) if brand and snap else ("", "")
+
+
+def on_brand(e: me.SelectSelectionChangeEvent):
+    s = me.state(StoryState)
+    if e.value == "new":
+        me.navigate("/brand", query_params={"id": "new"})
+        return
+    s.brand_id = e.value if e.value else "none"
+
+
+# -- References (services/story_refs.py) --
+
+
+def _refs() -> list[dict]:
+    return story_refs.parse(me.state(StoryState).refs_json)
+
+
+def _put_refs(refs: list[dict]) -> None:
+    me.state(StoryState).refs_json = story_refs.dump(refs)
+
+
+def _ref_id(key: str) -> str:
+    return (key or "").split("-", 1)[-1]
+
+
+def _edit_ref(key: str, **changes) -> None:
+    rid = _ref_id(key)
+    _put_refs([{**r, **changes} if r["id"] == rid else r for r in _refs()])
+
+
+def on_ref_menu(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.ref_menu_open = not s.ref_menu_open
+
+
+def on_add_ref(e: me.ClickEvent):
+    s = me.state(StoryState)
+    kind = _ref_id(e.key)
+    s.ref_menu_open = False
+    if kind == "brand":
+        _refresh_brands()
+        try:
+            rows = json.loads(s.brands_json or "[]")
+        except ValueError:
+            rows = []
+        if not rows:
+            me.navigate("/brand", query_params={"id": "new"})
+            return
+        if s.brand_id in ("", "none"):
+            default = next((b for b in rows if b.get("is_default")), rows[0])
+            s.brand_id = default["id"]
+        return
+    refs = _refs()
+    ref = story_refs.new_ref(kind, refs)
+    if ref is None:
+        s.error = f"Up to {story_refs.MAX_REFS} references."
+        return
+    _put_refs([*refs, ref])
+
+
+def on_ref_tag(e: me.InputBlurEvent):
+    tag = story_refs.clean_tag(e.value)
+    if tag:
+        _edit_ref(e.key, tag=tag)
+
+
+def on_ref_role(e: me.InputBlurEvent):
+    _edit_ref(e.key, role=e.value)
+
+
+def on_ref_voice(e: me.SelectSelectionChangeEvent):
+    _edit_ref(e.key, voice=e.value)
+
+
+def on_ref_upload(e: me.UploadEvent):
+    s = me.state(StoryState)
+    try:
+        uri = get_backend().save_upload(e.file.getvalue(), e.file.mime_type)
     except Exception as exc:
         s.error = story_jobs.friendly_error(exc)
+        return
+    _edit_ref(e.key, uri=uri)
 
 
-def on_remove_reference(e: me.ClickEvent):
-    me.state(StoryState).reference_uri = ""
+def on_ref_mention(e: me.ClickEvent):
+    s = me.state(StoryState)
+    ref = next((r for r in _refs() if r["id"] == _ref_id(e.key)), None)
+    if ref is None:
+        return
+    s.input_mode = "idea"
+    s.idea = story_refs.mention(s.idea, ref["tag"])
+
+
+def on_ref_remove(e: me.ClickEvent):
+    rid = _ref_id(e.key)
+    _put_refs([r for r in _refs() if r["id"] != rid])
+
+
+def _story_set_for(owner: str, story: Story, refs: list[dict], picked: str) -> str:
+    """The set id the story uses: the picked set, or a copy of it (or a new
+    set) with the references added."""
+    base = get_set_store().get(picked, owner) if picked else None
+    if not refs:
+        return base.id if base else ""
+    made = story_refs.build_set(
+        refs,
+        base=base,
+        owner=owner,
+        name=f"{(story.idea or 'Story')[:40]} references" if base is None else "",
+        style=story.style,
+    )
+    if made is None:
+        return base.id if base else ""
+    return get_set_store().save(made, owner).id
+
+
+def setup_plan(s: StoryState) -> tuple[int, int, int]:
+    """(target seconds, scene count, scene length) from the Setup screen."""
+    seconds, source = setup_view.film_seconds(s)
+    if s.input_mode == "script" and source == "script":
+        try:
+            parsed = story_director.parse_user_script(
+                s.raw_script,
+                language=s.language,
+                speech_mode=s.speech_mode,
+                pacing=s.pacing,
+                target_seconds=0,
+            )
+            scenes = parsed.get("scenes") or []
+            if scenes:
+                dur = max(
+                    4,
+                    round(
+                        sum(int(sc.get("seconds") or s.duration) for sc in scenes)
+                        / len(scenes)
+                    ),
+                )
+                return 0, len(scenes), dur
+        except Exception:
+            logger.exception("Story Studio: script parse failed")
+    bp = story_director.plan_film_blueprint(
+        seconds or story_director.DEFAULT_FILM_SECONDS,
+        pacing=s.pacing,
+        video_model=setup_view.engine_of(s),
+    )
+    return int(seconds or 0), int(bp["scene_count"]), int(bp["duration"])
 
 
 def on_generate_scenario(e: me.ClickEvent):
     s = me.state(StoryState)
     s.error = ""
-    idea = (s.idea or "").strip()
-    if len(idea) < 8:
-        s.error = "Describe your idea in a sentence or two first."
+    if s.input_mode == "script":
+        raw = (s.raw_script or "").strip()
+        if len(raw) < 8:
+            s.error = "Paste your script or voiceover first."
+            return
+        idea = (s.idea or "").strip() or raw[:200]
+    else:
+        idea = (s.idea or "").strip()
+        if len(idea) < 8:
+            s.error = "Describe your idea in a sentence or two first."
+            return
+    if s.duration_text.strip() and story_director.parse_duration_text(s.duration_text) is None:
+        s.error = 'Write a length like "30s", "2 min" or "1:30", or leave it empty.'
         return
-    caps = apply_caps(s.scene_count, s.duration)
+
+    target, req_count, req_dur = setup_plan(s)
+    caps = apply_caps(
+        req_count, req_dur, resolution=s.resolution, model_id=setup_view.engine_of(s)
+    )
     s.scene_count, s.duration = caps.scene_count, caps.duration
+    s.target_seconds = target
     owner = _owner()
+    refs = _refs()
     try:
         existing = get_store().get(s.story_id, owner) if s.story_id else None
         story = existing or Story()
         if story.idea != idea:
             story.brief = ""  # a new idea: Gemini writes a new brief
+        story.input_mode = s.input_mode if s.input_mode in ("idea", "script") else "idea"
+        story.raw_script = s.raw_script if story.input_mode == "script" else ""
+        story.target_seconds = int(target or 0)
+        story.pacing = s.pacing if s.pacing in PACING_IDS else "cinematic"
+        story.video_model = s.video_model
+        story.resolution = caps.resolution if s.resolution else ""
         story.idea = idea
-        story.character = s.character.strip()
+        story.character = ""
         story.language = s.language
-        story.speech_mode = s.speech_mode
-        story.brand_json = _brand_json(owner) if s.use_brand else ""
+        # Who speaks and the camera move come from the idea (read while
+        # typing, story_autoset); the director reads the idea text too.
+        story.speech_mode = s.speech_mode if s.speech_mode in SPEECH_MODES else "auto"
+        story.camera = s.camera if s.camera in CAMERA_IDS else "auto"
+        story.brand_id, story.brand_json = _brand_snapshot(owner, s.brand_id)
         story.scene_count = caps.scene_count
         story.duration = caps.duration
         story.aspect_ratio = s.aspect_ratio
-        story.style = s.style
-        story.camera = s.camera
-        story.reference_uri = s.reference_uri
+        story.style = s.style if s.style in STYLE_BY_ID else "photographic"
+        preset = STYLE_BY_ID[story.style]["prompt"]
+        story.style_prompt = "" if s.style_text in ("", preset) else s.style_text
+        story.reference_uri = ""
+        story.references_json = story_refs.dump(refs)
+        voice = story_refs.narrator_voice(refs)
+        if voice:
+            story.voice_name = voice
         picked = s.create_set_id
         if picked and get_set_store().get(picked, owner) is None:
             picked = ""
-        story.set_id = picked
+        story.set_id = _story_set_for(owner, story, refs, picked)
         story.set_version = 0
         story.cast_json = ""
         story.scenes = []
@@ -1316,27 +1426,130 @@ def on_generate_scenario(e: me.ClickEvent):
         story = get_store().save(story, owner)
         _set_story(story)
         _load_set(story, force=True)
-        job = story_jobs.start_scenario(story.id, owner)
+        _refresh_sets()
+        job = story_jobs.start_scenario(story.id, owner, then_frames=True)
     except Exception as exc:
         logger.exception("Story Studio: could not start scenario")
         s.error = story_jobs.friendly_error(exc)
         return
     _watch(job.id)
     s.step = "scenario"
+    s.desk_tab = "shots"
+    s.seq_filter = "all"
+    s.selected_shot = 0
+    s.preview_open = False
+    s.refs_open = False
+    s.redo_note = ""
+    s.animatic_index = 0
     yield
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Scenario
+# Step 3: Director's Desk (Scenario, Set, Storyboard, Shots)
 # ---------------------------------------------------------------------------
+
+
+_DESK_HANDLERS: desk_view.DeskHandlers | None = None
+
+
+def _desk_handlers() -> desk_view.DeskHandlers:
+    global _DESK_HANDLERS
+    if _DESK_HANDLERS is None:
+        _DESK_HANDLERS = desk_view.DeskHandlers(
+            on_title_blur=on_title_blur,
+            on_brief_blur=on_brief_blur,
+            on_visual_grammar_blur=on_visual_grammar_blur,
+            on_select_shot=on_select_shot,
+            on_toggle_refs=on_toggle_refs,
+            on_toggle_preview=on_toggle_preview,
+            on_toggle_soundtrack=on_toggle_soundtrack,
+            on_make_set=on_make_set,
+            on_paint_all_frames=on_paint_all_frames,
+            on_render=on_render,
+            on_to_video=on_to_video,
+            on_cancel_job=on_cancel_job,
+            on_rewrite_all=on_rewrite_all,
+            on_rewrite_scene=on_rewrite_scene,
+            on_redo_note=on_redo_note,
+            on_redo_frame=on_redo_frame,
+            on_redo_clip=on_redo_clip,
+            on_add_shot=on_add_shot,
+            on_move_up=on_move_up,
+            on_move_down=on_move_down,
+            on_remove_scene=on_remove_scene,
+            on_scene_shot_size=on_scene_shot_size,
+            on_scene_camera=on_scene_camera,
+            on_scene_duration=on_scene_duration,
+            on_scene_visual=on_scene_visual,
+            on_scene_motion_prompt=on_scene_motion_prompt,
+            on_scene_audio_cue=on_scene_audio_cue,
+            on_scene_transition=on_scene_transition,
+            on_scene_narration_alt=on_scene_narration_alt,
+            on_toggle_music=on_toggle_music,
+            on_music_prompt=on_music_prompt,
+            on_toggle_voice=on_toggle_voice,
+            on_voice=on_voice,
+            on_speaker_voice=on_speaker_voice,
+            on_toggle_continuous_takes=on_toggle_continuous_takes,
+            on_toggle_second=on_toggle_second,
+            on_translate_again=on_translate_again,
+            on_toggle_continuity=on_toggle_continuity,
+            on_toggle_seamless_joins=on_toggle_seamless_joins,
+            on_toggle_color_match=on_toggle_color_match,
+            on_update_set=on_update_set,
+            on_save_set_as_new=on_save_set_as_new,
+            on_add_asset=on_add_asset,
+            on_set_field=on_set_field,
+            on_animatic_prev=on_animatic_prev,
+            on_animatic_next=on_animatic_next,
+            on_animatic_select=on_animatic_select,
+            set_handlers=_handlers,
+            render_line_fields=_line_fields,
+            render_media_box=_media_box,
+            render_progress_panel=progress_panel,
+            scene_task=_scene_task,
+            job_active_for=_job_active_for,
+            job_dict=_job,
+            set_tasks=_set_tasks,
+            fmt_secs=_fmt_secs,
+            dir_class=_dir_class,
+            sr=_sr,
+            chip=_chip,
+        )
+    return _DESK_HANDLERS
+
+
+def director_desk(story: Story) -> None:
+    s = me.state(StoryState)
+    desk_view.render_desk(
+        s,
+        story,
+        _set(),
+        is_demo=is_mock_mode(),
+        h=_desk_handlers(),
+    )
+
+
+def scenario_step(story: Story) -> None:
+    director_desk(story)
+
+
+def set_step(story: Story) -> None:
+    me.state(StoryState).desk_tab = "set"
+    director_desk(story)
+
+
+def storyboard_step(story: Story) -> None:
+    director_desk(story)
+
+
+def editor_step(story: Story) -> None:
+    director_desk(story)
 
 
 def _line_fields(story: Story, sc, prefix: str, disabled: bool) -> None:
     """The scene's audio type (voiceover or on camera), the line itself, and
-    how many words fit.
-
-    Keys: "<prefix>spk-<id>" and "<prefix>nar-<id>" (see _scene_id_from_key).
-    """
+    how many words fit."""
     with me.box(classes="gm-segmented ss-audio-type"):
         me.button_toggle(
             value=AUDIO_ON_CAMERA if sc.spoken else AUDIO_VOICEOVER,
@@ -1373,117 +1586,6 @@ def _line_fields(story: Story, sc, prefix: str, disabled: bool) -> None:
         )
 
 
-def scenario_step(story: Story) -> None:
-    busy_all = _job_active_for("scenario")
-    busy_any = _job_active_for("scenario", "scene", "storyboard")
-    progress_panel("Writing your scenario", ("scenario", "scene"))
-    if busy_all or not story.scenes:
-        with me.box(classes="ss-scenes"):
-            for i in range(story.scene_count):
-                with me.box(classes="ss-card ss-scene ss-skeleton-card"):
-                    me.text(f"Scene {i + 1}", style=me.Style(font_weight=600))
-                    me.box(classes="ss-skel ss-skel-line")
-                    me.box(classes="ss-skel ss-skel-line short")
-                    me.box(classes="ss-skel ss-skel-block")
-        return
-
-    with me.box(classes="ss-card ss-title-row"):
-        with me.box(classes="ss-grow"):
-            me.input(
-                label="Film title",
-                value=story.title,
-                appearance="outline",
-                on_blur=on_title_blur,
-                style=me.Style(width="100%"),
-                key=f"title-{story.id}",
-            )
-        with me.content_button(
-            type="stroked", on_click=on_rewrite_all, disabled=busy_any
-        ):
-            with me.box(classes="ss-btn-inner"):
-                me.icon("autorenew", style=me.Style(font_size=18, width=18, height=18))
-                me.text("Rewrite all scenes")
-
-    if story.brief:
-        with me.box(classes="ss-card ss-brief"):
-            me.textarea(
-                label="Brief",
-                value=story.brief,
-                rows=3,
-                appearance="outline",
-                on_blur=on_brief_blur,
-                style=me.Style(width="100%"),
-                key=f"brief-{story.id}",
-            )
-            me.text(
-                "Gemini wrote this fuller brief from your idea. Edit it, then "
-                "Rewrite all scenes.",
-                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-            )
-
-    with me.box(classes="ss-scenes"):
-        for i, sc in enumerate(story.scenes):
-            rewriting = _job_active_for("scene") and (
-                _scene_task("scenario", i) or {}
-            ).get("status") in ("queued", "running")
-            with me.box(classes="ss-card ss-scene" + (" is-busy" if rewriting else "")):
-                with me.box(classes="ss-scene-head"):
-                    with me.box(classes="ss-badge"):
-                        me.text(f"Scene {i + 1}")
-                    with me.box(classes="ss-grow"):
-                        me.select(
-                            label="Camera",
-                            options=[
-                                me.SelectOption(
-                                    label=CAMERA_PRESETS[c]["label"], value=c
-                                )
-                                for c in CAMERA_IDS
-                            ],
-                            value=sc.camera,
-                            appearance="outline",
-                            on_selection_change=on_scene_camera,
-                            style=me.Style(width="100%"),
-                            key=f"cam-{sc.id}",
-                        )
-                    with me.content_button(
-                        type="stroked",
-                        on_click=on_rewrite_scene,
-                        disabled=busy_any,
-                        key=f"rw-{i}",
-                    ):
-                        with me.box(classes="ss-btn-inner"):
-                            me.icon(
-                                "refresh",
-                                style=me.Style(font_size=18, width=18, height=18),
-                            )
-                            me.text("Regenerate")
-                if rewriting:
-                    with me.box(classes="ss-busy-line"):
-                        me.box(classes="ss-spinner")
-                        me.text("Rewriting this scene…", style=me.Style(font_size=13))
-                _line_fields(story, sc, "", disabled=False)
-                me.textarea(
-                    label="What we see",
-                    value=sc.visual,
-                    rows=4,
-                    appearance="outline",
-                    on_blur=on_scene_visual,
-                    style=me.Style(width="100%"),
-                    key=f"vis-{sc.id}",
-                )
-
-    with me.box(classes="ss-actions"):
-        me.button("Back to idea", type="stroked", on_click=on_back_create)
-        me.button(
-            "Approve and make set",
-            type="flat",
-            color="primary",
-            disabled=busy_any,
-            on_click=on_approve,
-            style=me.Style(height=44),
-        )
-
-
 def _scene_id_from_key(key: str) -> str:
     return key.split("-", 1)[1]
 
@@ -1505,11 +1607,130 @@ def _update_scene(
     _edit(apply)
 
 
+def on_select_shot(e: me.ClickEvent):
+    try:
+        idx = int((e.key or "").split("-", 1)[1])
+    except (IndexError, ValueError):
+        return
+    s = me.state(StoryState)
+    if idx != s.selected_shot:
+        s.redo_note = ""
+    s.selected_shot = max(0, idx)
+    s.animatic_index = s.selected_shot
+
+
+def on_toggle_refs(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.refs_open = not s.refs_open
+    if s.refs_open:
+        _load_set(_story())
+
+
+def on_toggle_preview(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.preview_open = not s.preview_open
+    s.animatic_index = s.selected_shot
+
+
+def on_redo_note(e: me.InputBlurEvent):
+    me.state(StoryState).redo_note = " ".join((e.value or "").split())[:400]
+
+
+def _selected() -> tuple[Story | None, int]:
+    s = me.state(StoryState)
+    story = _story()
+    if story is None or not story.scenes:
+        return None, 0
+    return story, max(0, min(s.selected_shot, len(story.scenes) - 1))
+
+
+def on_redo_frame(e: me.ClickEvent):
+    """Repaint the start frame of the selected shot's take, with the note."""
+    s = me.state(StoryState)
+    s.error = ""
+    story, i = _selected()
+    if story is None:
+        return
+    try:
+        job = story_jobs.start_storyboard(s.story_id, _owner(), [i], note=s.redo_note)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    s.redo_note = ""
+    _watch(job.id)
+
+
+def redo_clip_plan(story: Story, index: int) -> tuple[list[int], bool]:
+    """(scenes whose clips are made again, whole take?) for "Redo clip" on
+    scene `index`: a one-shot take is remade alone; inside a longer take the
+    clip and every later clip of that take are made again in order."""
+    group = next((g for g in take_groups(story) if index in g), [index])
+    if len(group) == 1:
+        return [index], False
+    return [j for j in group if j >= index], True
+
+
+def on_redo_clip(e: me.ClickEvent):
+    """Make the selected shot's clip again. The note goes into its Action
+    text (kept, so the next redo uses it too)."""
+    s = me.state(StoryState)
+    s.error = ""
+    story, i = _selected()
+    if story is None:
+        return
+    redo, whole_take = redo_clip_plan(story, i)
+    note = s.redo_note.strip()
+    ids = {story.scenes[j].id for j in redo}
+    target = story.scenes[i].id
+
+    def apply(st: Story) -> None:
+        st.approved = True
+        for sc in st.scenes:
+            if sc.id == target and note:
+                sc.motion_prompt = f"{sc.motion_prompt.strip()} {note}".strip()[:1200]
+            if sc.id in ids:
+                sc.clear_clip()
+        st.clear_films()
+
+    if _edit(apply) is None:
+        return
+    try:
+        job = (
+            story_jobs.start_video(s.story_id, _owner())
+            if whole_take
+            else story_jobs.start_scene_clips(s.story_id, _owner(), [i])
+        )
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    s.redo_note = ""
+    _watch(job.id)
+
+
+def on_seq_filter(e: me.ClickEvent):
+    val = (e.key or "").split("|", 1)[1] if "|" in (e.key or "") else "all"
+    me.state(StoryState).seq_filter = val or "all"
+
+
+def on_toggle_soundtrack(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.soundtrack_open = not s.soundtrack_open
+
+
 def on_brief_blur(e: me.InputBlurEvent):
     value = e.value.strip()[:1500]
 
     def apply(story: Story) -> None:
         story.brief = value
+
+    _edit(apply)
+
+
+def on_visual_grammar_blur(e: me.InputBlurEvent):
+    value = e.value.strip()[:400]
+
+    def apply(story: Story) -> None:
+        story.visual_grammar = value
 
     _edit(apply)
 
@@ -1529,14 +1750,13 @@ def on_scene_narration(e: me.InputBlurEvent):
     spoken = bool(
         story and any(sc.id == scene_id and sc.spoken for sc in story.scenes)
     )
-    # A spoken line is baked into the clip, so changing it needs a new clip.
     clear = ("narration_alt", "clip_uri") if spoken else ("narration_alt",)
     _update_scene(scene_id, "narration", e.value.strip(), clear=clear)
 
 
 def on_scene_audio(e: me.ButtonToggleChangeEvent):
     """Voiceover or on camera for one scene (the clip changes with it)."""
-    if not e.value:  # clicking the selected option again changes nothing
+    if not e.value:
         return
     scene_id = _scene_id_from_key(e.key)
     spoken = e.value == AUDIO_ON_CAMERA
@@ -1576,8 +1796,64 @@ def on_scene_visual(e: me.InputBlurEvent):
     _update_scene(_scene_id_from_key(e.key), "visual", e.value.strip())
 
 
+def on_scene_motion_prompt(e: me.InputBlurEvent):
+    _update_scene(_scene_id_from_key(e.key), "motion_prompt", e.value.strip())
+
+
+def on_scene_audio_cue(e: me.InputBlurEvent):
+    _update_scene(_scene_id_from_key(e.key), "audio_cue", e.value.strip())
+
+
+def on_scene_shot_size(e: me.SelectSelectionChangeEvent):
+    if e.value in SHOT_SIZE_IDS:
+        _update_scene(_scene_id_from_key(e.key), "shot_size", e.value)
+
+
 def on_scene_camera(e: me.SelectSelectionChangeEvent):
     _update_scene(_scene_id_from_key(e.key), "camera", e.value)
+
+
+def on_scene_transition(e: me.ClickEvent):
+    parts = (e.key or "").split("|")
+    if len(parts) < 3:
+        return
+    scene_id, trans = parts[1], parts[2]
+    if trans not in TRANSITION_IDS:
+        return
+
+    def apply(story: Story) -> None:
+        for idx, sc in enumerate(story.scenes):
+            if sc.id == scene_id and sc.transition != trans:
+                sc.transition = trans
+                sc.clear_clip()
+                if idx > 0:
+                    story.scenes[idx - 1].clear_clip()
+                story.clear_films()
+
+    _edit(apply)
+
+
+def on_add_shot(e: me.ClickEvent):
+    scene_id = _scene_id_from_key(e.key)
+
+    def apply(story: Story) -> None:
+        idx = next((i for i, sc in enumerate(story.scenes) if sc.id == scene_id), -1)
+        if idx < 0:
+            return
+        ref = story.scenes[idx]
+        new_sc = Scene(
+            sequence=ref.sequence,
+            camera=ref.camera if ref.camera in CAMERA_IDS else "static",
+            duration=ref.duration,
+            shot_size="medium",
+            location_id=ref.location_id,
+            cast=list(ref.cast),
+        )
+        story.scenes.insert(idx + 1, new_sc)
+        story.scene_count = len(story.scenes)
+        story.clear_films()
+
+    _edit(apply)
 
 
 def on_rewrite_scene(e: me.ClickEvent):
@@ -1618,6 +1894,47 @@ def on_approve(e: me.ClickEvent):
         return
     _load_set(story)
     s.step = "set"
+    s.desk_tab = "set"
+
+
+def on_paint_all_frames(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.error = ""
+    story = _story()
+    if story is None or not story.scenes:
+        return
+    if not story.approved:
+        story = _edit(lambda st: setattr(st, "approved", True))
+        if story is None:
+            return
+    # Only take starts get a frame; the rest of a take continues its clip.
+    indices = None if not frames_ready(story) else frame_scenes(story)
+    try:
+        job = story_jobs.start_storyboard(s.story_id, _owner(), indices)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
+
+
+def on_animatic_prev(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.animatic_index = max(0, s.animatic_index - 1)
+
+
+def on_animatic_next(e: me.ClickEvent):
+    s = me.state(StoryState)
+    story = _story()
+    hi = max(0, len(story.scenes) - 1) if story else 0
+    s.animatic_index = min(hi, s.animatic_index + 1)
+
+
+def on_animatic_select(e: me.ClickEvent):
+    try:
+        idx = int((e.key or "").split("-", 1)[1])
+    except (IndexError, ValueError):
+        return
+    me.state(StoryState).animatic_index = max(0, idx)
 
 
 # ---------------------------------------------------------------------------
@@ -1683,8 +2000,7 @@ def _sets_rows() -> list[dict]:
 
 
 def _merge_into(stored: StorySet, draft: StorySet) -> None:
-    """Write the draft's text and asset list into the stored set, keeping
-    images and samples the stored copy has that the draft lacks."""
+    """Write the draft's text and asset list into the stored set."""
     old = {(k, a.id): a for k in KINDS for a in stored.assets(k)}
     for kind in KINDS:
         for asset in draft.assets(kind):
@@ -1755,6 +2071,9 @@ def _set_tasks() -> dict:
 
 def _start_set(targets: list | None = None) -> None:
     s = me.state(StoryState)
+    story = _story()
+    if story is not None and not story.approved:
+        _edit(lambda st: setattr(st, "approved", True))
     if _save_draft() is None and _set() is not None:
         return
     try:
@@ -1764,10 +2083,6 @@ def _start_set(targets: list | None = None) -> None:
         return
     _watch(job.id)
 
-
-# ---------------------------------------------------------------------------
-# Step 4: Set
-# ---------------------------------------------------------------------------
 
 SET_HANDLERS: SetHandlers | None = None
 
@@ -1789,141 +2104,6 @@ def _handlers() -> SetHandlers:
     return SET_HANDLERS
 
 
-def set_step(story: Story) -> None:
-    s = me.state(StoryState)
-    busy = _job_active_for("set")
-    st = _set()
-    progress_panel("Making your set", ("set",))
-    if st is None:
-        with me.box(classes="ss-card ss-set-empty"):
-            _section_title(
-                "Set",
-                "Characters, places and props, made once and reused in every shot.",
-            )
-            me.text(
-                (
-                    "Your scenario already cast the story. Make set paints about "
-                    "4 images per character, 2 per place and 1 per prop."
-                )
-                if set_text_from_cast(story.cast_json, story.scenes)
-                else (
-                    "Gemini casts your story, then makes about 4 images per "
-                    "character, 2 per place and 1 per prop."
-                ),
-                style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
-            )
-            with me.box(classes="ss-set-tools"):
-                me.button(
-                    "Making…" if busy else "Make set",
-                    type="flat",
-                    color="primary",
-                    disabled=busy,
-                    on_click=on_make_set,
-                    key="ss-make-set",
-                )
-                me.button(
-                    "Skip",
-                    type="stroked",
-                    disabled=busy,
-                    on_click=on_to_storyboard,
-                    key="ss-skip-set",
-                )
-        with me.box(classes="ss-actions"):
-            me.button("Back to scenario", type="stroked", on_click=on_back_scenario)
-        return
-
-    missing = st.missing_images()
-    tasks = _set_tasks() if busy or (_job() or {}).get("kind") == "set" else {}
-    with me.box(classes="ss-card ss-set-head"):
-        with me.box(classes="ss-set-name"):
-            me.input(
-                label="Set name",
-                value=st.name,
-                appearance="outline",
-                disabled=busy,
-                on_blur=on_set_field,
-                style=me.Style(width="100%"),
-                key=card_key("setname", "", st.id),
-            )
-            meta = f"{st.summary()} · version {st.version}"
-            if missing:
-                meta += f" · {missing} image{'s' if missing != 1 else ''} to make"
-            if s.set_dirty:
-                meta += " · unsaved"
-            me.text(
-                meta,
-                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-            )
-        with me.box(classes="ss-set-tools"):
-            me.button(
-                "Making…" if busy else "Make set",
-                type="flat",
-                color="primary",
-                disabled=busy or not missing,
-                on_click=on_make_set,
-                key="ss-make-set",
-            )
-            me.button(
-                "Update set",
-                type="stroked",
-                disabled=busy or not s.set_dirty,
-                on_click=on_update_set,
-                key="ss-update-set",
-            )
-            me.button(
-                "Save as new",
-                type="stroked",
-                disabled=busy,
-                on_click=on_save_set_as_new,
-                key="ss-save-new-set",
-            )
-    h = _handlers()
-    demo = is_mock_mode()
-    for kind, title, assets, add in (
-        ("character", "Characters", st.characters, "Add character"),
-        ("location", "Locations", st.locations, "Add location"),
-        ("prop", "Props", st.props, "Add prop"),
-    ):
-        with me.box(classes="ss-set-section"):
-            with me.box(classes="ss-set-section-head"):
-                me.text(
-                    title,
-                    type="headline-6",
-                    style=me.Style(
-                        margin=me.Margin.all(0), font_size=18, font_weight=600
-                    ),
-                )
-                me.button(
-                    add,
-                    type="stroked",
-                    disabled=busy,
-                    on_click=on_add_asset,
-                    key=f"add|{kind}",
-                )
-            if assets:
-                with me.box(classes="ss-set-grid"):
-                    for asset in assets:
-                        asset_card(
-                            kind,
-                            asset,
-                            tasks=tasks,
-                            h=h,
-                            busy=busy,
-                            playing=s.play_sample_id,
-                            demo=demo,
-                        )
-    with me.box(classes="ss-actions"):
-        me.button("Back to scenario", type="stroked", on_click=on_back_scenario)
-        me.button(
-            "Paint storyboard",
-            type="flat",
-            color="primary",
-            disabled=busy,
-            on_click=on_to_storyboard,
-            style=me.Style(height=44),
-        )
-
-
 _TEXT_FIELDS = {"name", "description", "outfit", "time_of_day"}
 
 
@@ -1942,7 +2122,7 @@ def on_set_field(e: me.InputBlurEvent):
             setattr(asset, action, value)
         elif action == "style" and asset.voice.style != value:
             asset.voice.style = value
-            asset.voice.sample_uri = ""  # the sample no longer matches
+            asset.voice.sample_uri = ""
         elif action == "voice_description":
             asset.voice.description = value
 
@@ -1954,7 +2134,11 @@ def on_set_voice(e: me.SelectSelectionChangeEvent):
 
     def apply(draft: StorySet) -> None:
         asset = draft.asset(kind, asset_id)
-        if asset is not None and e.value in VOICES and asset.voice.tts_voice != e.value:
+        if (
+            asset is not None
+            and e.value in VOICES
+            and asset.voice.tts_voice != e.value
+        ):
             asset.voice.tts_voice = e.value
             asset.voice.sample_uri = ""
 
@@ -2096,12 +2280,14 @@ def on_to_storyboard(e: me.ClickEvent):
         return
 
     def apply(story: Story) -> None:
+        story.approved = True
         story.step = "storyboard"
 
     story = _edit(apply)
     if story is None:
         return
     s.step = "storyboard"
+    s.desk_tab = "shots"
     if any(not sc.frame_uri for sc in story.scenes):
         try:
             job = story_jobs.start_storyboard(story.id, _owner())
@@ -2254,7 +2440,7 @@ def on_confirm_delete_set(e: me.ClickEvent):
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Storyboard
+# Media preview helper
 # ---------------------------------------------------------------------------
 
 
@@ -2301,89 +2487,16 @@ def _media_box(
                 me.text("No frame yet", style=me.Style(font_size=13))
 
 
-def storyboard_step(story: Story) -> None:
-    busy = _job_active_for("storyboard")
-    progress_panel("Painting your storyboard", ("storyboard",))
-    with me.box(
-        classes="ss-frames" + (" is-portrait" if story.aspect_ratio == "9:16" else "")
-    ):
-        for i, sc in enumerate(story.scenes):
-            task = (
-                _scene_task("frame", i)
-                if busy or (_job() or {}).get("kind") == "storyboard"
-                else None
-            )
-            if task and task["status"] == "done":
-                task = None
-            with me.box(classes="ss-card ss-frame"):
-                _media_box(
-                    sc.frame_uri,
-                    story.aspect_ratio,
-                    task,
-                    f"Storyboard frame for scene {i + 1}",
-                )
-                with me.box(classes="ss-frame-body"):
-                    with me.box(classes="ss-frame-head"):
-                        me.text(
-                            f"Scene {i + 1}",
-                            style=me.Style(font_weight=600, font_size=14),
-                        )
-                        _chip(
-                            CAMERA_PRESETS.get(sc.camera, CAMERA_PRESETS["static"])[
-                                "label"
-                            ]
-                        )
-                    me.text(
-                        sc.narration or sc.visual[:90],
-                        style=me.Style(
-                            font_size=13,
-                            color=me.theme_var("on-surface-variant"),
-                            line_height="1.4",
-                        ),
-                    )
-                    with me.content_button(
-                        type="stroked",
-                        disabled=busy,
-                        on_click=on_regen_frame,
-                        key=f"rf-{i}",
-                    ):
-                        with me.box(classes="ss-btn-inner"):
-                            me.icon(
-                                "refresh",
-                                style=me.Style(font_size=18, width=18, height=18),
-                            )
-                            me.text("Regenerate frame")
-    ready = bool(story.scenes) and all(sc.frame_uri for sc in story.scenes)
-    with me.box(classes="ss-actions"):
-        me.button("Back to set", type="stroked", on_click=on_back_set)
-        me.button(
-            "Continue to scenes",
-            type="flat",
-            color="primary",
-            disabled=busy or not ready,
-            on_click=on_to_editor,
-            style=me.Style(height=44),
-        )
-
-
-def on_regen_frame(e: me.ClickEvent):
-    s = me.state(StoryState)
-    try:
-        job = story_jobs.start_storyboard(
-            s.story_id, _owner(), [int(e.key.split("-")[1])]
-        )
-    except Exception as exc:
-        s.error = story_jobs.friendly_error(exc)
-        return
-    _watch(job.id)
-
-
 def on_back_scenario(e: me.ClickEvent):
-    me.state(StoryState).step = "scenario"
+    s = me.state(StoryState)
+    s.step = "scenario"
+    s.desk_tab = "shots"
 
 
 def on_back_set(e: me.ClickEvent):
-    me.state(StoryState).step = "set"
+    s = me.state(StoryState)
+    s.step = "set"
+    s.desk_tab = "set"
 
 
 def on_to_editor(e: me.ClickEvent):
@@ -2396,265 +2509,7 @@ def on_to_editor(e: me.ClickEvent):
 
     if _edit(apply):
         s.step = "editor"
-
-
-# ---------------------------------------------------------------------------
-# Step 6: Editor
-# ---------------------------------------------------------------------------
-
-
-def editor_step(story: Story) -> None:
-    busy = _job_active_for("video", "storyboard", "scene", "translate")
-    alt = story.alt_language
-    total = sum(sc.duration for sc in story.scenes)
-    xf = Default().STORY_CROSSFADE_SECONDS
-    seamless = story.continuity and story.seamless_joins
-    # Seamless continuity films are cut, not overlapped (estimate: assumes
-    # every join continues; broken joins still crossfade).
-    film_len = total if seamless else max(0.0, total - xf * max(0, len(story.scenes) - 1))
-    to_render = sum(1 for sc in story.scenes if not sc.clip_uri)
-    with me.box(classes="ss-editor"):
-        with me.box(classes="ss-editor-list"):
-            for i, sc in enumerate(story.scenes):
-                with me.box(classes="ss-card ss-row"):
-                    with me.box(classes="ss-row-media"):
-                        _media_box(
-                            sc.frame_uri, story.aspect_ratio, None, f"Scene {i + 1}"
-                        )
-                        if sc.clip_uri:
-                            _chip("Clip ready", "ss-chip-done")
-                    with me.box(classes="ss-row-body"):
-                        with me.box(classes="ss-row-head"):
-                            with me.box(classes="ss-badge"):
-                                me.text(f"Scene {i + 1}")
-                            me.select(
-                                label="Length",
-                                options=[
-                                    me.SelectOption(label=f"{d}s", value=str(d))
-                                    for d in supported_durations()
-                                ],
-                                value=str(sc.duration),
-                                appearance="outline",
-                                disabled=busy,
-                                on_selection_change=on_scene_duration,
-                                style=me.Style(width=110),
-                                key=f"dur-{sc.id}",
-                            )
-                            me.select(
-                                label="Camera",
-                                options=[
-                                    me.SelectOption(
-                                        label=CAMERA_PRESETS[c]["label"], value=c
-                                    )
-                                    for c in CAMERA_IDS
-                                ],
-                                value=sc.camera,
-                                appearance="outline",
-                                disabled=busy,
-                                on_selection_change=on_scene_camera,
-                                style=me.Style(width=160),
-                                key=f"ecam-{sc.id}",
-                            )
-                            with me.box(classes="ss-row-tools"):
-                                for icon, label, handler, dis in [
-                                    (
-                                        "arrow_upward",
-                                        "Move up",
-                                        on_move_up,
-                                        busy or i == 0,
-                                    ),
-                                    (
-                                        "arrow_downward",
-                                        "Move down",
-                                        on_move_down,
-                                        busy or i == len(story.scenes) - 1,
-                                    ),
-                                    (
-                                        "delete_outline",
-                                        "Remove scene",
-                                        on_remove_scene,
-                                        busy or len(story.scenes) <= 1,
-                                    ),
-                                ]:
-                                    with me.tooltip(message=label):
-                                        with me.content_button(
-                                            type="icon",
-                                            disabled=dis,
-                                            on_click=handler,
-                                            key=f"{label.split()[0].lower()}{label.split()[-1].lower()}-{sc.id}",
-                                        ):
-                                            me.icon(icon)
-                                            _sr(f"{label}: scene {i + 1}")
-                        _line_fields(story, sc, "e", disabled=busy)
-                        if story.makes_alt and sc.narration.strip():
-                            with me.box(classes=_dir_class(alt)):
-                                me.textarea(
-                                    label=f"Line spoken on camera ({alt})"
-                                    if sc.spoken
-                                    else f"Narration ({alt})",
-                                    value=sc.narration_alt,
-                                    placeholder="Translated when you render",
-                                    rows=2,
-                                    appearance="outline",
-                                    disabled=busy,
-                                    on_blur=on_scene_narration_alt,
-                                    style=me.Style(width="100%"),
-                                    key=f"anar-{sc.id}",
-                                )
-                        me.textarea(
-                            label="Video prompt",
-                            value=sc.visual,
-                            rows=3,
-                            appearance="outline",
-                            disabled=busy,
-                            on_blur=on_scene_visual,
-                            style=me.Style(width="100%"),
-                            key=f"evis-{sc.id}",
-                        )
-
-        with me.box(classes="ss-card ss-summary ss-sound"):
-            me.text("Soundtrack", style=me.Style(font_size=16, font_weight=600))
-            me.slide_toggle(
-                "Music (Lyria)",
-                checked=story.music_on,
-                disabled=busy,
-                on_change=on_toggle_music,
-                key="ss-music-on",
-            )
-            if story.music_on:
-                me.textarea(
-                    label="Music prompt",
-                    value=story.music_prompt or default_music_prompt(story),
-                    rows=3,
-                    appearance="outline",
-                    disabled=busy,
-                    on_blur=on_music_prompt,
-                    style=me.Style(width="100%"),
-                    key="ss-music",
-                )
-            me.slide_toggle(
-                "Narrator voiceover (Gemini TTS)",
-                checked=story.voice_on,
-                disabled=busy,
-                on_change=on_toggle_voice,
-                key="ss-voice-on",
-            )
-            if story.voice_on:
-                me.select(
-                    label="Voice",
-                    options=[me.SelectOption(label=v, value=v) for v in VOICES],
-                    value=story.voice_name,
-                    appearance="outline",
-                    disabled=busy,
-                    on_selection_change=on_voice,
-                    style=me.Style(width="100%"),
-                    key="ss-voice",
-                )
-            if story.has_spoken:
-                me.input(
-                    label="Voice of the person on screen",
-                    value=story.speaker_voice,
-                    placeholder="e.g. a calm, confident male voice, mid-30s",
-                    appearance="outline",
-                    disabled=busy,
-                    on_blur=on_speaker_voice,
-                    style=me.Style(width="100%"),
-                    key="ss-speaker-voice",
-                )
-                me.slide_toggle(
-                    "One take for back-to-back spoken scenes",
-                    checked=story.continuous_takes,
-                    disabled=busy,
-                    on_change=on_toggle_continuous_takes,
-                    key="ss-takes",
-                )
-            if story.voice_on or story.has_spoken:
-                me.slide_toggle(
-                    f"Also make an {alt} version",
-                    checked=story.second_on,
-                    disabled=busy,
-                    on_change=on_toggle_second,
-                    key="ss-second-on",
-                )
-                if story.second_on and story.has_spoken:
-                    me.text(
-                        f"Spoken scenes are filmed again in {alt}.",
-                        style=me.Style(
-                            font_size=13, color=me.theme_var("on-surface-variant")
-                        ),
-                    )
-                if story.second_on:
-                    me.button(
-                        "Translating…"
-                        if _job_active_for("translate")
-                        else f"Translate again into {alt}",
-                        type="stroked",
-                        disabled=busy,
-                        on_click=on_translate_again,
-                        style=me.Style(width="100%"),
-                        key="ss-translate",
-                    )
-                    progress_panel("Translating the narration", ("translate",))
-            me.slide_toggle(
-                "Continuity: start each clip from the last frame of the one before",
-                checked=story.continuity,
-                disabled=busy,
-                on_change=on_toggle_continuity,
-                key="ss-continuity",
-            )
-            me.text(
-                "Smoother cuts, but clips render one after another (slower).",
-                style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-            )
-            if story.continuity:
-                me.slide_toggle(
-                    "Seamless joins: cut between continued scenes instead of crossfading",
-                    checked=story.seamless_joins,
-                    disabled=busy,
-                    on_change=on_toggle_seamless_joins,
-                    key="ss-seamless-joins",
-                )
-                me.text(
-                    "A crossfade over matching frames shows a ghosted double image. "
-                    "Scenes that did not continue still crossfade.",
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
-            with me.box(classes="ss-summary-lines"):
-                me.text(
-                    f"Film length ≈ {_fmt_secs(film_len)} with seamless joins"
-                    if seamless
-                    else f"Film length ≈ {_fmt_secs(film_len)} with {xf:g}s crossfades"
-                )
-                me.text(f"Clips to render: {to_render} of {len(story.scenes)}")
-                if story.makes_alt:
-                    me.text(f"Films: {story.language} and {alt}")
-                    alt_clips = sum(
-                        1
-                        for sc in story.scenes
-                        if sc.spoken
-                        and sc.narration.strip()
-                        and not (sc.clip_uri and sc.has_alt_clip())
-                    )
-                    if alt_clips:
-                        me.text(f"{alt} clips with speech to render: {alt_clips}")
-            me.button(
-                "Rendering…" if _job_active_for("video") else "Render film",
-                type="flat",
-                color="primary",
-                disabled=busy,
-                on_click=on_render,
-                style=me.Style(width="100%", height=48, font_size=15),
-                key="ss-render",
-            )
-            if story.final_uri:
-                me.button(
-                    "View current film",
-                    type="stroked",
-                    on_click=on_to_video,
-                    style=me.Style(width="100%"),
-                )
+        s.desk_tab = "shots"
 
 
 def _move(scene_id: str, delta: int) -> None:
@@ -2707,6 +2562,7 @@ def _set_story_field(field: str, value) -> None:
             "voice_on",
             "voice_name",
             "seamless_joins",
+            "color_match",
         ):
             story.clear_films()
         if field == "continuity":
@@ -2714,7 +2570,6 @@ def _set_story_field(field: str, value) -> None:
             for sc in story.scenes[1:]:
                 sc.clear_clip()
         if field == "music_prompt":
-            # A new prompt means new music on the next render.
             story.music_uri = ""
 
     _edit(apply)
@@ -2745,6 +2600,11 @@ def on_toggle_seamless_joins(e: me.SlideToggleChangeEvent):
     _set_story_field("seamless_joins", not (story and story.seamless_joins))
 
 
+def on_toggle_color_match(e: me.SlideToggleChangeEvent):
+    story = _story()
+    _set_story_field("color_match", not (story and story.color_match))
+
+
 def _start_translation(force: bool) -> None:
     s = me.state(StoryState)
     s.error = ""
@@ -2765,7 +2625,6 @@ def on_toggle_second(e: me.SlideToggleChangeEvent):
         st.final_alt_uri = ""
 
     story = _edit(apply)
-    # Translate right away so the lines can be checked before rendering.
     if turning_on and story and story.needs_translation():
         _start_translation(force=False)
 
@@ -2785,6 +2644,9 @@ def on_voice(e: me.SelectSelectionChangeEvent):
 def on_render(e: me.ClickEvent):
     s = me.state(StoryState)
     s.error = ""
+    story = _story()
+    if story is not None and not story.approved:
+        _edit(lambda st: setattr(st, "approved", True))
     try:
         job = story_jobs.start_video(s.story_id, _owner())
     except Exception as exc:
@@ -2799,18 +2661,51 @@ def on_to_video(e: me.ClickEvent):
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Video
+# Step 4: Timeline & Export
 # ---------------------------------------------------------------------------
 
 
-def _media_map(story: Story) -> dict[str, str]:
-    """Browser URL for every file the timeline plays, plus scene thumbnails.
+_TIMELINE_HANDLERS: timeline_view.TimelineHandlers | None = None
 
-    `thumb:<scene index>` is the scene's still frame, drawn on its video clip.
-    """
-    tl = timeline_mod.normalize(story.timeline_json)
-    srcs = {c["src"] for t in tl["tracks"] for c in t["clips"] if c.get("src")}
-    media = {src: display_url(src) for src in srcs}
+
+def _timeline_handlers() -> timeline_view.TimelineHandlers:
+    global _TIMELINE_HANDLERS
+    if _TIMELINE_HANDLERS is None:
+        _TIMELINE_HANDLERS = timeline_view.TimelineHandlers(
+            on_back_editor=on_back_editor,
+            on_toggle_edit_music=on_toggle_edit_music,
+            on_export=on_export,
+            on_export_menu=on_export_menu,
+            on_export_size=on_export_size,
+            on_export_format=on_export_format,
+            on_export_subs=on_export_subs,
+            on_export_lang=on_export_lang,
+            on_export_branding=on_export_branding,
+            on_subtitle_style=on_subtitle_style,
+            on_proxy_tick=on_proxy_tick,
+            on_cancel_job=on_cancel_job,
+            on_music_prompt=on_music_prompt,
+            on_make_music=on_make_music,
+            on_upload_music=on_upload_music,
+            on_timeline_change=on_timeline_change,
+            on_fix_point=on_fix_point,
+            render_fix_panel=fix_panel,
+            render_alt_film=_alt_film,
+            render_versions_panel=versions_panel,
+            render_progress_panel=progress_panel,
+            media_map=_media_map,
+            job_active_for=_job_active_for,
+            job_dict=_job,
+            scene_task=_scene_task,
+            fmt_secs=_fmt_secs,
+        )
+    return _TIMELINE_HANDLERS
+
+
+def _media_map(story: Story) -> dict[str, str]:
+    """Scene thumbnails for the editor's strip (the player plays one
+    rendered file, so clip URLs are not needed)."""
+    media: dict[str, str] = {}
     for i, sc in enumerate(story.scenes):
         if sc.frame_uri:
             media[f"thumb:{i}"] = display_url(sc.frame_uri)
@@ -2818,125 +2713,18 @@ def _media_map(story: Story) -> dict[str, str]:
 
 
 def edit_view(story: Story) -> None:
-    """The film as an editable timeline, with export and music."""
+    video_step(story)
+
+
+def video_step(story: Story) -> None:
     s = me.state(StoryState)
-    busy = _job_active_for("export", "music", "video", "fix")
-    exporting = _job_active_for("export")
-    making_music = _job_active_for("music")
-    # A finished job is reported by the notice; keep only running or failed panels.
-    job_open = (_job() or {}).get("status") not in (None, "done")
-    tl = timeline_mod.normalize(story.timeline_json)
-    with me.box(classes="ss-video"):
-        with me.box(classes="ss-card ss-edit-head"):
-            with me.box(classes="ss-edit-name"):
-                me.text(
-                    story.title or "Your film",
-                    style=me.Style(font_size=18, font_weight=600),
-                )
-                used = _set() if story.set_id else None
-                me.text(
-                    f"{_fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}"
-                    + (f" · Set: {used.name}" if used else ""),
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
-                if used and story.set_version and story.set_version != used.version:
-                    me.text(
-                        "Set changed since this film was made",
-                        style=me.Style(font_size=13, color=me.theme_var("error")),
-                    )
-                if story.film_edited and story.final_uri and not exporting:
-                    me.text(
-                        "Edited since the last export. Export to update the download.",
-                        style=me.Style(font_size=13, color=me.theme_var("primary")),
-                    )
-            with me.box(classes="ss-edit-tools"):
-                me.button(
-                    "Scenes",
-                    type="stroked",
-                    disabled=busy,
-                    on_click=on_back_editor,
-                    key="ss-back-scenes",
-                )
-                me.button(
-                    "Music",
-                    type="stroked",
-                    disabled=busy and not making_music,
-                    on_click=on_toggle_edit_music,
-                    key="ss-music-toggle",
-                )
-                with me.box(
-                    classes="ss-edit-dl"
-                    + ("" if story.final_uri and not exporting else " is-off")
-                ):
-                    if story.final_uri and not exporting:
-                        me.link(
-                            text="Download",
-                            url=display_url(story.final_uri),
-                            open_in_new_tab=True,
-                        )
-                    else:
-                        me.text("Download")
-                me.button(
-                    "Exporting…" if exporting else "Export",
-                    type="flat",
-                    color="primary",
-                    disabled=busy,
-                    on_click=on_export,
-                    key="ss-export",
-                )
-        if s.edit_music_open or making_music:
-            with me.box(classes="ss-card ss-edit-music"):
-                with me.box(classes="ss-edit-music-input"):
-                    me.input(
-                        placeholder="Describe the music",
-                        value=story.music_prompt or default_music_prompt(story),
-                        appearance="outline",
-                        disabled=busy,
-                        on_blur=on_music_prompt,
-                        style=me.Style(width="100%"),
-                        key="ss-edit-music",
-                    )
-                me.button(
-                    "Making…" if making_music else "Make music",
-                    type="stroked",
-                    disabled=busy,
-                    on_click=on_make_music,
-                    key="ss-make-music",
-                )
-                me.uploader(
-                    label="Upload",
-                    accepted_file_types=AUDIO_MIME_TYPES,
-                    type="stroked",
-                    disabled=busy,
-                    on_upload=on_upload_music,
-                    key="ss-upload-music",
-                )
-            if job_open:
-                progress_panel("Making music", ("music",))
-        if job_open:
-            progress_panel("Exporting", ("export",))
-        fix_panel(story, busy)
-        if job_open:
-            progress_panel("Applying the fix", ("fix",))
-        with me.box(classes="ss-card ss-edit-main"):
-            story_timeline(
-                timeline_json=story.timeline_json,
-                media=_media_map(story),
-                aspect=story.aspect_ratio,
-                busy=busy,
-                on_change=on_timeline_change,
-                on_point=on_fix_point,
-                key="ss-timeline",
-            )
-        if story.final_alt_uri:
-            with me.box(classes="ss-card ss-player"):
-                _alt_film(story)
-        versions_panel(story, busy)
-        if job_open:
-            progress_panel("Adding subtitles", ("subtitles",))
-        downloads_panel(story, busy)
+    timeline_view.render_timeline(
+        s,
+        story,
+        _set() if story.set_id else None,
+        is_demo=is_mock_mode(),
+        h=_timeline_handlers(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2945,8 +2733,6 @@ def edit_view(story: Story) -> None:
 
 
 def versions_panel(story: Story, busy: bool) -> None:
-    """Earlier films of this story: compare one with the current film, or
-    bring it back. Shown once there is more than one film."""
     rows = story_versions.versions(story)
     if len(rows) < 2 and not (rows and rows[0]["uri"] != story.final_uri):
         return
@@ -2975,11 +2761,18 @@ def versions_panel(story: Story, busy: bool) -> None:
                 with me.box(classes="ss-dl-name"):
                     me.text(row["label"])
                     me.text(
-                        story_versions.ago(row["at"]) + (" · current" if current else ""),
-                        style=me.Style(font_size=12, color=me.theme_var("on-surface-variant")),
+                        story_versions.ago(row["at"])
+                        + (" · current" if current else ""),
+                        style=me.Style(
+                            font_size=12, color=me.theme_var("on-surface-variant")
+                        ),
                     )
                 with me.box(classes="ss-dl-actions"):
-                    me.link(text="Download", url=display_url(row["uri"]), open_in_new_tab=True)
+                    timeline_view.download_link(
+                        "Download",
+                        timeline_view.download_url(story, f"version-{n}"),
+                        f"ss-vdl-{n}",
+                    )
                     if not current:
                         me.button(
                             "Hide" if s.compare_uri == row["uri"] else "Compare",
@@ -3036,93 +2829,8 @@ def on_use_version(e: me.ClickEvent):
 
 
 # ---------------------------------------------------------------------------
-# Edit step: downloads (without subtitles, English, Arabic, both)
+# Edit step: Export menu
 # ---------------------------------------------------------------------------
-
-
-def downloads_panel(story: Story, busy: bool) -> None:
-    """The film to download, with or without subtitles. Subtitled versions
-    are made on request from the current edit (free, apart from a short
-    translation when the story is not in that language)."""
-    if not story.final_uri:
-        return
-    making = _job_active_for("subtitles")
-    making_variant = ((_job() or {}).get("params") or {}).get("variant") if making else ""
-    with me.box(classes="ss-card ss-dl"):
-        with me.box(classes="ss-dl-head"):
-            with me.box(classes="ss-dl-title"):
-                me.text("Downloads", style=me.Style(font_size=16, font_weight=600))
-                me.text(
-                    "The film with or without subtitles. A subtitled version is made "
-                    "from your current edit; change the edit or the style and it is "
-                    "made again.",
-                    style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-                )
-            me.button_toggle(
-                value=story.subtitle_style
-                if story.subtitle_style in story_subtitles.STYLES
-                else "clean",
-                buttons=[
-                    me.ButtonToggleButton(label=story_subtitles.STYLE_LABELS[k], value=k)
-                    for k in story_subtitles.STYLES
-                ],
-                disabled=busy,
-                on_change=on_subtitle_style,
-                key="ss-dl-style",
-            )
-        for variant in story_subtitles.VARIANTS:
-            ready = story_subtitles.ready_variant(story, variant)
-            stale = (
-                not ready
-                and variant != "none"
-                and variant in story_subtitles.variants(story)
-            )
-            with me.box(classes="ss-dl-row"):
-                with me.box(classes="ss-dl-name"):
-                    me.text(story_subtitles.VARIANT_LABELS[variant])
-                    if stale:
-                        me.text(
-                            "Out of date: the edit or style changed",
-                            style=me.Style(font_size=12, color=me.theme_var("primary")),
-                        )
-                with me.box(classes="ss-dl-actions"):
-                    if variant != "none" and _subtitle_file_ready(story, variant):
-                        me.link(
-                            text=".srt",
-                            url=f"/api/story/{story.id}/subtitles/{variant}.srt",
-                            open_in_new_tab=True,
-                        )
-                    if ready and not (story.film_edited and variant == "none"):
-                        me.link(
-                            text="Download",
-                            url=display_url(ready),
-                            open_in_new_tab=True,
-                        )
-                    elif variant == "none":
-                        me.text(
-                            "Export your edit first",
-                            style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
-                        )
-                    else:
-                        me.button(
-                            "Making…" if making_variant == variant else ("Make again" if stale else "Make"),
-                            type="stroked",
-                            disabled=busy or story.film_edited,
-                            on_click=on_make_subtitled,
-                            key=f"ss-dl-{variant}",
-                        )
-        if story.film_edited:
-            me.text(
-                "Export your edit first, so every download matches it.",
-                style=me.Style(font_size=13, color=me.theme_var("primary")),
-            )
-
-
-def _subtitle_file_ready(story: Story, variant: str) -> bool:
-    return all(
-        story_subtitles.lines_for(story, c) is not None
-        for c in story_subtitles.variant_langs(variant)
-    )
 
 
 def on_subtitle_style(e: me.ButtonToggleChangeEvent):
@@ -3130,16 +2838,47 @@ def on_subtitle_style(e: me.ButtonToggleChangeEvent):
         _set_story_field("subtitle_style", e.value)
 
 
-def on_make_subtitled(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.error = ""
-    variant = (e.key or "").removeprefix("ss-dl-")
+def on_export_menu(e: me.ClickEvent):
+    ex = me.state(StoryExportState)
+    ex.open = not ex.open
+
+
+def on_export_size(e: me.SelectSelectionChangeEvent):
     try:
-        job = story_jobs.start_subtitled(s.story_id, _owner(), variant)
-    except Exception as exc:
-        s.error = story_jobs.friendly_error(exc)
+        me.state(StoryExportState).short = int(e.value)
+    except (TypeError, ValueError):
+        pass
+
+
+def on_export_format(e: me.SelectSelectionChangeEvent):
+    if e.value in timeline_mod.EXPORT_FORMATS:
+        me.state(StoryExportState).fmt = e.value
+
+
+def on_export_subs(e: me.SelectSelectionChangeEvent):
+    if e.value in story_export.SUB_MODES:
+        me.state(StoryExportState).subs = e.value
+
+
+def on_export_lang(e: me.SelectSelectionChangeEvent):
+    if e.value in story_subtitles.VARIANTS and e.value != "none":
+        me.state(StoryExportState).lang = e.value
+
+
+def on_export_branding(e: me.SlideToggleChangeEvent):
+    ex = me.state(StoryExportState)
+    ex.branding = not ex.branding
+
+
+def on_proxy_tick(e: me.WebEvent):
+    """While the preview is being rendered: pick it up when it is ready
+    (and start it again if nothing is rendering it, e.g. after a restart)."""
+    s = me.state(StoryState)
+    if not s.story_id:
         return
-    _watch(job.id)
+    story = _reload_story()
+    if story is not None:
+        story_jobs.ensure_proxy(story, _owner())
 
 
 # ---------------------------------------------------------------------------
@@ -3180,7 +2919,9 @@ def _fix_changes(
     say = {True: "Spoken on camera", False: "Narrated over the picture"}
     rows = []
     for c in plan.changes:
-        if c.action in ("rewrite_scene", "repaint_frame") and 0 <= c.scene < len(story.scenes):
+        if c.action in ("rewrite_scene", "repaint_frame") and 0 <= c.scene < len(
+            story.scenes
+        ):
             cur = story.scenes[c.scene]
             n = f"Scene {c.scene + 1}"
             if c.narration is not None:
@@ -3196,7 +2937,13 @@ def _fix_changes(
             for label, new, old in (
                 ("look", c.description, getattr(asset, "description", "")),
                 ("outfit", c.outfit, getattr(asset, "outfit", "")),
-                ("voice", c.voice, asset.voice.description if c.asset_kind == "character" and asset else ""),
+                (
+                    "voice",
+                    c.voice,
+                    asset.voice.description
+                    if c.asset_kind == "character" and asset
+                    else "",
+                ),
             ):
                 if new is not None:
                     rows.append((f"{c.asset_name} {label}", old or "(none)", new))
@@ -3208,7 +2955,6 @@ def _fix_changes(
 
 
 def fix_panel(story: Story, busy: bool) -> None:
-    """Type what you dislike; Gemini proposes one change; one click runs it."""
     s = me.state(StoryState)
     plan = _fix_plan()
     locked = busy or s.fix_planning
@@ -3290,12 +3036,16 @@ def _fix_preview(story: Story, plan: story_fix.FixPlan, busy: bool) -> None:
     with me.box(classes="ss-fix-plan"):
         if not plan.runnable:
             with me.box(classes="ss-fix-ask"):
-                me.icon("help_outline", style=me.Style(font_size=20, width=20, height=20))
+                me.icon(
+                    "help_outline", style=me.Style(font_size=20, width=20, height=20)
+                )
                 me.text(
                     plan.question or plan.summary or "Gemini found nothing to change.",
                     style=me.Style(font_size=14, flex_grow=1),
                 )
-                me.button("Dismiss", type="stroked", on_click=on_cancel_fix, key="ss-fix-x")
+                me.button(
+                    "Dismiss", type="stroked", on_click=on_cancel_fix, key="ss-fix-x"
+                )
             return
         me.text(plan.summary or "Proposed change", style=me.Style(font_weight=600))
         if plan.reason:
@@ -3328,10 +3078,17 @@ def _fix_preview(story: Story, plan: story_fix.FixPlan, busy: bool) -> None:
             if is_mock_mode()
             else "Only cuts what is already made. No new generation."
         )
-        me.text(cost, style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")))
+        me.text(
+            cost,
+            style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
+        )
         with me.box(classes="ss-fix-actions"):
             me.button(
-                "Cancel", type="stroked", disabled=busy, on_click=on_cancel_fix, key="ss-fix-cancel"
+                "Cancel",
+                type="stroked",
+                disabled=busy,
+                on_click=on_cancel_fix,
+                key="ss-fix-cancel",
             )
             me.button(
                 "Apply and generate" if paid else "Apply",
@@ -3429,6 +3186,11 @@ def on_apply_fix(e: me.ClickEvent):
     _watch(job.id)
 
 
+on_fix_plan = on_plan_fix
+on_fix_apply = on_apply_fix
+on_fix_undo = on_undo_fix
+
+
 def on_timeline_change(e: me.WebEvent):
     s = me.state(StoryState)
     raw = (e.value or {}).get("timeline", "")
@@ -3444,7 +3206,9 @@ def on_export(e: me.ClickEvent):
     s = me.state(StoryState)
     s.error = ""
     try:
-        job = story_jobs.start_export(s.story_id, _owner())
+        job = story_jobs.start_export(
+            s.story_id, _owner(), me.state(StoryExportState).options()
+        )
     except Exception as exc:
         s.error = story_jobs.friendly_error(exc)
         return
@@ -3480,126 +3244,6 @@ def on_toggle_edit_music(e: me.ClickEvent):
     s.edit_music_open = not s.edit_music_open
 
 
-def video_step(story: Story) -> None:
-    job = _job()
-    rendering = _job_active_for("video")
-    if story.timeline_json and not rendering:
-        edit_view(story)
-        return
-    with me.box(classes="ss-video"):
-        with me.box(classes="ss-card ss-player"):
-            if story.final_uri and not rendering:
-                with me.box(
-                    classes="ss-media "
-                    + (
-                        "ss-ar-916 ss-player-portrait"
-                        if story.aspect_ratio == "9:16"
-                        else "ss-ar-169"
-                    )
-                ):
-                    me.video(
-                        src=display_url(story.final_uri),
-                        style=me.Style(width="100%", height="100%"),
-                    )
-                with me.box(classes="ss-player-meta"):
-                    with me.box():
-                        me.text(
-                            story.title or "Your film",
-                            style=me.Style(font_size=20, font_weight=600),
-                        )
-                        me.text(
-                            f"{len(story.scenes)} scenes · {STYLE_BY_ID.get(story.style, STYLES[0])['label']} · {story.aspect_ratio}",
-                            style=me.Style(
-                                font_size=14, color=me.theme_var("on-surface-variant")
-                            ),
-                        )
-                    with me.box(classes="ss-player-actions"):
-                        me.markdown(f"[Download MP4]({display_url(story.final_uri)})")
-                        if not is_mock_mode():
-                            me.markdown("[Open library](/library)")
-                        me.button(
-                            "Edit and re-render",
-                            type="stroked",
-                            on_click=on_back_editor,
-                        )
-                if story.final_alt_uri:
-                    _alt_film(story)
-            else:
-                with me.box(classes="ss-media ss-ar-169 ss-player-wait"):
-                    if rendering:
-                        me.box(classes="ss-spinner ss-spinner-lg")
-                        me.text(
-                            "Making your film…",
-                            style=me.Style(font_size=18, font_weight=600),
-                        )
-                        me.text(
-                            "Clips, music and voiceover are generated in parallel, then stitched.",
-                            style=me.Style(
-                                font_size=14,
-                                color=me.theme_var("on-surface-variant"),
-                                text_align="center",
-                            ),
-                        )
-                    else:
-                        me.icon(
-                            "movie", style=me.Style(font_size=36, width=36, height=36)
-                        )
-                        me.text(
-                            "No film yet. Render it from the Scenes step.",
-                            style=me.Style(font_size=15),
-                        )
-                        me.button(
-                            "Go to scenes",
-                            type="flat",
-                            color="primary",
-                            on_click=on_back_editor,
-                        )
-
-        with me.box(classes="ss-filmstrip", key="ss-strip"):
-            for i, sc in enumerate(story.scenes):
-                task = (
-                    _scene_task("clip", i)
-                    if job and job.get("kind") == "video"
-                    else None
-                )
-                status = (task or {}).get("status") or ("done" if sc.clip_uri else "")
-                with me.box(classes=f"ss-strip-item ss-strip-{status or 'idle'}"):
-                    with me.box(
-                        classes="ss-media "
-                        + ("ss-ar-916" if story.aspect_ratio == "9:16" else "ss-ar-169")
-                    ):
-                        if sc.frame_uri:
-                            me.image(
-                                src=display_url(sc.frame_uri),
-                                alt=f"Scene {i + 1}",
-                                style=me.Style(
-                                    width="100%", height="100%", object_fit="cover"
-                                ),
-                            )
-                        if status == "running":
-                            with me.box(classes="ss-media-overlay"):
-                                me.box(classes="ss-spinner")
-                                me.text(
-                                    _fmt_secs(task.get("elapsed", 0)),
-                                    style=me.Style(font_size=12),
-                                )
-                    with me.box(classes="ss-strip-label"):
-                        me.text(
-                            f"Scene {i + 1}",
-                            style=me.Style(font_size=12, font_weight=600),
-                        )
-                        me.text(
-                            {
-                                "done": "Clip ready",
-                                "running": "Animating",
-                                "queued": "Queued",
-                                "failed": "Failed",
-                            }.get(status, "Waiting"),
-                            style=me.Style(font_size=12),
-                        )
-        progress_panel("Rendering your film", ("video",))
-
-
 def _dir_class(language: str) -> str:
     """Right-to-left textarea text for Arabic (.ss-rtl in assets/ui/story.css)."""
     return "ss-rtl" if language == "Arabic" else ""
@@ -3629,8 +3273,12 @@ def _alt_film(story: Story) -> None:
                 story.title_alt or story.title or "Your film",
                 style=me.Style(font_size=16, font_weight=600),
             )
-        me.markdown(f"[Download MP4]({display_url(story.final_alt_uri)})")
+        timeline_view.download_link(
+            "Download", timeline_view.download_url(story, "alt"), "ss-dl-alt"
+        )
 
 
 def on_back_editor(e: me.ClickEvent):
-    me.state(StoryState).step = "editor"
+    s = me.state(StoryState)
+    s.step = "editor"
+    s.desk_tab = "shots"

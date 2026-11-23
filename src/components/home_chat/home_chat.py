@@ -13,10 +13,10 @@
 # limitations under the License.
 """Python API for <gm-home-chat> (the Home page's one prompt box).
 
-Under the box sit type chips (Image, Video, Music, Voice, Film). A chip fills
-the box with a sample prompt; sending it then opens that studio with
-``?prompt=...&go=1``, which starts making it right away
-(common/prompt_prefill.take_autostart). Without a chip the box is a chat.
+The mode (Image, Video, Music, Voice, Film) comes from the side menu, the
+mode pill under the box, or the words being typed (detect_kind.js). A mode
+shows its settings as pills under the box, its rarer ones behind "+", and
+sends straight to POST /api/chat/job. Without a mode the box is a chat.
 """
 
 from __future__ import annotations
@@ -194,11 +194,49 @@ _STRINGS = {
     "next_step": ("home.chat.next_step", "Next step"),
     "whole_film": ("home.chat.whole_film", "Whole film"),
     "whole_film_tip": ("home.chat.whole_film_tip", "Run every remaining step"),
+    "on": ("home.chat.on", "On"),
+    "off": ("home.chat.off", "Off"),
+    "more": ("home.chat.more", "Add files and more"),
+    "add_files": ("home.chat.add_files", "Add files or photos"),
+    "add": ("home.chat.add", "Add"),
+    "use": ("home.chat.use", "Use"),
+    "use_as": ("home.chat.use_as", "Use as"),
+    "advanced": ("home.chat.advanced", "Advanced settings"),
+    "changed": ("home.chat.changed", "Changed"),
+    "reset": ("home.chat.reset", "Reset"),
+    "open_studio": ("home.chat.open_studio", "Open full studio"),
+    "detected": ("home.chat.detected", "auto"),
+    "clear_mode": ("home.chat.clear_mode", "Back to chat"),
+    "ph_image": ("home.chat.ph_image", "Describe the image"),
+    "ph_video": ("home.chat.ph_video", "Describe the video"),
+    "ph_music": ("home.chat.ph_music", "Describe the music"),
+    "ph_voice": ("home.chat.ph_voice", "Type what to say"),
+    "ph_film": ("home.chat.ph_film", "Describe your film idea"),
+    "thought": ("home.chat.thought", "Thought for {n} s"),
+    "t_read": ("home.chat.t_read", "Reading your prompt"),
+    "t_mode": ("home.chat.t_mode", "Making"),
+    "t_detected": ("home.chat.t_detected", "You wrote “{word}”"),
+    "t_picked": ("home.chat.t_picked", "Picked by you"),
+    "t_settings": ("home.chat.t_settings", "Settings"),
+    "t_files": ("home.chat.t_files", "Files"),
+    "about": ("home.chat.about", "about {n} s"),
+    "steps_done": ("home.chat.steps_done", "Steps"),
 }
 
 
 def strings() -> dict:
     return {k: tr(key, english) for k, (key, english) in _STRINGS.items()}
+
+
+def _inputs() -> dict:
+    """File slots per type (first frame, references...); {} if unavailable."""
+    try:
+        from services.studio_options import all_inputs
+
+        return all_inputs()
+    except Exception:  # pylint: disable=broad-except
+        logging.getLogger(__name__).exception("Home: file slots unavailable")
+        return {}
 
 
 def _options() -> dict:
@@ -248,6 +286,7 @@ def home_chat(*, live: bool = False, key: str | None = "home-chat"):
             "stringsJson": json.dumps(strings(), ensure_ascii=False),
             "kindsJson": json.dumps(kinds(), ensure_ascii=False),
             "optionsJson": json.dumps(_options(), ensure_ascii=False),
+            "inputsJson": json.dumps(_inputs(), ensure_ascii=False),
             "talkJson": json.dumps({**live_strings(), "talk": t("live.talk", "Talk to the studio")}, ensure_ascii=False),
             "live": live,
         },

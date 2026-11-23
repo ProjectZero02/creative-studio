@@ -377,8 +377,20 @@ class Default:
     )
     # Cost guardrails: every film is capped by these values.
     STORY_MIN_SCENES: int = 3
-    STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 16))
-    STORY_MAX_FILM_SECONDS: int = int(os.environ.get("STORY_MAX_FILM_SECONDS", 180))
+    STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 120))
+    STORY_MAX_FILM_SECONDS: int = int(os.environ.get("STORY_MAX_FILM_SECONDS", 900))
+    STORY_SEQUENCE_THRESHOLD_SCENES: int = int(
+        os.environ.get("STORY_SEQUENCE_THRESHOLD_SCENES", 10)
+    )
+    STORY_AUDIO_OVERLAP_SECONDS: float = float(
+        os.environ.get("STORY_AUDIO_OVERLAP_SECONDS", 0.18)
+    )
+    STORY_MUSIC_LOOP_CROSSFADE: float = float(
+        os.environ.get("STORY_MUSIC_LOOP_CROSSFADE", 2.5)
+    )
+    STORY_COLOR_MATCH: bool = (
+        os.environ.get("STORY_COLOR_MATCH", "true").lower() == "true"
+    )
     STORY_VIDEO_RESOLUTION: str = os.environ.get("STORY_VIDEO_RESOLUTION", "720p")
     # Story clips are made with Gemini Omni (sound, speech and extension in
     # one model). Spoken scenes in a row continue one Omni thread, which keeps
@@ -386,7 +398,23 @@ class Default:
     STORY_VIDEO_MODEL: str = os.environ.get(
         "STORY_VIDEO_MODEL", os.environ.get("OMNI_MODEL_ID", "gemini-omni-1.2-flash")
     )
-    STORY_TAKE_MAX_SECONDS: int = int(os.environ.get("STORY_TAKE_MAX_SECONDS", 30))
+    # Omni on Vertex returns up to 40 s per extension but reads only the last
+    # 30 s of its input, so a take keeps growing while it is at most
+    # STORY_TAKE_CONTEXT_SECONDS long and stays within STORY_TAKE_MAX_SECONDS.
+    STORY_TAKE_MAX_SECONDS: int = int(os.environ.get("STORY_TAKE_MAX_SECONDS", 40))
+    STORY_TAKE_CONTEXT_SECONDS: int = int(
+        os.environ.get("STORY_TAKE_CONTEXT_SECONDS", 30)
+    )
+    # Longer takes roll on: each extension overlaps the last by the context,
+    # and the film crossfades between files for STORY_ROLL_CROSSFADE seconds
+    # inside the overlap (the same moment in both files).
+    STORY_TAKE_ROLLING_MAX_SECONDS: int = int(
+        os.environ.get("STORY_TAKE_ROLLING_MAX_SECONDS", 300)
+    )
+    STORY_ROLL_CROSSFADE: float = float(os.environ.get("STORY_ROLL_CROSSFADE", 0.17))
+    # Seamless joins (bridges, rolling takes) that still show a jump after
+    # stitching are made again this many times.
+    STORY_SEAM_RETRIES: int = int(os.environ.get("STORY_SEAM_RETRIES", 1))
     # Longest scene. Past the video model's single-clip limit (15 s for Omni
     # 1.2 Flash) a scene is one clip plus extensions in the same Omni thread
     # (3 to 10 s each); Omni extends up to 30 s in all.

@@ -20,11 +20,12 @@ it one step at a time, render the film, check status, and open it on screen.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
 from common.utils import create_display_url
-from services import story_autoset, story_jobs
+from services import story_autoset, story_director, story_jobs
 from services.live_jobs import LiveJob, RunResult
 from services.story_models import (
     ASPECT_RATIOS,
@@ -73,6 +74,25 @@ def _normalize_language(value: str) -> str:
     return ""
 
 
+def _extract_target_seconds(length: str) -> int:
+    raw = (length or "").strip()
+    if not raw:
+        return 0
+    if raw.isdigit():
+        return int(raw)
+    parsed = story_autoset.infer_settings(raw)
+    if parsed.get("film_seconds"):
+        return int(parsed["film_seconds"])
+
+    m_min = re.search(r"(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\b", raw, re.I)
+    if m_min:
+        return int(round(float(m_min.group(1)) * 60))
+    m_sec = re.search(r"(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b", raw, re.I)
+    if m_sec:
+        return int(round(float(m_sec.group(1))))
+    return 0
+
+
 def _parse_length(length: str, scene_count: int | None, duration: int | None):
     raw = (length or "").strip()
     if not raw:
@@ -93,20 +113,63 @@ def create_story_record(
     aspect_ratio: str = "",
     style: str = "",
     language: str = "",
+    speech_mode: str = "",
+    camera: str = "",
+    pacing: str = "",
+    video_model: str = "",
+    scene_count: int = 0,
+    scene_seconds: int = 0,
+    script: str = "",
 ) -> Story:
-    """Save a new Story for ``owner``, merging inferred settings with explicit args."""
-    cleaned = (idea or "").strip()
+    """Save a new Story for ``owner``, merging inferred settings with explicit args.
+
+    The optional choices (who speaks, camera, pacing, video engine, scene
+    count and length, a full script) are Story Studio's setup fields; empty
+    or unknown values keep what was inferred from the idea.
+    """
+    from services.story_models import (
+        CAMERA_PRESETS,
+        PACING_MODES,
+        SPEECH_MODES,
+        STORY_VIDEO_ENGINES,
+    )
+
+    scene_count_override = scene_count
+    script = (script or "").strip()
+    cleaned = (idea or "").strip() or script[:400]
     if len(cleaned) < 8:
         raise ValueError("Describe your idea in a sentence or two first.")
 
     inferred = story_autoset.infer_settings(cleaned)
-    scene_count = inferred.get("scene_count", 4)
-    duration = inferred.get("duration", 6)
-    if length:
-        scene_count, duration = _parse_length(length, None, None)
-        scene_count = scene_count or 4
-        duration = duration or 6
-    caps = apply_caps(scene_count, duration)
+    pacing = pacing if pacing in PACING_MODES else inferred.get("pacing", "cinematic")
+    video_model = (
+        video_model
+        if video_model in STORY_VIDEO_ENGINES
+        else inferred.get("video_model", "")
+    )
+    target_seconds = (
+        _extract_target_seconds(length)
+        if length
+        else int(inferred.get("film_seconds") or 0)
+    )
+    if target_seconds >= 90:
+        bp = story_director.plan_film_blueprint(
+            target_seconds, pacing=pacing, video_model=video_model
+        )
+        scene_count = int(bp["scene_count"])
+        duration = int(bp["duration"])
+    else:
+        target_seconds = 0
+        scene_count = inferred.get("scene_count", 4)
+        duration = inferred.get("duration", 6)
+        if length:
+            scene_count, duration = _parse_length(length, None, None)
+            scene_count = scene_count or 4
+            duration = duration or 6
+    if not target_seconds and not length:
+        scene_count = int(scene_count_override or scene_count)
+        duration = int(scene_seconds or duration)
+    caps = apply_caps(scene_count, duration, model_id=video_model)
 
     ar = (aspect_ratio or "").strip()
     chosen_aspect = ar if ar in ASPECT_RATIOS else inferred.get("aspect_ratio", "16:9")
@@ -118,16 +181,24 @@ def create_story_record(
     story = Story(
         idea=cleaned,
         language=chosen_language,
-        speech_mode=inferred.get("speech_mode", "auto"),
+        speech_mode=speech_mode
+        if speech_mode in SPEECH_MODES
+        else inferred.get("speech_mode", "auto"),
         scene_count=caps.scene_count,
         duration=caps.duration,
         aspect_ratio=chosen_aspect,
         style=chosen_style,
-        camera=inferred.get("camera", "auto"),
+        camera=camera if camera in CAMERA_PRESETS else inferred.get("camera", "auto"),
+        target_seconds=target_seconds,
+        pacing=pacing,
+        video_model=video_model,
         scenes=[],
         approved=False,
         step="scenario",
     )
+    if script:
+        story.input_mode = "script"
+        story.raw_script = script
     return story_jobs.get_store().save(story, owner)
 
 
