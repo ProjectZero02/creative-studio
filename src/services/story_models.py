@@ -82,6 +82,16 @@ STYLES: list[dict[str, str]] = [
 ]
 STYLE_BY_ID = {s["id"]: s for s in STYLES}
 
+
+def style_of(story) -> dict:
+    """The story's style preset, with its prompt replaced by the free style
+    text from Setup when there is one."""
+    preset = STYLE_BY_ID.get(getattr(story, "style", ""), STYLES[0])
+    text = " ".join(str(getattr(story, "style_prompt", "") or "").split())[:400]
+    if not text or text == preset["prompt"]:
+        return preset
+    return {**preset, "prompt": text}
+
 CAMERA_PRESETS: dict[str, dict[str, str]] = {
     "auto": {"label": "Director's choice", "prompt": ""},
     "static": {"label": "Static", "prompt": "locked-off static camera"},
@@ -154,9 +164,9 @@ TRANSITION_TYPES: dict[str, str] = {
 TRANSITION_IDS = list(TRANSITION_TYPES)
 
 PACING_MODES: dict[str, dict] = {
-    "dynamic": {"label": "Dynamic (4–6s shots)", "target_shot_seconds": 5},
-    "cinematic": {"label": "Cinematic (6–10s shots)", "target_shot_seconds": 8},
-    "documentary": {"label": "Documentary (8–12s shots)", "target_shot_seconds": 10},
+    "documentary": {"label": "Calm", "target_shot_seconds": 10},
+    "cinematic": {"label": "Normal", "target_shot_seconds": 8},
+    "dynamic": {"label": "Fast", "target_shot_seconds": 5},
 }
 PACING_IDS = list(PACING_MODES)
 
@@ -471,6 +481,16 @@ class Story:
     # kit" was on at Create: colours and tone go into the prompts, the logo
     # into the exported film.
     brand_json: str = ""
+    # The saved brand the snapshot above came from ("" = no brand). The film
+    # keeps the snapshot even if that brand changes later.
+    brand_id: str = ""
+    # Free style text from Setup ("" = the preset's own text, see style_of).
+    style_prompt: str = ""
+    # Video resolution for this story ("" = STORY_VIDEO_RESOLUTION).
+    resolution: str = ""
+    # Setup references (JSON list of {kind, tag, role, uri, voice}): turned
+    # into set assets at Create so @tags in the idea link to them.
+    references_json: str = ""
     # Second-language version: same clips and music, narration translated
     # into alt_language and voiced again. Needs the voiceover on.
     second_on: bool = False
@@ -656,6 +676,64 @@ class Caps:
     notes: list[str] = field(default_factory=list)
 
 
+# Resolutions offered in Setup, lowest first.
+STORY_RESOLUTIONS = ("720p", "1080p", "4k")
+RESOLUTION_LABELS = {"720p": "720p", "1080p": "1080p", "4k": "4K"}
+
+
+def resolution_options(model_id: str | None = None) -> list[str]:
+    """Resolutions the story video model can make (from config/omni_models.py
+    or config/veo_models.py), limited to STORY_RESOLUTIONS."""
+    model, _ = _video_model_spec(model_id)
+    have = set(getattr(model, "resolutions", None) or ["720p"])
+    out = [r for r in STORY_RESOLUTIONS if r in have]
+    return out or ["720p"]
+
+
+def story_resolution(story) -> str:
+    """The resolution clips of this story are made at: the story's own
+    choice when its engine allows it, else STORY_VIDEO_RESOLUTION."""
+    wanted = (getattr(story, "resolution", "") or "").strip().lower()
+    if wanted and wanted in resolution_options(getattr(story, "video_model", "")):
+        return wanted
+    return Default().STORY_VIDEO_RESOLUTION
+
+
+def take_groups(story) -> list[list[int]]:
+    """Scene indices grouped by continuous take, in order. A take has one
+    start frame; later scenes of a take continue its clip."""
+    groups: list[list[int]] = []
+    for i in range(len(story.scenes)):
+        if groups and story.continues_take(i):
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    return groups
+
+
+def frame_scenes(story) -> list[int]:
+    """Scenes that need their own painted frame: the first scene of each
+    take. Scenes that continue a take start from the take's clip."""
+    return [g[0] for g in take_groups(story)]
+
+
+def frame_for(story, index: int) -> str:
+    """The frame shown for scene ``index``: its own, else its take's."""
+    if not 0 <= index < len(story.scenes):
+        return ""
+    own = story.scenes[index].frame_uri
+    if own:
+        return own
+    return story.scenes[story.take_start(index)].frame_uri
+
+
+def frames_ready(story) -> bool:
+    """Every take has its start frame (what Make film needs)."""
+    return bool(story.scenes) and all(
+        story.scenes[i].frame_uri for i in frame_scenes(story)
+    )
+
+
 def nearest_duration(duration: int, model_id: str | None = None) -> int:
     allowed = supported_durations(model_id)
     return min(allowed, key=lambda d: (abs(d - int(duration)), d))
@@ -691,8 +769,11 @@ def apply_caps(
     if n != n0 or d != d0:
         notes.append(f"Film capped at {limit}s: {n} scenes of {d}s.")
     res = cfg.STORY_VIDEO_RESOLUTION
-    if resolution and resolution != res:
-        notes.append(f"Resolution set to {res}.")
+    if resolution:
+        if resolution in resolution_options(model_id):
+            res = resolution
+        else:
+            notes.append(f"Resolution set to {res}.")
     return Caps(scene_count=n, duration=d, resolution=res, notes=notes)
 
 
@@ -1446,12 +1527,12 @@ def _main_character(story: Story, story_set) -> str:
 
 
 def scenario_prompt(story: Story, story_set=None) -> str:
-    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    style = style_of(story)
     cams = ", ".join(CAMERA_IDS)
     cam_rule = (
         f'Use the camera move "{story.camera}" for every scene.'
         if story.camera in CAMERA_IDS
-        else f"Pick the best camera move for each scene from: {cams}."
+        else f"Read the camera from the idea: if it says how the camera moves (for example 'the camera pans left to right slowly'), use that move, direction and speed for every shot it covers and do not change it between shots of one take. Otherwise pick the best camera move for each scene from: {cams}."
     )
     casting = scenario_casts(story_set)
     links = (
@@ -1696,7 +1777,7 @@ def _scenario_cast_rules(casting: bool) -> str:
 def set_build_prompt(story: Story) -> str:
     """Ask Gemini for the story's cast, places and props, with a fixed look
     and voice for each, and which of them appear in every scene."""
-    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    style = style_of(story)
     scenes = "\n".join(
         f"{i + 1}. [{'spoken on camera' if sc.spoken else 'narrator'}] "
         f"{sc.visual} | Line: {sc.narration}"
@@ -1935,13 +2016,15 @@ def frame_prompt(
     story_set=None,
     ref_labels: list[str] | None = None,
     same_take: bool = False,
+    note: str = "",
 ) -> str:
     """Image prompt for a storyboard frame. With a set, the scene's cast,
     place and props are described and each reference image is named
     (`ref_labels`, in image order). ``same_take``: the reference is the
     first frame of the continuous take this scene belongs to, so the room
-    must stay as it is there."""
-    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    must stay as it is there. ``note``: the director's "Redo with note"
+    for this frame."""
+    style = style_of(story)
     keep = (
         " Keep the same main character, wardrobe, palette and art style as the "
         "reference image."
@@ -1989,8 +2072,13 @@ def frame_prompt(
     return (
         f"{scene.visual}{shot_text}{character}{place}{facing} Style: {style['prompt']}.{grammar_text}{brand} "
         f"Aspect ratio {story.aspect_ratio}, one single frame, no text, no captions."
-        f"{people}{keep}{refs_sentence(ref_labels or [])}"
+        f"{people}{keep}{refs_sentence(ref_labels or [])}{_note_text(note)}"
     )
+
+
+def _note_text(note: str) -> str:
+    note = " ".join((note or "").split())[:400]
+    return f" Director's note for this version, follow it: {note}." if note else ""
 
 
 def speaker_voice(story: Story, scene: Scene, story_set=None) -> str:
@@ -2124,7 +2212,7 @@ def clip_prompt(
 
 
 def default_music_prompt(story: Story) -> str:
-    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    style = style_of(story)
     return (
         f"Cinematic instrumental score for a short {style['label'].lower()} film: "
         f"{story.title or story.idea[:80]}. Warm, building, no vocals."

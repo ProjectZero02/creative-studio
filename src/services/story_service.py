@@ -71,6 +71,7 @@ from services.story_models import (
     set_schema,
     single_clip_max,
     split_narration_parts,
+    story_resolution,
     translation_prompt,
 )
 
@@ -164,7 +165,9 @@ class StoryBackend(Protocol):
     ) -> str: ...
     def translate(self, story: Story) -> str: ...
     def translate_subtitles(self, story: Story, code: str) -> list[str]: ...
-    def generate_frame(self, story: Story, index: int, reference_uri: str) -> str: ...
+    def generate_frame(
+        self, story: Story, index: int, reference_uri: str, note: str = ""
+    ) -> str: ...
     def generate_clip(
         self,
         story: Story,
@@ -895,7 +898,9 @@ class MockStoryBackend:
         )
 
     # -- frames --
-    def generate_frame(self, story: Story, index: int, reference_uri: str) -> str:
+    def generate_frame(
+        self, story: Story, index: int, reference_uri: str, note: str = ""
+    ) -> str:
         from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
         self._sleep(1.8, 3.4)
@@ -1778,7 +1783,7 @@ class VertexStoryBackend:
             prompt=prompt,
             duration_seconds=clamp_duration(model_id, int(seconds)),
             aspect_ratio=story.aspect_ratio,
-            resolution=caps.resolution,
+            resolution=story_resolution(story),
             model_version_id=model_id,
             **extra,
         )
@@ -2045,7 +2050,9 @@ class VertexStoryBackend:
         )
         return subs.parse_translation(text, len(story.scenes))
 
-    def generate_frame(self, story: Story, index: int, reference_uri: str) -> str:
+    def generate_frame(
+        self, story: Story, index: int, reference_uri: str, note: str = ""
+    ) -> str:
         from models.gemini import generate_image_from_prompt_and_images
 
         scene = story.scenes[index]
@@ -2086,6 +2093,7 @@ class VertexStoryBackend:
                 story_set,
                 labels or None,
                 same_take=same_take,
+                note=note,
             ),
             images=refs,
             aspect_ratio=story.aspect_ratio,
@@ -2118,7 +2126,7 @@ class VertexStoryBackend:
             )
         )
         caps = apply_caps(story.scene_count, scene.duration, model_id=version_id)
-        resolution = (
+        resolution = story_resolution(story) if getattr(story, "resolution", "") else (
             getattr(self.cfg, "STORY_VIDEO_RESOLUTION", "") or caps.resolution or "720p"
         )
         extra = clip_inputs(
@@ -2633,7 +2641,6 @@ class VertexStoryBackend:
             add_media_item_to_firestore,
         )
 
-        caps = apply_caps(story.scene_count, story.duration)
         item = MediaItem(
             user_email=owner,
             gcsuri=final_uri,
@@ -2644,7 +2651,7 @@ class VertexStoryBackend:
             prompt=story.idea,
             original_prompt=story.idea,
             aspect=story.aspect_ratio,
-            resolution=caps.resolution,
+            resolution=story_resolution(story),
             duration=float(sum(s.duration for s in story.scenes)),
             thumbnail_uri=story.cover_uri or None,
             reference_image=story.cover_uri or None,

@@ -35,27 +35,42 @@ class StoryState:
     # Create form draft (copied into the story on "Generate scenario").
     input_mode: str = "idea"  # "idea" | "script"
     raw_script: str = ""
-    target_seconds: int = 0  # 0 = custom scenes x duration, else e.g. 30, 60, 180, 300, 600
+    target_seconds: int = 0  # film length asked for (0 = Gemini decides)
+    duration_text: str = ""  # the Setup duration box ("30s", "2 min", "")
     pacing: str = "cinematic"
     video_model: str = ""
     idea: str = ""
     character: str = ""
     language: str = "English"
     speech_mode: str = "auto"
-    use_brand: bool = False  # copy the brand kit onto the story at Create
+    # Brand picked in Setup: a brand id, "none", or "" (not picked yet: the
+    # owner's default brand). The brand is copied onto the story at Create.
+    brand_id: str = ""
+    brands_json: str = "[]"  # the owner's brands for the dropdown
     scene_count: int = 4
     duration: int = 6
     aspect_ratio: str = "16:9"
     style: str = "photographic"
+    style_text: str = ""  # free style text ("" = the preset's text)
+    resolution: str = ""  # "" = STORY_VIDEO_RESOLUTION
     camera: str = "auto"
     reference_uri: str = ""
+    # Setup references (services/story_refs.py), JSON list.
+    refs_json: str = "[]"
+    ref_menu_open: bool = False
     prompt_prefill_seen: str = ""  # last ?prompt= applied on load
     # Auto settings read from the idea while typing (services/story_autoset).
     auto_json: str = ""  # what was found, for the note under the idea
     pinned_json: str = "[]"  # form fields the user set by hand (kept as is)
 
-    # Director's Desk UI state.
+    # Director's Desk UI state: one canvas. A strip of takes and shots; the
+    # selected shot opens in the side panel. References (cast and set) and
+    # Preview (the animatic) open as panels.
     desk_tab: str = "shots"  # "shots" | "set" | "animatic"
+    selected_shot: int = 0
+    refs_open: bool = False
+    preview_open: bool = False
+    redo_note: str = ""
     seq_filter: str = "all"  # "all" or sequence title
     soundtrack_open: bool = False
     animatic_index: int = 0

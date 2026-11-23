@@ -55,6 +55,7 @@ from services import (
     story_export,
     story_fix,
     story_jobs,
+    story_refs,
     story_subtitles,
     story_versions,
 )
@@ -66,6 +67,7 @@ from services.story_models import (
     STEP_IDS,
     STORY_VIDEO_ENGINES,
     STYLE_BY_ID,
+    SPEECH_MODES,
     STYLES,
     TRANSITION_IDS,
     VOICES,
@@ -75,8 +77,12 @@ from services.story_models import (
     can_enter,
     default_music_prompt,
     furthest_step,
+    frame_scenes,
+    frames_ready,
     max_words,
     reachable_steps,
+    resolution_options,
+    take_groups,
 )
 from services.story_service import (
     display_url,
@@ -104,17 +110,6 @@ logger = get_logger(__name__)
 # The two audio types of a scene: a narrator over Omni's own (ambient) sound,
 # or the person on screen speaking (Omni renders the speech).
 AUDIO_VOICEOVER, AUDIO_ON_CAMERA = "voiceover", "camera"
-
-EXAMPLE_IDEAS = [
-    "A lighthouse keeper befriends a lost baby whale and helps it find its family.",
-    "A tiny robot opens a coffee shop on Mars and its first customer is a dust storm.",
-    "A grandmother's recipe book comes alive the night before the village festival.",
-]
-EXAMPLE_LABELS = [
-    "Lighthouse and whale",
-    "Robot café on Mars",
-    "The living recipe book",
-]
 
 STATUS_LABEL = {
     "queued": "Queued",
@@ -144,6 +139,7 @@ def on_load(e: me.LoadEvent):
             if step and can_enter(step, _story()):
                 s.step = step
                 s.desk_tab = "set" if step == "set" else "shots"
+    _refresh_brands()  # a brand made on /brand shows up on return
     filled = _prefill_idea()
     yield
     if take_autostart(filled):  # Home type chip: write the scenario now
@@ -333,14 +329,22 @@ def _load_form(story: Story) -> None:
     s.character = story.character
     s.language = story.language
     s.speech_mode = story.speech_mode
-    s.use_brand = bool(story.brand_json)
+    s.brand_id = story.brand_id or ("none" if not story.brand_json else "")
+    s.duration_text = (
+        f"{story.target_seconds}s" if getattr(story, "target_seconds", 0) else ""
+    )
+    s.resolution = getattr(story, "resolution", "") or ""
+    s.style_text = getattr(story, "style_prompt", "") or ""
+    s.refs_json = story_refs.dump(story_refs.parse(getattr(story, "references_json", "")))
+    s.ref_menu_open = False
     s.scene_count = story.scene_count
     s.duration = story.duration
     s.aspect_ratio = story.aspect_ratio
     s.style = story.style
     s.camera = story.camera
     s.reference_uri = story.reference_uri
-    s.create_set_id = story.set_id
+    # A set made from Setup references is shown again as its references.
+    s.create_set_id = "" if s.refs_json != "[]" else story.set_id
     s.auto_json = ""
     s.pinned_json = "[]"
 
@@ -550,7 +554,7 @@ def _outputs_ready(story: Story | None, kind: str) -> bool:
     if story is None:
         return True
     if kind == "storyboard":
-        return bool(story.scenes) and all(sc.frame_uri for sc in story.scenes)
+        return frames_ready(story)
     if kind == "clips":
         return bool(story.scenes) and any(sc.clip_uri for sc in story.scenes)
     if kind in ("video", "export", "fix"):
@@ -604,6 +608,12 @@ def on_tick(e: me.WebEvent):
         story = _reload_story()
         if snap["kind"] in ("set", "scenario"):
             _load_set(story)
+    if snap["status"] != "running" and snap.get("next_job"):
+        # Setup's guided flow: the breakdown is written, frames paint now.
+        _watch(snap["next_job"])
+        s.selected_shot = 0
+        _reload_story()
+        return
     if snap["status"] != "running":
         s.job_running = False
         story = _story()
@@ -892,11 +902,17 @@ def _start_new_story() -> None:
     s.input_mode = "idea"
     s.raw_script = ""
     s.target_seconds = 0
+    s.duration_text = ""
     s.pacing = "cinematic"
     s.video_model = ""
+    s.resolution = ""
+    s.style_text = ""
     s.idea = ""
     s.character = ""
     s.reference_uri = ""
+    s.refs_json = "[]"
+    s.ref_menu_open = False
+    s.brand_id = ""
     s.create_set_id = ""
     s.auto_json = ""
     s.pinned_json = "[]"
@@ -909,8 +925,13 @@ def _start_new_story() -> None:
     s.soundtrack_open = False
     s.animatic_index = 0
     s.expanded_shots_json = "[]"
+    s.selected_shot = 0
+    s.refs_open = False
+    s.preview_open = False
+    s.redo_note = ""
     s.error = ""
     s.step = "create"
+    _refresh_brands()
 
 
 def on_continue_story(e: me.ClickEvent):
@@ -952,22 +973,25 @@ def _setup_handlers() -> setup_view.SetupHandlers:
             on_idea_live=on_idea_live,
             on_idea_blur=on_idea_blur,
             on_script_blur=on_script_blur,
-            on_example=on_example,
-            on_target_preset=on_target_preset,
+            on_duration_live=on_duration_live,
+            on_duration_blur=on_duration_blur,
             on_pacing=on_pacing,
             on_video_model=on_video_model,
-            on_pick_set=on_pick_set,
-            on_character_blur=on_character_blur,
-            on_language=on_language,
-            on_speech_mode=on_speech_mode,
-            on_scene_count=on_scene_count,
-            on_duration=on_duration,
             on_aspect=on_aspect,
-            on_camera=on_camera,
-            on_use_brand=on_use_brand,
-            on_style=on_style,
-            on_upload_reference=on_upload_reference,
-            on_remove_reference=on_remove_reference,
+            on_language=on_language,
+            on_resolution=on_resolution,
+            on_style_chip=on_style_chip,
+            on_style_blur=on_style_blur,
+            on_pick_set=on_pick_set,
+            on_brand=on_brand,
+            on_ref_menu=on_ref_menu,
+            on_add_ref=on_add_ref,
+            on_ref_tag=on_ref_tag,
+            on_ref_role=on_ref_role,
+            on_ref_voice=on_ref_voice,
+            on_ref_upload=on_ref_upload,
+            on_ref_mention=on_ref_mention,
+            on_ref_remove=on_ref_remove,
             on_generate_scenario=on_generate_scenario,
             render_auto_note=_auto_note,
             fmt_secs=_fmt_secs,
@@ -983,8 +1007,6 @@ def create_step(story: Story | None) -> None:
         story,
         busy=busy,
         set_rows=_sets_rows(),
-        example_ideas=EXAMPLE_IDEAS,
-        example_labels=EXAMPLE_LABELS,
         h=_setup_handlers(),
     )
 
@@ -1002,23 +1024,44 @@ def on_script_blur(e: me.InputBlurEvent):
     me.state(StoryState).raw_script = e.value
 
 
-def on_target_preset(e: me.ClickEvent):
+def _set_duration_text(text: str) -> None:
     s = me.state(StoryState)
-    try:
-        secs = int((e.key or "").split("-", 1)[1])
-    except (IndexError, ValueError):
-        return
-    s.target_seconds = max(0, secs)
+    s.duration_text = " ".join(str(text or "").split())[:24]
+    secs = story_director.parse_duration_text(s.duration_text)
+    s.target_seconds = int(secs or 0)
+    if secs:
+        _pin("film_seconds")
 
 
-def on_pacing(e: me.SelectSelectionChangeEvent):
-    if e.value in PACING_IDS:
-        me.state(StoryState).pacing = e.value
+def on_duration_live(e: me.WebEvent):
+    """Typing paused in the duration box: the blueprint updates."""
+    _set_duration_text(str((e.value or {}).get("value", "")))
+
+
+def on_duration_blur(e: me.InputBlurEvent):
+    _set_duration_text(e.value)
+
+
+def on_pacing(e: me.ClickEvent):
+    value = (e.key or "").split("-", 1)[-1]
+    if value in PACING_IDS:
+        me.state(StoryState).pacing = value
+        _pin("pacing")
 
 
 def on_video_model(e: me.SelectSelectionChangeEvent):
     if e.value in STORY_VIDEO_ENGINES:
-        me.state(StoryState).video_model = e.value
+        s = me.state(StoryState)
+        s.video_model = e.value
+        if s.resolution and s.resolution not in resolution_options(e.value):
+            s.resolution = ""
+        _pin("video_model")
+
+
+def on_resolution(e: me.SelectSelectionChangeEvent):
+    s = me.state(StoryState)
+    if e.value in resolution_options(setup_view.engine_of(s)):
+        s.resolution = e.value
 
 
 # -- Auto settings: read the film settings out of the idea while typing --
@@ -1091,36 +1134,26 @@ def _auto_note() -> None:
         found = json.loads(s.auto_json) if s.auto_json else {}
     except ValueError:
         found = {}
-    pinned = _pinned()
-    summary = story_autoset.describe(found)
-    if not summary and not pinned:
+    shown = {k: v for k, v in found.items() if k in _AUTO_SHOWN}
+    summary = story_autoset.describe(shown)
+    if not summary:
         return
     with me.box(classes="ss-auto-note", key="ss-auto-note"):
         me.icon("auto_awesome", style=me.Style(font_size=18, width=18, height=18))
         with me.box(classes="ss-auto-text"):
-            me.text(
-                f"Set from your idea: {summary}"
-                if summary
-                else "Settings you picked stay as they are."
-            )
-        if pinned:
+            me.text(f"From your idea: {summary}")
+        if _pinned():
             me.button(
                 "Use auto", type="stroked", on_click=on_reset_auto, key="ss-auto-reset"
             )
 
 
-def on_character_blur(e: me.InputBlurEvent):
-    me.state(StoryState).character = e.value
+# What the note under the idea mentions (fields still on the Setup screen).
+_AUTO_SHOWN = ("film_seconds", "aspect_ratio", "language", "style", "pacing", "video_model")
 
 
 def on_pick_set(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).create_set_id = "" if e.value == "none" else e.value
-
-
-def on_example(e: me.ClickEvent):
-    idea = EXAMPLE_IDEAS[int(e.key.split("-")[1])]
-    me.state(StoryState).idea = idea
-    _apply_auto(story_autoset.infer_settings(idea))
 
 
 def on_language(e: me.SelectSelectionChangeEvent):
@@ -1128,71 +1161,200 @@ def on_language(e: me.SelectSelectionChangeEvent):
     _pin("language")
 
 
-def _brand_json(owner: str) -> str:
-    kit = brand_kit.load(owner)
-    return "" if brand_kit.is_empty(kit) else json.dumps(kit)
-
-
-def on_use_brand(e: me.SlideToggleChangeEvent):  # pylint: disable=unused-argument
-    s = me.state(StoryState)
-    if s.use_brand:
-        s.use_brand = False
-        return
-    if not _brand_json(_owner()):
-        s.error = "Your brand is empty. Set it up on the My brand page first."
-        return
-    s.error = ""
-    s.use_brand = True
-
-
-def on_speech_mode(e: me.SelectSelectionChangeEvent):
-    me.state(StoryState).speech_mode = e.value
-    _pin("speech_mode")
-
-
-def on_scene_count(e: me.SelectSelectionChangeEvent):
-    s = me.state(StoryState)
-    s.scene_count = int(e.value)
-    s.target_seconds = 0
-    _pin("scene_count")
-    _reapply_auto()
-
-
-def on_duration(e: me.SelectSelectionChangeEvent):
-    s = me.state(StoryState)
-    s.duration = int(e.value)
-    s.target_seconds = 0
-    _pin("duration")
-    _reapply_auto()
-
-
 def on_aspect(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).aspect_ratio = e.value
     _pin("aspect_ratio")
 
 
-def on_camera(e: me.SelectSelectionChangeEvent):
-    me.state(StoryState).camera = e.value
-    _pin("camera")
-
-
-def on_style(e: me.WebEvent):
-    value = (e.value or {}).get("value", "")
+def on_style_chip(e: me.ClickEvent):
+    value = (e.key or "").split("-", 1)[-1]
     if value in STYLE_BY_ID:
-        me.state(StoryState).style = value
+        s = me.state(StoryState)
+        s.style = value
+        s.style_text = STYLE_BY_ID[value]["prompt"]
         _pin("style")
 
 
-def on_upload_reference(e: me.UploadEvent):
+def on_style_blur(e: me.InputBlurEvent):
+    s = me.state(StoryState)
+    text = " ".join((e.value or "").split())[:400]
+    preset = next((st["id"] for st in STYLES if st["prompt"] == text), "")
+    if preset:
+        s.style = preset
+    s.style_text = text
+    _pin("style")
+
+
+# -- Brands --
+
+
+def _refresh_brands() -> None:
     s = me.state(StoryState)
     try:
-        s.reference_uri = get_backend().save_upload(e.file.getvalue(), e.file.mime_type)
+        s.brands_json = json.dumps(brand_kit.list_brands(_owner()))
+    except Exception:
+        logger.exception("Story Studio: could not list brands")
+        s.brands_json = "[]"
+
+
+def _brand_snapshot(owner: str, brand_id: str) -> tuple[str, str]:
+    """(brand_id, snapshot JSON) for the story; ("", "") for no brand.
+    "" means the owner's default brand."""
+    if brand_id == "none":
+        return "", ""
+    brand = (
+        brand_kit.get_brand(owner, brand_id)
+        if brand_id
+        else brand_kit.default_brand(owner)
+    )
+    snap = brand_kit.snapshot(brand)
+    return (brand["id"], snap) if brand and snap else ("", "")
+
+
+def on_brand(e: me.SelectSelectionChangeEvent):
+    s = me.state(StoryState)
+    if e.value == "new":
+        me.navigate("/brand", query_params={"id": "new"})
+        return
+    s.brand_id = e.value if e.value else "none"
+
+
+# -- References (services/story_refs.py) --
+
+
+def _refs() -> list[dict]:
+    return story_refs.parse(me.state(StoryState).refs_json)
+
+
+def _put_refs(refs: list[dict]) -> None:
+    me.state(StoryState).refs_json = story_refs.dump(refs)
+
+
+def _ref_id(key: str) -> str:
+    return (key or "").split("-", 1)[-1]
+
+
+def _edit_ref(key: str, **changes) -> None:
+    rid = _ref_id(key)
+    _put_refs([{**r, **changes} if r["id"] == rid else r for r in _refs()])
+
+
+def on_ref_menu(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.ref_menu_open = not s.ref_menu_open
+
+
+def on_add_ref(e: me.ClickEvent):
+    s = me.state(StoryState)
+    kind = _ref_id(e.key)
+    s.ref_menu_open = False
+    if kind == "brand":
+        _refresh_brands()
+        try:
+            rows = json.loads(s.brands_json or "[]")
+        except ValueError:
+            rows = []
+        if not rows:
+            me.navigate("/brand", query_params={"id": "new"})
+            return
+        if s.brand_id in ("", "none"):
+            default = next((b for b in rows if b.get("is_default")), rows[0])
+            s.brand_id = default["id"]
+        return
+    refs = _refs()
+    ref = story_refs.new_ref(kind, refs)
+    if ref is None:
+        s.error = f"Up to {story_refs.MAX_REFS} references."
+        return
+    _put_refs([*refs, ref])
+
+
+def on_ref_tag(e: me.InputBlurEvent):
+    tag = story_refs.clean_tag(e.value)
+    if tag:
+        _edit_ref(e.key, tag=tag)
+
+
+def on_ref_role(e: me.InputBlurEvent):
+    _edit_ref(e.key, role=e.value)
+
+
+def on_ref_voice(e: me.SelectSelectionChangeEvent):
+    _edit_ref(e.key, voice=e.value)
+
+
+def on_ref_upload(e: me.UploadEvent):
+    s = me.state(StoryState)
+    try:
+        uri = get_backend().save_upload(e.file.getvalue(), e.file.mime_type)
     except Exception as exc:
         s.error = story_jobs.friendly_error(exc)
+        return
+    _edit_ref(e.key, uri=uri)
 
 
-def on_remove_reference(e: me.ClickEvent):
-    me.state(StoryState).reference_uri = ""
+def on_ref_mention(e: me.ClickEvent):
+    s = me.state(StoryState)
+    ref = next((r for r in _refs() if r["id"] == _ref_id(e.key)), None)
+    if ref is None:
+        return
+    s.input_mode = "idea"
+    s.idea = story_refs.mention(s.idea, ref["tag"])
+
+
+def on_ref_remove(e: me.ClickEvent):
+    rid = _ref_id(e.key)
+    _put_refs([r for r in _refs() if r["id"] != rid])
+
+
+def _story_set_for(owner: str, story: Story, refs: list[dict], picked: str) -> str:
+    """The set id the story uses: the picked set, or a copy of it (or a new
+    set) with the references added."""
+    base = get_set_store().get(picked, owner) if picked else None
+    if not refs:
+        return base.id if base else ""
+    made = story_refs.build_set(
+        refs,
+        base=base,
+        owner=owner,
+        name=f"{(story.idea or 'Story')[:40]} references" if base is None else "",
+        style=story.style,
+    )
+    if made is None:
+        return base.id if base else ""
+    return get_set_store().save(made, owner).id
+
+
+def setup_plan(s: StoryState) -> tuple[int, int, int]:
+    """(target seconds, scene count, scene length) from the Setup screen."""
+    seconds, source = setup_view.film_seconds(s)
+    if s.input_mode == "script" and source == "script":
+        try:
+            parsed = story_director.parse_user_script(
+                s.raw_script,
+                language=s.language,
+                speech_mode=s.speech_mode,
+                pacing=s.pacing,
+                target_seconds=0,
+            )
+            scenes = parsed.get("scenes") or []
+            if scenes:
+                dur = max(
+                    4,
+                    round(
+                        sum(int(sc.get("seconds") or s.duration) for sc in scenes)
+                        / len(scenes)
+                    ),
+                )
+                return 0, len(scenes), dur
+        except Exception:
+            logger.exception("Story Studio: script parse failed")
+    bp = story_director.plan_film_blueprint(
+        seconds or story_director.DEFAULT_FILM_SECONDS,
+        pacing=s.pacing,
+        video_model=setup_view.engine_of(s),
+    )
+    return int(seconds or 0), int(bp["scene_count"]), int(bp["duration"])
 
 
 def on_generate_scenario(e: me.ClickEvent):
@@ -1209,42 +1371,18 @@ def on_generate_scenario(e: me.ClickEvent):
         if len(idea) < 8:
             s.error = "Describe your idea in a sentence or two first."
             return
+    if s.duration_text.strip() and story_director.parse_duration_text(s.duration_text) is None:
+        s.error = 'Write a length like "30s", "2 min" or "1:30", or leave it empty.'
+        return
 
-    req_count, req_dur = s.scene_count, s.duration
-    if s.input_mode == "script":
-        try:
-            parsed = story_director.parse_user_script(
-                s.raw_script,
-                language=s.language,
-                speech_mode=s.speech_mode,
-                pacing=s.pacing,
-                target_seconds=s.target_seconds,
-            )
-            scenes = parsed.get("scenes") or []
-            if scenes:
-                req_count = len(scenes)
-                req_dur = max(
-                    4,
-                    round(
-                        sum(int(sc.get("seconds") or s.duration) for sc in scenes)
-                        / len(scenes)
-                    ),
-                )
-        except Exception:
-            pass
-    elif s.target_seconds > 0:
-        try:
-            bp = story_director.plan_film_blueprint(
-                s.target_seconds, pacing=s.pacing, video_model=s.video_model
-            )
-            req_count = int(bp["scene_count"])
-            req_dur = int(bp["duration"])
-        except Exception:
-            pass
-
-    caps = apply_caps(req_count, req_dur, model_id=s.video_model)
+    target, req_count, req_dur = setup_plan(s)
+    caps = apply_caps(
+        req_count, req_dur, resolution=s.resolution, model_id=setup_view.engine_of(s)
+    )
     s.scene_count, s.duration = caps.scene_count, caps.duration
+    s.target_seconds = target
     owner = _owner()
+    refs = _refs()
     try:
         existing = get_store().get(s.story_id, owner) if s.story_id else None
         story = existing or Story()
@@ -1252,24 +1390,33 @@ def on_generate_scenario(e: me.ClickEvent):
             story.brief = ""  # a new idea: Gemini writes a new brief
         story.input_mode = s.input_mode if s.input_mode in ("idea", "script") else "idea"
         story.raw_script = s.raw_script if story.input_mode == "script" else ""
-        story.target_seconds = int(s.target_seconds or 0)
+        story.target_seconds = int(target or 0)
         story.pacing = s.pacing if s.pacing in PACING_IDS else "cinematic"
         story.video_model = s.video_model
+        story.resolution = caps.resolution if s.resolution else ""
         story.idea = idea
-        story.character = s.character.strip()
+        story.character = ""
         story.language = s.language
-        story.speech_mode = s.speech_mode
-        story.brand_json = _brand_json(owner) if s.use_brand else ""
+        # Who speaks and the camera move come from the idea (read while
+        # typing, story_autoset); the director reads the idea text too.
+        story.speech_mode = s.speech_mode if s.speech_mode in SPEECH_MODES else "auto"
+        story.camera = s.camera if s.camera in CAMERA_IDS else "auto"
+        story.brand_id, story.brand_json = _brand_snapshot(owner, s.brand_id)
         story.scene_count = caps.scene_count
         story.duration = caps.duration
         story.aspect_ratio = s.aspect_ratio
-        story.style = s.style
-        story.camera = s.camera
-        story.reference_uri = s.reference_uri
+        story.style = s.style if s.style in STYLE_BY_ID else "photographic"
+        preset = STYLE_BY_ID[story.style]["prompt"]
+        story.style_prompt = "" if s.style_text in ("", preset) else s.style_text
+        story.reference_uri = ""
+        story.references_json = story_refs.dump(refs)
+        voice = story_refs.narrator_voice(refs)
+        if voice:
+            story.voice_name = voice
         picked = s.create_set_id
         if picked and get_set_store().get(picked, owner) is None:
             picked = ""
-        story.set_id = picked
+        story.set_id = _story_set_for(owner, story, refs, picked)
         story.set_version = 0
         story.cast_json = ""
         story.scenes = []
@@ -1279,7 +1426,8 @@ def on_generate_scenario(e: me.ClickEvent):
         story = get_store().save(story, owner)
         _set_story(story)
         _load_set(story, force=True)
-        job = story_jobs.start_scenario(story.id, owner)
+        _refresh_sets()
+        job = story_jobs.start_scenario(story.id, owner, then_frames=True)
     except Exception as exc:
         logger.exception("Story Studio: could not start scenario")
         s.error = story_jobs.friendly_error(exc)
@@ -1288,6 +1436,10 @@ def on_generate_scenario(e: me.ClickEvent):
     s.step = "scenario"
     s.desk_tab = "shots"
     s.seq_filter = "all"
+    s.selected_shot = 0
+    s.preview_open = False
+    s.refs_open = False
+    s.redo_note = ""
     s.animatic_index = 0
     yield
 
@@ -1307,17 +1459,20 @@ def _desk_handlers() -> desk_view.DeskHandlers:
             on_title_blur=on_title_blur,
             on_brief_blur=on_brief_blur,
             on_visual_grammar_blur=on_visual_grammar_blur,
-            on_desk_tab=on_desk_tab,
-            on_seq_filter=on_seq_filter,
+            on_select_shot=on_select_shot,
+            on_toggle_refs=on_toggle_refs,
+            on_toggle_preview=on_toggle_preview,
             on_toggle_soundtrack=on_toggle_soundtrack,
             on_make_set=on_make_set,
             on_paint_all_frames=on_paint_all_frames,
             on_render=on_render,
+            on_to_video=on_to_video,
             on_cancel_job=on_cancel_job,
             on_rewrite_all=on_rewrite_all,
             on_rewrite_scene=on_rewrite_scene,
-            on_regen_frame=on_regen_frame,
-            on_animate_shot=on_animate_shot,
+            on_redo_note=on_redo_note,
+            on_redo_frame=on_redo_frame,
+            on_redo_clip=on_redo_clip,
             on_add_shot=on_add_shot,
             on_move_up=on_move_up,
             on_move_down=on_move_down,
@@ -1328,7 +1483,6 @@ def _desk_handlers() -> desk_view.DeskHandlers:
             on_scene_visual=on_scene_visual,
             on_scene_motion_prompt=on_scene_motion_prompt,
             on_scene_audio_cue=on_scene_audio_cue,
-            on_toggle_shot_details=on_toggle_shot_details,
             on_scene_transition=on_scene_transition,
             on_scene_narration_alt=on_scene_narration_alt,
             on_toggle_music=on_toggle_music,
@@ -1349,7 +1503,6 @@ def _desk_handlers() -> desk_view.DeskHandlers:
             on_animatic_prev=on_animatic_prev,
             on_animatic_next=on_animatic_next,
             on_animatic_select=on_animatic_select,
-            on_animatic_open_shot=on_animatic_open_shot,
             set_handlers=_handlers,
             render_line_fields=_line_fields,
             render_media_box=_media_box,
@@ -1454,9 +1607,104 @@ def _update_scene(
     _edit(apply)
 
 
-def on_desk_tab(e: me.ButtonToggleChangeEvent):
-    if e.value in ("shots", "set", "animatic"):
-        me.state(StoryState).desk_tab = e.value
+def on_select_shot(e: me.ClickEvent):
+    try:
+        idx = int((e.key or "").split("-", 1)[1])
+    except (IndexError, ValueError):
+        return
+    s = me.state(StoryState)
+    if idx != s.selected_shot:
+        s.redo_note = ""
+    s.selected_shot = max(0, idx)
+    s.animatic_index = s.selected_shot
+
+
+def on_toggle_refs(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.refs_open = not s.refs_open
+    if s.refs_open:
+        _load_set(_story())
+
+
+def on_toggle_preview(e: me.ClickEvent):
+    s = me.state(StoryState)
+    s.preview_open = not s.preview_open
+    s.animatic_index = s.selected_shot
+
+
+def on_redo_note(e: me.InputBlurEvent):
+    me.state(StoryState).redo_note = " ".join((e.value or "").split())[:400]
+
+
+def _selected() -> tuple[Story | None, int]:
+    s = me.state(StoryState)
+    story = _story()
+    if story is None or not story.scenes:
+        return None, 0
+    return story, max(0, min(s.selected_shot, len(story.scenes) - 1))
+
+
+def on_redo_frame(e: me.ClickEvent):
+    """Repaint the start frame of the selected shot's take, with the note."""
+    s = me.state(StoryState)
+    s.error = ""
+    story, i = _selected()
+    if story is None:
+        return
+    try:
+        job = story_jobs.start_storyboard(s.story_id, _owner(), [i], note=s.redo_note)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    s.redo_note = ""
+    _watch(job.id)
+
+
+def redo_clip_plan(story: Story, index: int) -> tuple[list[int], bool]:
+    """(scenes whose clips are made again, whole take?) for "Redo clip" on
+    scene `index`: a one-shot take is remade alone; inside a longer take the
+    clip and every later clip of that take are made again in order."""
+    group = next((g for g in take_groups(story) if index in g), [index])
+    if len(group) == 1:
+        return [index], False
+    return [j for j in group if j >= index], True
+
+
+def on_redo_clip(e: me.ClickEvent):
+    """Make the selected shot's clip again. The note goes into its Action
+    text (kept, so the next redo uses it too)."""
+    s = me.state(StoryState)
+    s.error = ""
+    story, i = _selected()
+    if story is None:
+        return
+    redo, whole_take = redo_clip_plan(story, i)
+    note = s.redo_note.strip()
+    ids = {story.scenes[j].id for j in redo}
+    target = story.scenes[i].id
+
+    def apply(st: Story) -> None:
+        st.approved = True
+        for sc in st.scenes:
+            if sc.id == target and note:
+                sc.motion_prompt = f"{sc.motion_prompt.strip()} {note}".strip()[:1200]
+            if sc.id in ids:
+                sc.clear_clip()
+        st.clear_films()
+
+    if _edit(apply) is None:
+        return
+    try:
+        job = (
+            story_jobs.start_video(s.story_id, _owner())
+            if whole_take
+            else story_jobs.start_scene_clips(s.story_id, _owner(), [i])
+        )
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    s.redo_note = ""
+    _watch(job.id)
 
 
 def on_seq_filter(e: me.ClickEvent):
@@ -1554,20 +1802,6 @@ def on_scene_motion_prompt(e: me.InputBlurEvent):
 
 def on_scene_audio_cue(e: me.InputBlurEvent):
     _update_scene(_scene_id_from_key(e.key), "audio_cue", e.value.strip())
-
-
-def on_toggle_shot_details(e: me.ClickEvent):
-    s = me.state(StoryState)
-    scene_id = _scene_id_from_key(e.key)
-    try:
-        cur = set(json.loads(s.expanded_shots_json or "[]"))
-    except ValueError:
-        cur = set()
-    if scene_id in cur:
-        cur.discard(scene_id)
-    else:
-        cur.add(scene_id)
-    s.expanded_shots_json = json.dumps(sorted(cur))
 
 
 def on_scene_shot_size(e: me.SelectSelectionChangeEvent):
@@ -1673,34 +1907,10 @@ def on_paint_all_frames(e: me.ClickEvent):
         story = _edit(lambda st: setattr(st, "approved", True))
         if story is None:
             return
-    missing = [i for i, sc in enumerate(story.scenes) if not sc.frame_uri]
-    indices = missing if missing else list(range(len(story.scenes)))
+    # Only take starts get a frame; the rest of a take continues its clip.
+    indices = None if not frames_ready(story) else frame_scenes(story)
     try:
         job = story_jobs.start_storyboard(s.story_id, _owner(), indices)
-    except Exception as exc:
-        s.error = story_jobs.friendly_error(exc)
-        return
-    _watch(job.id)
-
-
-def on_animate_shot(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.error = ""
-    try:
-        idx = int((e.key or "").split("-", 1)[1])
-    except (IndexError, ValueError):
-        return
-    story = _story()
-    if story is not None and not story.approved:
-        story = _edit(lambda st: setattr(st, "approved", True))
-        if story is None:
-            return
-    starter = getattr(story_jobs, "start_scene_clips", None)
-    if not callable(starter):
-        s.error = "Per-shot animation is not available yet."
-        return
-    try:
-        job = starter(s.story_id, _owner(), [idx])
     except Exception as exc:
         s.error = story_jobs.friendly_error(exc)
         return
@@ -1725,12 +1935,6 @@ def on_animatic_select(e: me.ClickEvent):
     except (IndexError, ValueError):
         return
     me.state(StoryState).animatic_index = max(0, idx)
-
-
-def on_animatic_open_shot(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.seq_filter = "all"
-    s.desk_tab = "shots"
 
 
 # ---------------------------------------------------------------------------
@@ -2281,18 +2485,6 @@ def _media_box(
             with me.box(classes="ss-media-overlay"):
                 me.icon("image", style=me.Style(font_size=22, width=22, height=22))
                 me.text("No frame yet", style=me.Style(font_size=13))
-
-
-def on_regen_frame(e: me.ClickEvent):
-    s = me.state(StoryState)
-    try:
-        job = story_jobs.start_storyboard(
-            s.story_id, _owner(), [int(e.key.split("-")[1])]
-        )
-    except Exception as exc:
-        s.error = story_jobs.friendly_error(exc)
-        return
-    _watch(job.id)
 
 
 def on_back_scenario(e: me.ClickEvent):
