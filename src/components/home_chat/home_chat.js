@@ -17,11 +17,12 @@
 /**
  * <gm-home-chat>: the Home page. One prompt box that does everything.
  *
- * Empty: the headline, a plain subtitle, the prompt box and type chips
- * (Image, Video, Music, Voice, Film), centred on the screen. A chip fills the
- * box with a sample prompt; sending it opens that studio with ?prompt=&go=1,
- * which starts making it. Without a chip the box is a chat: after the first
- * message the hero steps aside and the conversation fills the page.
+ * Empty: the headline, the prompt box and five type tiles (Image, Video,
+ * Music, Voice, Film), centred with room around them. Hovering a tile plays a
+ * sample inside it. A tile fills the box with a sample prompt; sending it
+ * opens that studio with ?prompt=&go=1, which starts making it. Once there is
+ * text or a conversation, the tiles shrink into a row of buttons under the
+ * box. Without a picked type the box is a chat.
  *
  * Messages go to POST /api/chat (services/studio_chat.py), which answers in
  * text and starts jobs; GET /api/chat/jobs is polled until they finish, and
@@ -61,6 +62,10 @@ const ICON = {
   music: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3z',
   voice: 'M9 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 8c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4zm-6 4c.2-.7 3.3-2 6-2s5.8 1.3 6 2zM16 5.1a6 6 0 0 1 0 7.8l1.4 1.4a8 8 0 0 0 0-10.6z',
 };
+// Samples shown inside the type tiles on hover (animated webp for video and film).
+const HOVER_MEDIA = ['/ui/home/word-video.webp', '/ui/home/word-film.webp', '/ui/posters/gemini-image__page-cover.webp', '/ui/posters/lyria_header.webp', '/ui/posters/capability__native-audio_16-9.webp'];
+// Bar heights (0-1) of the sound equaliser shown on the Music and Voice tiles.
+const EQ = [0.35, 0.6, 0.9, 0.55, 1, 0.7, 0.45, 0.8, 0.5, 0.3, 0.65, 0.4];
 const svg = (d, size = 20) => html`<svg viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true"><path d=${d}></path></svg>`;
 
 function load(key, fallback) {
@@ -83,7 +88,6 @@ function remember(text) {
 class GmHomeChat extends LitElement {
   static properties = {
     stringsJson: { type: String },
-    lede: { type: String },
     kindsJson: { type: String },
     talkJson: { type: String },
     live: { type: Boolean, reflect: true },
@@ -100,7 +104,6 @@ class GmHomeChat extends LitElement {
   constructor() {
     super();
     this.stringsJson = '{}';
-    this.lede = '';
     this.kindsJson = '[]';
     this.talkJson = '{}';
     this.live = false;
@@ -130,6 +133,11 @@ class GmHomeChat extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     if (this._pending().length) this._poll();
+    const warm = () => HOVER_MEDIA.forEach((src) => { const i = new Image(); i.src = src; });
+    if (!reduceMotion()) {
+      if (window.requestIdleCallback) window.requestIdleCallback(warm, { timeout: 4000 });
+      else setTimeout(warm, 2000);
+    }
     setTimeout(() => window.gmLive && window.gmLive.refreshLauncher && window.gmLive.refreshLauncher(), 60);
   }
 
@@ -269,12 +277,15 @@ class GmHomeChat extends LitElement {
     else this._ta?.focus();
   }
 
-  _kindChips() {
+  _kindChips(compact) {
     const list = this._kinds;
     if (!list.length) return nothing;
-    return html`<div class="kinds" role="group" aria-label=${this._s.kinds || 'What to make'}>
-      ${list.map((k) => html`<button type="button" class="kind" aria-pressed=${this._kind === k.kind ? 'true' : 'false'}
-          @click=${() => this._pickKind(k)}>${svg(ICON[k.kind] || ICON.spark, 18)}<span>${k.label}</span></button>`)}
+    return html`<div class="kinds ${compact ? 'compact' : ''}" role="group" aria-label=${this._s.kinds || 'What to make'}>
+      ${list.map((k) => html`<button type="button" class="kind k-${k.kind}" aria-pressed=${this._kind === k.kind ? 'true' : 'false'}
+          title=${k.desc || ''} @click=${() => this._pickKind(k)}>
+          <span class="media" aria-hidden="true">${k.kind === 'music' || k.kind === 'voice' ? html`<span class="eq">${EQ.map((h, i) => html`<i style="--h:${h};--d:${i * -97}ms"></i>`)}</span>` : nothing}</span>
+          <span class="kbody">${svg(ICON[k.kind] || ICON.spark, 20)}<span class="ktext"><b>${k.label}</b>${k.desc ? html`<small>${k.desc}</small>` : nothing}</span></span>
+        </button>`)}
     </div>`;
   }
 
@@ -419,10 +430,6 @@ class GmHomeChat extends LitElement {
 
   // ---------------------------------------------------------------- render
 
-  _lede() {
-    return this.lede ? html`<p class="lede">${this.lede}</p>` : nothing;
-  }
-
   _box() {
     const S = this._s;
     const talk = this.talkJson || '{}';
@@ -537,13 +544,12 @@ class GmHomeChat extends LitElement {
         ${chatting ? this._thread() : html`
           <section class="hero">
             <h1 class="title">${S.title || "Google's creative AI, in one studio"}</h1>
-            ${this._lede()}
           </section>`}
         <div class="dock">
           ${chatting ? html`<button class="ghost newchat" type="button" @click=${this._newChat} title=${S.new_chat_tip || 'Start over with an empty chat'}>
               ${svg(ICON.newchat, 18)}<span>${S.new_chat || 'New chat'}</span></button>` : nothing}
           ${this._box()}
-          ${chatting ? nothing : this._kindChips()}
+          ${this._kindChips(chatting || this._hasText)}
         </div>
       </div>`;
   }
@@ -553,7 +559,7 @@ class GmHomeChat extends LitElement {
     * { box-sizing: border-box; }
     .wrap { display: flex; flex-direction: column; align-items: center; width: 100%; margin: 0 auto; }
     /* Empty: everything centred on the screen (topbar 60px, frame padding). */
-    .wrap.empty { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: center; gap: clamp(18px, 3.2vh, 32px); padding-bottom: 4vh; }
+    .wrap.empty { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: center; gap: clamp(28px, 5vh, 48px); padding-bottom: 8vh; }
     .wrap.chat { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: flex-end; max-width: 860px; }
 
     .hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: clamp(8px, 1.6vh, 14px); }
@@ -563,19 +569,16 @@ class GmHomeChat extends LitElement {
       background: var(--gm-home-title-grad, linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 38%, #1a5fd8 72%, #7b3fe4 100%));
       -webkit-background-clip: text; background-clip: text; color: transparent;
     }
-    .lede {
-      margin: 0; max-width: 36em; font-size: clamp(16px, 0.85rem + 0.35vw, 19px); line-height: 1.5; font-weight: 400;
-      color: var(--sys-on-surface-variant, #4b515d); text-wrap: balance;
-    }
 
     /* The prompt box (same glass as the studios' composer). */
-    .dock { width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+    .dock { width: 100%; max-width: 820px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+    .wrap.empty .dock { gap: clamp(24px, 4vh, 36px); }
     .wrap.chat .dock { position: sticky; bottom: 0; padding: 10px 0 16px; }
     /* A solid box in the open rail's colour (--gm-panel), like Gemini's: it
        stands out from the page instead of blending in as glass. */
     .box {
-      width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px;
-      border-radius: 30px; background: var(--gm-panel, #1d1f25); border: 1px solid transparent;
+      width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 10px;
+      border-radius: 32px; background: var(--gm-panel, #1d1f25); border: 1px solid transparent;
       box-shadow: 0 10px 34px rgba(0, 0, 0, 0.22);
       transition: border-color 160ms ease, box-shadow 160ms ease;
     }
@@ -586,7 +589,7 @@ class GmHomeChat extends LitElement {
     .row { display: flex; align-items: flex-end; gap: 4px; }
     textarea {
       flex: 1 1 auto; min-width: 0; height: 44px; min-height: 44px; max-height: 220px; resize: none; border: 0; outline: 0;
-      background: transparent; color: inherit; font: inherit; font-size: 17px; line-height: 24px; padding: 10px 6px;
+      background: transparent; color: inherit; font: inherit; font-size: 18px; line-height: 24px; padding: 10px 8px;
     }
     textarea::placeholder { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9; }
     .tools { flex: none; display: flex; align-items: center; gap: 4px; }
@@ -631,18 +634,52 @@ class GmHomeChat extends LitElement {
     button:focus-visible, a:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 2px; }
     textarea:focus, textarea:focus-visible { outline: none; }
 
-    /* Type chips under the box: a chip fills a sample prompt; sending it
-       opens that studio and starts making it. */
-    .kinds { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+    /* Type tiles under the box. Hover plays a sample inside the tile; a
+       click fills a sample prompt. With text or a conversation they shrink
+       into a row of buttons. */
+    .kinds { width: 100%; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
     .kind {
-      display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px 0 12px; border: 0; border-radius: 999px;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #15171c); cursor: pointer;
-      font-size: 14px; font-weight: 500; transition: background 160ms ease, color 160ms ease;
+      position: relative; overflow: hidden; isolation: isolate; height: 118px; padding: 14px; border: 0; border-radius: 22px;
+      display: flex; align-items: flex-end; text-align: start; cursor: pointer; font-size: 14px;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #15171c);
+      transition: height 280ms cubic-bezier(0.2, 0.8, 0.2, 1), border-radius 280ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
     }
-    .kind svg { flex: none; fill: var(--sys-on-surface-variant, #6b7280); }
     .kind:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
-    .kind[aria-pressed='true'] { background: var(--sys-on-surface, #e8eaed); color: var(--sys-surface, #15171c); }
-    .kind[aria-pressed='true'] svg { fill: currentColor; }
+    .kbody { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    .kbody svg { flex: none; fill: currentColor; opacity: 0.85; }
+    .ktext { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .ktext b { font-size: 15px; font-weight: 600; }
+    .ktext small { font-size: 12.5px; color: var(--sys-on-surface-variant, #6b7280); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* The sample: hidden at rest, it fades in behind the label on hover. */
+    .media { position: absolute; inset: 0; z-index: 0; opacity: 0; transform: scale(1.06); background-size: cover; background-position: center;
+      transition: opacity 260ms ease, transform 700ms ease; }
+    .media::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 20%, rgba(0, 0, 0, 0.7)); }
+    .kinds:not(.compact) .kind:hover .media, .kinds:not(.compact) .kind:focus-visible .media, .kinds:not(.compact) .kind[aria-pressed='true'] .media { opacity: 1; transform: scale(1); }
+    .kinds:not(.compact) .kind:hover, .kinds:not(.compact) .kind:focus-visible, .kinds:not(.compact) .kind[aria-pressed='true'] { color: #fff; }
+    .kinds:not(.compact) .kind:hover small, .kinds:not(.compact) .kind:focus-visible small, .kinds:not(.compact) .kind[aria-pressed='true'] small { color: rgba(255, 255, 255, 0.82); }
+    .kinds:not(.compact) .kind[aria-pressed='true'] { box-shadow: 0 0 0 2px var(--sys-on-surface, #e8eaed); }
+    .k-image .media { background-image: url('/ui/posters/gemini-image__page-cover.webp'); background-position: 90% 10%; background-size: 260%; }
+    .k-video .media { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
+    .k-video:hover .media, .k-video[aria-pressed='true'] .media { background-image: url('/ui/home/word-video.webp'); }
+    .k-film .media { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
+    .k-film:hover .media, .k-film[aria-pressed='true'] .media { background-image: url('/ui/home/word-film.webp'); }
+    .k-music .media { background-image: url('/ui/posters/lyria_header.webp'); }
+    .k-voice .media { background-image: url('/ui/posters/capability__native-audio_16-9.webp'); }
+    /* Music and Voice: an equaliser that moves like sound over the picture. */
+    .eq { position: absolute; z-index: 1; left: 14px; right: 14px; top: 14px; height: 40%; display: flex; align-items: center; justify-content: space-between; }
+    .eq i { width: 4px; height: calc(var(--h) * 100%); border-radius: 4px; background: rgba(255, 255, 255, 0.92); transform: scaleY(0.4); transform-origin: 50% 50%; }
+    .kind:hover .eq i, .kind:focus-visible .eq i, .kind[aria-pressed='true'] .eq i { animation: sound 640ms ease-in-out var(--d) infinite alternate; }
+    .k-voice .eq i { animation-duration: 380ms !important; }
+    @keyframes sound { from { transform: scaleY(0.25); } to { transform: scaleY(1); } }
+
+    /* Compact: one row of buttons under the box. */
+    .kinds.compact { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+    .kinds.compact .kind { height: 40px; padding: 0 16px 0 12px; border-radius: 999px; align-items: center; font-weight: 500; }
+    .kinds.compact .kbody { flex-direction: row; align-items: center; gap: 8px; }
+    .kinds.compact .kbody svg { width: 18px; height: 18px; }
+    .kinds.compact .ktext b { font-size: 14px; font-weight: 500; }
+    .kinds.compact small, .kinds.compact .media { display: none; }
+    .kinds.compact .kind[aria-pressed='true'] { background: var(--sys-on-surface, #e8eaed); color: var(--sys-surface, #15171c); }
 
     /* Conversation */
     .thread { width: 100%; display: flex; flex-direction: column; gap: 18px; padding: 12px 0 8px; }
@@ -681,7 +718,12 @@ class GmHomeChat extends LitElement {
     .shimmer.music, .shimmer.voice { aspect-ratio: auto; height: 54px; }
     .shimmer.story { aspect-ratio: auto; height: 72px; }
     @keyframes shim { from { background-position: 100% 0; } to { background-position: -150% 0; } }
-    @media (prefers-reduced-motion: reduce) { .shimmer, .typing i, .spin, .icon.working svg { animation: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .shimmer, .typing i, .spin, .icon.working svg, .eq i { animation: none !important; }
+      .kind, .media { transition: none; }
+      .k-video:hover .media, .k-video[aria-pressed='true'] .media { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
+      .k-film:hover .media, .k-film[aria-pressed='true'] .media { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
+    }
     /* The picture at its own shape: no letterbox bars around it. */
     .media { display: block; width: auto; height: auto; max-width: 100%; max-height: 480px; border-radius: 12px; }
     .job > a { align-self: flex-start; line-height: 0; max-width: 100%; }
@@ -701,8 +743,10 @@ class GmHomeChat extends LitElement {
       .wrap.empty { gap: 18px; padding-bottom: 0; }
       .box { padding: 6px; border-radius: 26px; }
       textarea { font-size: 16px; padding: 10px 4px; }
-      .kinds { gap: 6px; }
-      .kind { padding: 0 12px 0 10px; }
+      .kinds:not(.compact) { display: flex; overflow-x: auto; scrollbar-width: none; gap: 10px; padding-bottom: 2px; }
+      .kinds:not(.compact) .kind { flex: 0 0 132px; height: 104px; }
+      .kinds.compact { gap: 6px; }
+      .kinds.compact .kind { padding: 0 12px 0 10px; }
       .bubble { max-width: 88%; }
     }
   `;

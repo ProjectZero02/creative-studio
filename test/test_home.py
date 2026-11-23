@@ -52,6 +52,7 @@ def test_type_chips_open_real_studios_with_samples(monkeypatch):
         assert c["href"] in routes, c
         assert c["label"]
         assert len(c["samples"]) >= 2 and all(c["samples"])
+        assert c["desc"] and len(c["desc"]) <= 30
     monkeypatch.setattr(i18n, "current_lang", lambda: "ar")
     assert all(c["label"] != "Image" for c in hc.kinds() if c["kind"] == "image")
 

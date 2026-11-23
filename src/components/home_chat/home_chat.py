@@ -66,7 +66,7 @@ def lede() -> str:
     return "".join(seg["text"] for seg in lede_segments())
 
 
-# Type chips under the box: (kind, label key, English label, studio route).
+# Type tiles under the box: (kind, label key, English label, studio route).
 KINDS = (
     ("image", "home.mode.image.label", "Image", "/nano-banana"),
     ("video", "home.mode.video.label", "Video", "/veo"),
@@ -74,6 +74,15 @@ KINDS = (
     ("voice", "home.mode.voice.label", "Voice", "/voice"),
     ("film", "home.mode.film.label", "Film", "/story"),
 )
+
+# One short line under each tile's name.
+_DESCS = {
+    "image": "Photos and art",
+    "video": "Clips up to 8 seconds",
+    "music": "Tracks and jingles",
+    "voice": "Voice-overs",
+    "film": "Short films",
+}
 
 # Two sample prompts per chip (clicking a chip again shows the next one).
 _SAMPLES = {
@@ -101,11 +110,12 @@ _SAMPLES = {
 
 
 def kinds() -> list[dict]:
-    """The type chips: {"kind", "label", "href", "samples"} in the page language."""
+    """The type tiles: {"kind", "label", "desc", "href", "samples"} in the page language."""
     return [
         {
             "kind": kind,
             "label": tr(label_key, label),
+            "desc": tr(f"home.kind.{kind}.desc", _DESCS[kind]),
             "href": href,
             "samples": [
                 tr(f"home.mode.{kind}.ex{i + 1}", text)
@@ -181,7 +191,6 @@ def home_chat(*, live: bool = False, key: str | None = "home-chat"):
         name="gm-home-chat",
         properties={
             "stringsJson": json.dumps(strings(), ensure_ascii=False),
-            "lede": lede(),
             "kindsJson": json.dumps(kinds(), ensure_ascii=False),
             "talkJson": json.dumps({**live_strings(), "talk": t("live.talk", "Talk to the studio")}, ensure_ascii=False),
             "live": live,
