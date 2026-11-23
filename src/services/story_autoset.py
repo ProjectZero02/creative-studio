@@ -30,7 +30,10 @@ from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
     LANGUAGES,
+    PACING_IDS,
+    PACING_MODES,
     SPEECH_MODES,
+    STORY_VIDEO_ENGINES,
     STYLE_BY_ID,
     _strip_fences,
     supported_durations,
@@ -45,6 +48,8 @@ FIELDS = (
     "style",
     "speech_mode",
     "camera",
+    "pacing",
+    "video_model",
 )
 
 # Preferred scene length when only the film length is known.
@@ -66,6 +71,8 @@ _NUM_WORDS = {
     "twelve": 12,
     "fifteen": 15,
     "twenty": 20,
+    "twenty-five": 25,
+    "twenty five": 25,
     "thirty": 30,
     "forty": 40,
     "forty-five": 45,
@@ -85,8 +92,9 @@ _NUM = (
 # No bare "s" or "m": "the 1990s" is a decade, "5m" may be millions.
 _SEC = r"(?:seconds?|secs?)\b"
 _MIN = r"(?:minutes?|mins?)\b"
+_HOUR = r"(?:hours?|hrs?)\b"
 # Film lengths outside this range are ignored (likely not a length).
-FILM_SECONDS_RANGE = (5, 600)
+FILM_SECONDS_RANGE = (5, 3600)
 
 
 def _num(text: str) -> float:
@@ -102,13 +110,14 @@ def _film_seconds(t: str) -> int | None:
     fixed = [
         (r"\b(?:a|one) minute and a half\b|\b(?:one|1) and a half minutes?\b", 90),
         (r"\bhalf (?:a|one) minute\b|\bhalf-minute\b", 30),
+        (r"\bhalf\s+(?:an?\s+)?hour\b|\bhalf-hour\b", 1800),
     ]
     taken: list[tuple[int, int]] = []
     for pattern, secs in fixed:
         for m in re.finditer(pattern, t):
             found.append((m.start(), secs))
             taken.append(m.span())
-    for unit, scale in ((_MIN, 60), (_SEC, 1)):
+    for unit, scale in ((_HOUR, 3600), (_MIN, 60), (_SEC, 1)):
         for m in re.finditer(rf"\b{_NUM}\s*[- ]?\s*{unit}", t):
             if any(a <= m.start() < b for a, b in taken):
                 continue
@@ -226,6 +235,32 @@ def _camera(t: str) -> str | None:
     return None
 
 
+def _pacing(t: str) -> str | None:
+    rules = [
+        (r"\b(?:dynamic|fast[- ]paced|snappy|quick[- ]cut\w*)\b", "dynamic"),
+        (r"\b(?:documentary|docu[- ]style|unhurried|slow[- ]paced)\b", "documentary"),
+        (r"\bcinematic\b", "cinematic"),
+    ]
+    for pattern, pid in rules:
+        if re.search(pattern, t) and pid in PACING_IDS:
+            return pid
+    return None
+
+
+def _video_model(t: str) -> str | None:
+    rules = [
+        (r"\b(?:hybrid|omni\s*\+\s*veo|veo\s*\+\s*omni)\b", "hybrid"),
+        (r"\bveo\s*(?:3\.1\s*)?fast\b", "3.1-fast"),
+        (r"\bveo\s*3\.1\b", "3.1"),
+        (r"\bveo\b", "3.1-fast"),
+        (r"\b(?:gemini\s+)?omni\b", "gemini-omni-1.2-flash"),
+    ]
+    for pattern, mid in rules:
+        if re.search(pattern, t) and mid in STORY_VIDEO_ENGINES:
+            return mid
+    return None
+
+
 def plan_length(
     total: int,
     scene_count: int | None = None,
@@ -275,6 +310,8 @@ def infer_settings(text: str) -> dict:
         ("style", _style(t)),
         ("speech_mode", _speech(t)),
         ("camera", _camera(t)),
+        ("pacing", _pacing(t)),
+        ("video_model", _video_model(t)),
     ):
         if value:
             out[key] = value
@@ -286,6 +323,8 @@ def live_settings_prompt(text: str) -> str:
     styles = ", ".join(STYLE_BY_ID)
     langs = ", ".join(LANGUAGES)
     cams = ", ".join(CAMERA_IDS)
+    pacings = ", ".join(PACING_IDS)
+    engines = ", ".join(STORY_VIDEO_ENGINES)
     return f"""Read this idea for a short film and return the settings it asks for
 or clearly implies. Use null for anything it does not say or imply.
 
@@ -300,8 +339,10 @@ Idea: \"\"\"{text.strip()}\"\"\"
 - "speech_mode": "on_camera" when a person talks to camera (presenter,
   interview, pitch, vlog), "narrator" for a voiceover, else null.
 - "camera": one of {cams} if the idea asks for a camera move.
+- "pacing": one of {pacings} if the idea asks for fast/dynamic, cinematic, or documentary pacing.
+- "video_model": one of {engines} if the idea names Veo, Omni, or Hybrid.
 
-Return only JSON: {{"film_seconds": int|null, "scene_count": int|null, "scene_seconds": int|null, "aspect_ratio": str|null, "language": str|null, "style": str|null, "speech_mode": str|null, "camera": str|null}}"""
+Return only JSON: {{"film_seconds": int|null, "scene_count": int|null, "scene_seconds": int|null, "aspect_ratio": str|null, "language": str|null, "style": str|null, "speech_mode": str|null, "camera": str|null, "pacing": str|null, "video_model": str|null}}"""
 
 
 def parse_live_settings(text: str) -> dict:
@@ -343,6 +384,8 @@ def parse_live_settings(text: str) -> dict:
         "style": tuple(STYLE_BY_ID),
         "speech_mode": tuple(k for k in SPEECH_MODES if k != "auto"),
         "camera": tuple(CAMERA_IDS),
+        "pacing": tuple(PACING_IDS),
+        "video_model": tuple(STORY_VIDEO_ENGINES),
     }
     for key, allowed in checks.items():
         value = data.get(key)
@@ -397,4 +440,8 @@ def describe(found: dict) -> str:
         from services.story_models import CAMERA_PRESETS
 
         parts.append(CAMERA_PRESETS[found["camera"]]["label"])
+    if "pacing" in found and found["pacing"] in PACING_MODES:
+        parts.append(PACING_MODES[found["pacing"]]["label"])
+    if "video_model" in found and found["video_model"] in STORY_VIDEO_ENGINES:
+        parts.append(STORY_VIDEO_ENGINES[found["video_model"]])
     return " · ".join(parts)

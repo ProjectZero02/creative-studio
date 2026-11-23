@@ -146,6 +146,13 @@ Sets hold a story's characters (with their voices), locations, props and style, 
 | **`STORY_MAX_SCENE_SECONDS`** | `30` | Longest scene. Up to the video model's single-clip limit (15 s for Gemini Omni 1.2 Flash) a scene is one clip; a longer scene is that clip plus extension turns in the same Omni thread (3 to 10 s each), joined into one clip. Omni extends up to 30 s in all. |
 | **`STORY_SCENARIO_MODEL_ID`** | `MODEL_ID` (`gemini-4-neon`) | Gemini model that writes the Story Studio scenario and its cast, casts older stories on the Set step, rewrites scenes and plans fixes. |
 | **`STORY_LIVE_SETTINGS_MODEL`** | `gemini-3.5-flash-lite` | Small Gemini model that reads the film settings (length, scenes, aspect ratio, language, style, who speaks) out of the idea each time typing pauses on the Create step, after a free rules pass. Empty turns the live model off (the rules pass still runs). |
+| **`STORY_MAX_SCENES`** | `120` | Maximum number of shots allowed in one film (supports 10–15+ minute multi-sequence films). |
+| **`STORY_MAX_FILM_SECONDS`** | `900` | Maximum target/planned film length in seconds (default 15 minutes). |
+| **`STORY_SEQUENCE_THRESHOLD_SCENES`** | `10` | Scene count threshold above which scenario generation switches to two-stage hierarchical `Act -> Sequence -> Shot` expansion. |
+| **`STORY_VIDEO_MODEL`** | `gemini-omni-1.2-flash` | Default Story Studio video engine (`gemini-omni-1.2-flash`, `3.1-fast`, `3.1`, or `hybrid` routing spoken/>8s shots to Omni and short B-roll to Veo). |
+| **`STORY_AUDIO_OVERLAP_SECONDS`** | `0.18` | Ambient L-cut overlap window across visual cuts to prevent silence dips. |
+| **`STORY_MUSIC_LOOP_CROSSFADE`** | `2.5` | Equal-power cosine/sine crossfade duration in seconds when looping shorter music tracks across multi-minute films. |
+| **`STORY_COLOR_MATCH`** | `true` | Applies subtle boundary luminance matching (`compute_boundary_eq`) across `bridge` joins during timeline rendering. |
 
 ## 🎵 Lyria (Music Generation)
 Configuration for the Lyria music generation model.

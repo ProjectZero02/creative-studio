@@ -52,14 +52,16 @@ from services.story_models import (
     parse_brief,
     parse_scenario,
     parse_scene_links,
+    parse_sequences,
     parse_set_build,
     parse_single_scene,
     parse_translation,
+    parse_visual_grammar,
     parse_voice,
     relink_scene,
     set_text_from_cast,
 )
-from services.story_service import get_backend
+from services.story_service import get_backend, resolve_video_engine
 from services.story_store import StoryAccessError, get_store
 from services.story_sets import (
     KINDS,
@@ -78,12 +80,13 @@ from services.story_sets import (
 
 logger = get_logger(__name__)
 
-QUEUED, RUNNING, DONE, FAILED, SKIPPED = (
+QUEUED, RUNNING, DONE, FAILED, SKIPPED, CANCELLED = (
     "queued",
     "running",
     "done",
     "failed",
     "skipped",
+    "cancelled",
 )
 
 
@@ -112,6 +115,7 @@ class Job:
     finished_at: float = 0.0
     message: str = ""
     params: dict = field(default_factory=dict)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
 _jobs: dict[str, Job] = {}
@@ -219,7 +223,15 @@ def _add_task(job: Job, label: str, kind: str, scene_index: int = -1) -> Task:
     return task
 
 
-def _run_task(task: Task, fn: Callable[[], str]) -> bool:
+def _run_task(
+    task: Task,
+    fn: Callable[[], str],
+    cancel_event: threading.Event | None = None,
+) -> bool:
+    if (cancel_event is not None and cancel_event.is_set()) or task.status == SKIPPED:
+        task.status = SKIPPED
+        task.error = task.error or "Cancelled by user."
+        return False
     task.status = RUNNING
     task.started_at = time.time()
     try:
@@ -236,6 +248,16 @@ def _run_task(task: Task, fn: Callable[[], str]) -> bool:
 
 
 def _finish(job: Job) -> None:
+    if job.cancel_event.is_set():
+        with _jobs_lock:
+            for t in job.tasks:
+                if t.status == QUEUED:
+                    t.status = SKIPPED
+                    t.error = t.error or "Cancelled by user."
+        job.status = CANCELLED
+        job.message = "Cancelled by user."
+        job.finished_at = time.time()
+        return
     failed = [t for t in job.tasks if t.status == FAILED]
     job.status = FAILED if failed else DONE
     if failed:
@@ -279,6 +301,22 @@ def get_job(job_id: str, owner: str) -> Job | None:
         job = _jobs.get(job_id)
     if job is None or job.owner != owner:
         return None
+    return job
+
+
+def cancel_job(job_id: str, owner: str) -> Job | None:
+    """Request cancellation of a running job (owner-only)."""
+    job = get_job(job_id, owner)
+    if job is None:
+        return None
+    if job.status != RUNNING:
+        return job
+    job.cancel_event.set()
+    with _jobs_lock:
+        for t in job.tasks:
+            if t.status == QUEUED:
+                t.status = SKIPPED
+                t.error = "Cancelled by user."
     return job
 
 
@@ -364,6 +402,8 @@ def start_scenario(story_id: str, owner: str) -> Job:
                     )
                     voice = parse_voice(text) if any(sc.spoken for sc in scenes) else ""
                     brief = parse_brief(text)
+                    visual_grammar = parse_visual_grammar(text)
+                    sequences_json = parse_sequences(text)
                     cast_json = ""
                     if story_set is not None:
                         parse_scene_links(text, story_set, scenes)
@@ -386,6 +426,10 @@ def start_scenario(story_id: str, owner: str) -> Job:
                 s.speaker_voice = voice
                 if brief:
                     s.brief = brief
+                if visual_grammar:
+                    s.visual_grammar = visual_grammar
+                if sequences_json:
+                    s.sequences_json = sequences_json
                 s.scenes = scenes
                 s.cast_json = cast_json
                 s.approved = False
@@ -492,7 +536,7 @@ def start_storyboard(
         reference = story.reference_uri
         rest = list(targets)
         if 0 in targets and not reference:
-            ok = _run_task(tasks[0], lambda: paint(0, ""))
+            ok = _run_task(tasks[0], lambda: paint(0, ""), job.cancel_event)
             rest.remove(0)
             reference = tasks[0].result_uri if ok else ""
         if (
@@ -513,13 +557,104 @@ def start_storyboard(
         workers = max(1, cfg.STORY_MAX_PARALLEL)
         with _Pool(max_workers=workers) as pool:
             for i in rest:
+                if job.cancel_event.is_set():
+                    break
                 if i not in later:
-                    pool.submit(_run_task, tasks[i], lambda i=i: paint(i, reference))
+                    pool.submit(
+                        _run_task,
+                        tasks[i],
+                        lambda i=i: paint(i, reference),
+                        job.cancel_event,
+                    )
         with _Pool(max_workers=workers) as pool:
             for i in later:
+                if job.cancel_event.is_set():
+                    break
                 pool.submit(
-                    _run_task, tasks[i], lambda i=i: paint(i, take_reference(i))
+                    _run_task,
+                    tasks[i],
+                    lambda i=i: paint(i, take_reference(i)),
+                    job.cancel_event,
                 )
+
+    return _spawn(job, work)
+
+
+def _bridge_end_frame(story: Story, i: int) -> str:
+    """Target end frame when scene ``i + 1`` joins via a ``bridge`` transition."""
+    if (
+        i + 1 < len(story.scenes)
+        and story.scenes[i + 1].transition == "bridge"
+        and story.scenes[i].frame_uri
+        and story.scenes[i + 1].frame_uri
+        and not story.continues_take(i + 1)
+    ):
+        return story.scenes[i + 1].frame_uri
+    return ""
+
+
+def start_scene_clips(story_id: str, owner: str, indices: list[int]) -> Job:
+    """Generate or regenerate specific scene clips on demand without running stitch."""
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    targets = sorted({i for i in indices if 0 <= i < len(story.scenes)})
+    job = _new_job(owner, story_id, "clips", {"indices": targets})
+    tasks = {
+        i: _add_task(job, f"Scene {i + 1} · video clip", "clip", i)
+        for i in targets
+    }
+    cfg = Default()
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+
+        def animate_one(i: int) -> str:
+            current = get_store().get(story_id, owner)
+            if current is None or i >= len(current.scenes):
+                raise StoryAccessError("Story not found.")
+            sc = current.scenes[i]
+            end_frame = _bridge_end_frame(current, i)
+            uri = (
+                backend.generate_clip(
+                    current, i, sc.frame_uri, end_frame_uri=end_frame
+                )
+                if end_frame
+                else backend.generate_clip(current, i, sc.frame_uri)
+            )
+            thread = _interaction_of(backend, uri)
+            scene_id = sc.id
+            model_used = sc.video_model_used or resolve_video_engine(current, sc)
+
+            def apply(s: Story) -> None:
+                for x in s.scenes:
+                    if x.id == scene_id:
+                        x.clip_uri = uri
+                        x.continues_from = ""
+                        x.extends_from, x.clip_in = "", 0.0
+                        x.interaction_id = thread
+                        x.bridged_to = end_frame
+                        x.video_model_used = model_used
+                s.clear_films()
+
+            mutate_story(story_id, owner, apply)
+            return uri
+
+        with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
+            futures = []
+            for i in targets:
+                if job.cancel_event.is_set():
+                    break
+                futures.append(
+                    pool.submit(
+                        _run_task,
+                        tasks[i],
+                        lambda i=i: animate_one(i),
+                        job.cancel_event,
+                    )
+                )
+            for f in futures:
+                f.result()
 
     return _spawn(job, work)
 
@@ -562,7 +697,7 @@ def _translate_into(story_id: str, owner: str, force: bool = False) -> str:
             last = exc
     else:
         raise last or ScenarioError("No translation.")
-    by_id = {sc.id: line for sc, line in zip(story.scenes, lines)}
+    by_id = {sc.id: line for sc, line in zip(story.scenes, lines, strict=False)}
 
     def apply(s: Story) -> None:
         changed = False
@@ -703,10 +838,12 @@ def start_video(story_id: str, owner: str) -> Job:
         alt_voice_uris: dict[int, str] = {}
         music_uri = ""
         if translate_task and not _run_task(
-            translate_task, lambda: _translate_into(story_id, owner)
+            translate_task, lambda: _translate_into(story_id, owner), job.cancel_event
         ):
             for t in [*alt_voice_tasks.values(), *alt_clip_tasks.values()]:
                 t.status = SKIPPED
+        if job.cancel_event.is_set():
+            return
         translated = alt_story(get_store().get(story_id, owner) or story)
 
         def animate(i: int, start_frame: str, from_clip: str = "") -> str:
@@ -715,9 +852,20 @@ def start_video(story_id: str, owner: str) -> Job:
             current = get_store().get(story_id, owner)
             if current is None:
                 raise StoryAccessError("Story not found.")
-            uri = backend.generate_clip(current, i, start_frame)
+            end_frame = _bridge_end_frame(current, i)
+            uri = (
+                backend.generate_clip(
+                    current, i, start_frame, end_frame_uri=end_frame
+                )
+                if end_frame
+                else backend.generate_clip(current, i, start_frame)
+            )
             thread = _interaction_of(backend, uri)
-            scene_id = current.scenes[i].id
+            scene_obj = current.scenes[i]
+            scene_id = scene_obj.id
+            model_used = scene_obj.video_model_used or resolve_video_engine(
+                current, scene_obj
+            )
 
             def apply(s: Story) -> None:
                 for sc in s.scenes:
@@ -726,6 +874,8 @@ def start_video(story_id: str, owner: str) -> Job:
                         sc.continues_from = from_clip
                         sc.extends_from, sc.clip_in = "", 0.0
                         sc.interaction_id = thread
+                        sc.bridged_to = end_frame
+                        sc.video_model_used = model_used
 
             mutate_story(story_id, owner, apply)
             return uri
@@ -742,7 +892,11 @@ def start_video(story_id: str, owner: str) -> Job:
                 logger.exception("Omni continuation failed; making a normal clip")
                 return animate(i, current.scenes[i].frame_uri)
             thread = _interaction_of(backend, uri)
-            scene_id = current.scenes[i].id
+            scene_obj = current.scenes[i]
+            scene_id = scene_obj.id
+            model_used = scene_obj.video_model_used or resolve_video_engine(
+                current, scene_obj
+            )
 
             def apply(s: Story) -> None:
                 for sc in s.scenes:
@@ -750,6 +904,8 @@ def start_video(story_id: str, owner: str) -> Job:
                         sc.clip_uri, sc.continues_from = uri, ""
                         sc.extends_from, sc.clip_in = prev_clip, clip_in
                         sc.interaction_id = thread
+                        sc.bridged_to = ""
+                        sc.video_model_used = model_used
 
             mutate_story(story_id, owner, apply)
             return uri
@@ -757,6 +913,15 @@ def start_video(story_id: str, owner: str) -> Job:
         def clips_continuity() -> None:
             prev_clip = ""
             for i in range(n):
+                if job.cancel_event.is_set():
+                    for j in range(i, n):
+                        if j in bridge_tasks and bridge_tasks[j].status == QUEUED:
+                            bridge_tasks[j].status = SKIPPED
+                            bridge_tasks[j].error = "Cancelled by user."
+                        if j in clip_tasks and clip_tasks[j].status == QUEUED:
+                            clip_tasks[j].status = SKIPPED
+                            clip_tasks[j].error = "Cancelled by user."
+                    break
                 current = get_store().get(story_id, owner)
                 sc = current.scenes[i]
                 if i not in clip_tasks:
@@ -764,7 +929,9 @@ def start_video(story_id: str, owner: str) -> Job:
                     continue
                 if i in takes and prev_clip:
                     ok = _run_task(
-                        clip_tasks[i], lambda i=i, c=prev_clip: extend(i, c)
+                        clip_tasks[i],
+                        lambda i=i, c=prev_clip: extend(i, c),
+                        job.cancel_event,
                     )
                     prev_clip = clip_tasks[i].result_uri if ok else ""
                     continue
@@ -772,13 +939,16 @@ def start_video(story_id: str, owner: str) -> Job:
                 if i in bridge_tasks:
                     if prev_clip and _run_task(
                         bridge_tasks[i],
-                        lambda i=i, c=prev_clip: backend.last_frame(current, c, i),
+                        lambda i=i, c=prev_clip, cur=current: backend.last_frame(cur, c, i),
+                        job.cancel_event,
                     ):
                         start, from_clip = bridge_tasks[i].result_uri, prev_clip
                     elif not prev_clip:
                         bridge_tasks[i].status = SKIPPED
                 ok = _run_task(
-                    clip_tasks[i], lambda i=i, s=start, c=from_clip: animate(i, s, c)
+                    clip_tasks[i],
+                    lambda i=i, s=start, c=from_clip: animate(i, s, c),
+                    job.cancel_event,
                 )
                 prev_clip = clip_tasks[i].result_uri if ok else ""
 
@@ -788,6 +958,7 @@ def start_video(story_id: str, owner: str) -> Job:
                     _run_task,
                     clip_tasks[i],
                     lambda i=i: animate(i, story.scenes[i].frame_uri),
+                    job.cancel_event,
                 )
                 for i in clip_tasks
             ]
@@ -823,7 +994,7 @@ def start_video(story_id: str, owner: str) -> Job:
 
         with _Pool(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
             futures = []
-            if music_task:
+            if music_task and not job.cancel_event.is_set():
                 seconds = sum(s.duration for s in story.scenes)
                 prompt = story.music_prompt or default_music_prompt(story)
                 futures.append(
@@ -831,15 +1002,24 @@ def start_video(story_id: str, owner: str) -> Job:
                         _run_task,
                         music_task,
                         lambda: backend.generate_music(story, prompt, seconds),
+                        job.cancel_event,
                     )
                 )
             for i, t in voice_tasks.items():
+                if job.cancel_event.is_set():
+                    break
                 if id(t) not in held:
-                    futures.append(pool.submit(_run_task, t, lambda i=i: voice(i)))
+                    futures.append(
+                        pool.submit(_run_task, t, lambda i=i: voice(i), job.cancel_event)
+                    )
             for i, t in alt_voice_tasks.items():
+                if job.cancel_event.is_set():
+                    break
                 if t.status == QUEUED and id(t) not in held:
                     futures.append(
-                        pool.submit(_run_task, t, lambda i=i: voice_alt(i))
+                        pool.submit(
+                            _run_task, t, lambda i=i: voice_alt(i), job.cancel_event
+                        )
                     )
             if sequential:
                 clips_continuity()
@@ -847,14 +1027,23 @@ def start_video(story_id: str, owner: str) -> Job:
                 futures.extend(clips_parallel(pool))
             for f in futures:
                 f.result()
+        if job.cancel_event.is_set():
+            return
         pending_lines = [(t, fn) for t, fn in after_clips if t.status == QUEUED]
         if pending_lines:
             with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
                 for f in [
-                    pool.submit(_run_task, t, lambda fn=fn, i=t.scene_index: fn(i))
+                    pool.submit(
+                        _run_task,
+                        t,
+                        lambda fn=fn, i=t.scene_index: fn(i),
+                        job.cancel_event,
+                    )
                     for t, fn in pending_lines
                 ]:
                     f.result()
+        if job.cancel_event.is_set():
+            return
         if music_task and music_task.status == DONE:
             music_uri = music_task.result_uri
             mutate_story(story_id, owner, lambda s: setattr(s, "music_uri", music_uri))
@@ -898,15 +1087,24 @@ def start_video(story_id: str, owner: str) -> Job:
         if pending_alt and story.continuity:
             # One after another: each may start from the previous one.
             for i in sorted(pending_alt):
-                _run_task(alt_clip_tasks[i], lambda i=i: animate_alt(i))
+                if job.cancel_event.is_set():
+                    break
+                _run_task(alt_clip_tasks[i], lambda i=i: animate_alt(i), job.cancel_event)
         elif pending_alt:
             with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
                 for f in [
-                    pool.submit(_run_task, alt_clip_tasks[i], lambda i=i: animate_alt(i))
+                    pool.submit(
+                        _run_task,
+                        alt_clip_tasks[i],
+                        lambda i=i: animate_alt(i),
+                        job.cancel_event,
+                    )
                     for i in pending_alt
                 ]:
                     f.result()
 
+        if job.cancel_event.is_set():
+            return
         final = get_store().get(story_id, owner)
         missing = [i + 1 for i, s in enumerate(final.scenes) if not s.clip_uri]
         later = [stitch_task, library_task, alt_stitch_task, alt_library_task]
@@ -930,7 +1128,7 @@ def start_video(story_id: str, owner: str) -> Job:
             )
             return film_uri
 
-        if not _run_task(stitch_task, stitch):
+        if not _run_task(stitch_task, stitch, job.cancel_event):
             for t in later[1:]:
                 if t:
                     t.status = SKIPPED
@@ -947,8 +1145,12 @@ def start_video(story_id: str, owner: str) -> Job:
             story_versions.remember(s, "render")
 
         mutate_story(story_id, owner, apply)
-        _run_task(library_task, lambda: backend.save_to_library(final, film, owner))
-        if not alt_stitch_task:
+        _run_task(
+            library_task,
+            lambda: backend.save_to_library(final, film, owner),
+            job.cancel_event,
+        )
+        if not alt_stitch_task or job.cancel_event.is_set():
             return
         latest = get_store().get(story_id, owner) or final
         no_speech = [
@@ -981,6 +1183,7 @@ def start_video(story_id: str, owner: str) -> Job:
                     replace(second, timeline_json=""), alt_plan, music_uri, alt_voices
                 )
             )[0],
+            job.cancel_event,
         ):
             alt_library_task.status = SKIPPED
             return
@@ -993,6 +1196,7 @@ def start_video(story_id: str, owner: str) -> Job:
         _run_task(
             alt_library_task,
             lambda: backend.save_to_library(second, alt_film, owner),
+            job.cancel_event,
         )
 
     return _spawn(job, work)
@@ -1035,7 +1239,9 @@ def start_export(story_id: str, owner: str) -> Job:
         from services.story_timeline import normalize
 
         timeline = normalize(story.timeline_json)
-        if not _run_task(render_task, lambda: backend.render_timeline(story, timeline)):
+        if not _run_task(
+            render_task, lambda: backend.render_timeline(story, timeline), job.cancel_event
+        ):
             library_task.status = SKIPPED
             return
         film = render_task.result_uri
@@ -1047,7 +1253,11 @@ def start_export(story_id: str, owner: str) -> Job:
             story_versions.remember(s, "export")
 
         mutate_story(story_id, owner, apply)
-        _run_task(library_task, lambda: backend.save_to_library(story, film, owner))
+        _run_task(
+            library_task,
+            lambda: backend.save_to_library(story, film, owner),
+            job.cancel_event,
+        )
 
     return _spawn(job, work)
 
@@ -1089,14 +1299,20 @@ def start_subtitled(story_id: str, owner: str, variant: str) -> Job:
                 mutate_story(story_id, owner, keep)
             return ""
 
-        if translate_task and not _run_task(translate_task, translate):
+        if translate_task and not _run_task(translate_task, translate, job.cancel_event):
             render_task.status = SKIPPED
+            return
+        if job.cancel_event.is_set():
             return
         current = get_store().get(story_id, owner)
         lines = {c: subs.lines_for(current, c) for c in subs.variant_langs(variant)}
         timeline = subs.variant_timeline(current, current.timeline_json, variant, lines)
         key = subs.variant_key(current, variant, lines)
-        if not _run_task(render_task, lambda: backend.render_timeline(current, timeline)):
+        if not _run_task(
+            render_task,
+            lambda: backend.render_timeline(current, timeline),
+            job.cancel_event,
+        ):
             return
         film = render_task.result_uri
 
@@ -1310,9 +1526,11 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
                 holder["set"] = made
                 return ""
 
-            if not _run_task(cast_task, cast):
+            if not _run_task(cast_task, cast, job.cancel_event):
                 return
             set_id = holder["set"].id
+        if job.cancel_event.is_set():
+            return
         story_set = get_set_store().get(set_id, owner)
         if story_set is None:
             raise StoryAccessError("Set not found.")
@@ -1364,10 +1582,16 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
             anchor_failed = False
             for view in views:
                 task = tasks[(kind, aid, view)]
+                if job.cancel_event.is_set():
+                    if task.status == QUEUED:
+                        task.status, task.error = SKIPPED, "Cancelled by user."
+                    continue
                 if anchor_failed and view != "voice":
                     task.status, task.error = SKIPPED, "Needs the first image."
                     continue
-                ok = _run_task(task, lambda v=view: paint(kind, aid, v))
+                ok = _run_task(
+                    task, lambda v=view: paint(kind, aid, v), job.cancel_event
+                )
                 if not ok and view in ("front", "plate"):
                     anchor_failed = True
 
@@ -1377,6 +1601,8 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
         order = {"front": 0, "plate": 0, "voice": 9}
         with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
             for (kind, aid), views in by_asset.items():
+                if job.cancel_event.is_set():
+                    break
                 views.sort(key=lambda v: order.get(v, 1))
                 pool.submit(chain, kind, aid, views)
 
@@ -1399,6 +1625,15 @@ def retry(job_id: str, owner: str) -> Job | None:
     if job.kind == "storyboard":
         failed = [t.scene_index for t in job.tasks if t.status == FAILED]
         return start_storyboard(job.story_id, owner, failed or None)
+    if job.kind == "clips":
+        failed = [
+            t.scene_index
+            for t in job.tasks
+            if t.status in (FAILED, SKIPPED) and t.scene_index >= 0
+        ]
+        return start_scene_clips(
+            job.story_id, owner, failed or list(job.params.get("indices") or [])
+        )
     if job.kind == "export":
         return start_export(job.story_id, owner)
     if job.kind == "music":

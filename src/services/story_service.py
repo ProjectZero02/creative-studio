@@ -47,6 +47,7 @@ from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
     CASTING_SYSTEM,
+    FRAME_MAX_REFERENCES,
     LANGUAGES,
     SAME_TAKE_REF,
     SCENARIO_SYSTEM,
@@ -68,6 +69,8 @@ from services.story_models import (
     scene_schema,
     set_build_prompt,
     set_schema,
+    single_clip_max,
+    split_narration_parts,
     translation_prompt,
 )
 
@@ -162,7 +165,13 @@ class StoryBackend(Protocol):
     def translate(self, story: Story) -> str: ...
     def translate_subtitles(self, story: Story, code: str) -> list[str]: ...
     def generate_frame(self, story: Story, index: int, reference_uri: str) -> str: ...
-    def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str: ...
+    def generate_clip(
+        self,
+        story: Story,
+        index: int,
+        start_frame_uri: str,
+        end_frame_uri: str = "",
+    ) -> str: ...
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str: ...
     def generate_music(self, story: Story, prompt: str, seconds: float) -> str: ...
     def generate_voiceover(
@@ -258,13 +267,13 @@ def stitch_local(
     try:
         sources = [
             VideoFileClip(p, audio=seg.spoken)
-            for p, seg in zip(clip_paths, plan.segments)
+            for p, seg in zip(clip_paths, plan.segments, strict=True)
         ]
         opened.extend(sources)
         size = sources[0].size
         layers = []
         speech = []
-        for seg, src in zip(plan.segments, sources):
+        for seg, src in zip(plan.segments, sources, strict=True):
             clip = src.subclipped(
                 seg.trim_head, min(seg.trim_head + seg.duration, src.duration)
             )
@@ -294,7 +303,7 @@ def stitch_local(
                 ]
             )
             tracks.append(music)
-        for seg, vpath in zip(plan.segments, voice_paths or []):
+        for seg, vpath in zip(plan.segments, voice_paths or [], strict=False):
             if not vpath:
                 continue
             voice = AudioFileClip(vpath)
@@ -386,7 +395,7 @@ def make_film(
         gains: dict[int, float] = {}
         voice_lengths: dict[int, float] = {}
         voices = {
-            seg.index: v for seg, v in zip(plan.segments, voice_uris or []) if v
+            seg.index: v for seg, v in zip(plan.segments, voice_uris or [], strict=False) if v
         }
         size = None
         for seg in plan.segments:
@@ -474,12 +483,53 @@ _MOCK_PLACES = [
 ]
 
 
-def _mock_cast(story: Story, hero: str, spoken: bool) -> dict:
+_SHOT_SIZES_CYCLE = (
+    "wide",
+    "medium",
+    "medium_close",
+    "close_up",
+    "medium_wide",
+    "insert",
+)
+_TITLE_TRAILING_STOP = frozenset(
+    {"on", "a", "an", "the", "in", "at", "to", "for", "with"}
+)
+
+
+def _mock_places_for_idea(idea: str, hero: str) -> list[str]:
+    cleaned = re.sub(r"\s+", " ", (idea or "").strip())
+    m = re.search(
+        r"\b(?:in|at|on|inside|across|through)\s+((?:a|an|the)\s+[^.,;:!?]{3,42}|[^.,;:!?]{3,42})",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m:
+        core = m.group(1).strip().rstrip(".")
+        return [
+            core,
+            f"an interior corner of {core}",
+            f"a quiet overlook near {core}",
+            *_MOCK_PLACES[3:],
+        ]
+    if hero and hero != "a curious traveller":
+        return [
+            f"a sunlit workshop where the {hero} begins",
+            f"a busy street around the {hero}",
+            "a quiet lookout overlooking the route",
+            *_MOCK_PLACES[3:],
+        ]
+    return list(_MOCK_PLACES)
+
+
+def _mock_cast(
+    story: Story, hero: str, spoken: bool, places_list: list[str] | None = None
+) -> dict:
     """The demo scenario's cast: the hero and up to three of the places."""
     look = story.character.strip() or (
         f"the {hero}, early 30s, medium build, warm brown eyes, a small scar on "
         "the chin"
     )
+    pool = places_list or _MOCK_PLACES
     places = min(3, max(1, story.scene_count))
     return {
         "characters": [
@@ -499,8 +549,8 @@ def _mock_cast(story: Story, hero: str, spoken: bool) -> dict:
         "locations": [
             {
                 "key": f"l{i + 1}",
-                "name": _MOCK_PLACES[i % len(_MOCK_PLACES)].capitalize(),
-                "description": f"{_MOCK_PLACES[i % len(_MOCK_PLACES)]}, soft light",
+                "name": pool[i % len(pool)].capitalize(),
+                "description": f"{pool[i % len(pool)]}, soft light",
                 "time_of_day": "golden hour",
             }
             for i in range(places)
@@ -552,9 +602,44 @@ class MockStoryBackend:
 
     # -- scenario --
     def write_scenario(self, story: Story, story_set=None, note: str = "") -> str:
+        from services import story_director
+
+        if story.input_mode == "script" and story.raw_script.strip():
+            self._sleep(0.4, 0.8)
+            parsed = story_director.parse_user_script(
+                story.raw_script,
+                language=story.language,
+                speech_mode=story.speech_mode,
+                pacing=story.pacing,
+                target_seconds=story.target_seconds,
+            )
+            if story_set is not None:
+                lead = story_set.on_screen()[:1]
+                places = story_set.locations
+                for i, sc in enumerate(parsed.get("scenes") or []):
+                    if not sc.get("cast"):
+                        sc["cast"] = [c.name for c in lead]
+                    if not sc.get("location") and places:
+                        sc["location"] = places[i % len(places)].name
+                    if sc.get("spoken") and not sc.get("speaker") and lead:
+                        sc["speaker"] = lead[0].name
+            return json.dumps(parsed)
+
         self._sleep(1.6, 2.6)
         hero = _hero_from_idea(story.idea)
-        n = story.scene_count
+        n = max(1, int(story.scene_count))
+        bp = story_director.plan_film_blueprint(
+            n * max(1, int(story.duration)),
+            pacing=story.pacing,
+            video_model=story.video_model,
+        )
+        shots_per_seq = list(bp.get("shots_per_sequence") or [n])
+        if sum(shots_per_seq) != n:
+            seq_cnt = 1 if n <= 8 else max(2, round(n / 6))
+            base, rem = divmod(n, seq_cnt)
+            shots_per_seq = [base + (1 if k < rem else 0) for k in range(seq_cnt)]
+
+        places_pool = _mock_places_for_idea(story.idea, hero)
         beats = [
             _MOCK_BEATS[round(i * (len(_MOCK_BEATS) - 1) / max(1, n - 1))]
             for i in range(n)
@@ -564,6 +649,25 @@ class MockStoryBackend:
         spoken = story.speech_mode == "on_camera" or (
             story.speech_mode == "auto" and any(w in story.idea.lower() for w in talky)
         )
+        seq_for_index: list[str] = []
+        sequences: list[dict] = []
+        cursor = 0
+        for s_idx, cnt in enumerate(shots_per_seq):
+            seq_key = f"seq{s_idx + 1}"
+            seq_for_index.extend([seq_key] * cnt)
+            sequences.append(
+                {
+                    "key": seq_key,
+                    "title": f"Sequence {s_idx + 1}",
+                    "summary": f"Beat group {s_idx + 1} for {hero}",
+                    "location": f"l{s_idx % min(3, max(1, n)) + 1}",
+                    "cast": ["c1"],
+                    "target_seconds": cnt * int(story.duration),
+                    "shot_count": cnt,
+                }
+            )
+            cursor += cnt
+
         scenes = []
         for i, (verb, line) in enumerate(beats):
             cam = (
@@ -571,12 +675,25 @@ class MockStoryBackend:
                 if story.camera in CAMERA_IDS
                 else CAMERA_IDS[i % len(CAMERA_IDS)]
             )
+            place_desc = places_pool[i % len(places_pool)]
+            shot_size = _SHOT_SIZES_CYCLE[i % len(_SHOT_SIZES_CYCLE)]
+            is_seq_start = i > 0 and seq_for_index[i] != seq_for_index[i - 1]
+            transition = "dissolve" if is_seq_start else "cut"
             scenes.append(
                 {
                     "narration": line,
-                    "visual": f"The {hero} {verb} in {_MOCK_PLACES[i % len(_MOCK_PLACES)]}, "
+                    "visual": f"The {hero} {verb} in {place_desc}, "
                     "same outfit and face as before, soft cinematic light.",
+                    "motion_prompt": f"Smooth {cam.replace('_', ' ')} motion following the {hero}.",
+                    "audio_cue": (
+                        "Clean room tone and natural voice presence."
+                        if spoken
+                        else f"Ambient atmosphere of {place_desc} with subtle natural Foley."
+                    ),
+                    "shot_size": shot_size,
                     "camera": cam,
+                    "transition": transition,
+                    "sequence": seq_for_index[i] if i < len(seq_for_index) else "seq1",
                     "spoken": spoken,
                 }
             )
@@ -586,6 +703,10 @@ class MockStoryBackend:
             if len(title) + len(w) + 1 > 44:
                 break
             title = f"{title} {w}".strip()
+        title_parts = title.split()
+        while len(title_parts) > 1 and title_parts[-1].lower() in _TITLE_TRAILING_STOP:
+            title_parts.pop()
+        title = " ".join(title_parts)
         title = (title or "Untitled story")[0].upper() + (title or "Untitled story")[1:]
         voice = "a warm, confident voice, mid-30s" if spoken else ""
         style_label = STYLE_BY_ID.get(story.style, {"label": "cinematic"})[
@@ -596,7 +717,18 @@ class MockStoryBackend:
             f"about the {hero}, warm and hopeful in tone, with a clear beginning, "
             "middle and end, for a general audience."
         )
-        reply = {"brief": brief, "title": title, "voice": voice, "scenes": scenes}
+        visual_grammar = (
+            f"Consistent {story.pacing or 'cinematic'} {style_label} visual grammar: "
+            "natural 35mm depth of field, soft golden-hour key light, unified warm-neutral color grade."
+        )
+        reply = {
+            "brief": brief,
+            "title": title,
+            "voice": voice,
+            "visual_grammar": visual_grammar,
+            "sequences": sequences,
+            "scenes": scenes,
+        }
         if story_set is not None:  # a saved set: cast it in every scene
             lead = story_set.on_screen()[:1]
             places = story_set.locations
@@ -607,7 +739,7 @@ class MockStoryBackend:
                 if lead:
                     sc["visual"] = sc["visual"].replace(f"The {hero}", lead[0].name, 1)
         else:  # demo stand-in for the writer casting the film itself
-            reply.update(_mock_cast(story, hero, spoken))
+            reply.update(_mock_cast(story, hero, spoken, places_pool))
             for i, sc in enumerate(scenes):
                 sc["cast"] = ["c1"]
                 sc["location"] = f"l{i % 3 + 1}" if n > 1 else "l1"
@@ -997,7 +1129,13 @@ class MockStoryBackend:
         return LOCAL_SCHEME + rel
 
     # -- clips --
-    def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str:
+    def generate_clip(
+        self,
+        story: Story,
+        index: int,
+        start_frame_uri: str,
+        end_frame_uri: str = "",
+    ) -> str:
         from moviepy import VideoClip
         from PIL import Image
 
@@ -1007,6 +1145,13 @@ class MockStoryBackend:
         w, h = frame_size(story.aspect_ratio, 640)
         big = src.resize((int(w * 1.25), int(h * 1.25)), Image.LANCZOS)
         bw, bh = big.size
+        end_big = (
+            Image.open(local_path(end_frame_uri))
+            .convert("RGB")
+            .resize((int(w * 1.25), int(h * 1.25)), Image.LANCZOS)
+            if end_frame_uri
+            else None
+        )
         cam = scene.camera
         rng = random.Random(index)
 
@@ -1029,15 +1174,26 @@ class MockStoryBackend:
             x0 = int((bw - cw) * ox)
             y0 = int((bh - ch) * oy)
             crop = big.crop((x0, y0, x0 + cw, y0 + ch)).resize((w, h), Image.BILINEAR)
-            return np.asarray(crop)
+            arr = np.asarray(crop)
+            if end_big is not None:
+                ease = 0.5 - 0.5 * math.cos(math.pi * min(1.0, max(0.0, p)))
+                end_crop = end_big.crop((x0, y0, x0 + cw, y0 + ch)).resize(
+                    (w, h), Image.BILINEAR
+                )
+                arr = (
+                    arr.astype("float32") * (1.0 - ease)
+                    + np.asarray(end_crop).astype("float32") * ease
+                ).astype("uint8")
+            return arr
 
         clip = VideoClip(make_frame, duration=float(scene.duration))
         uri, path = self._new_uri(story, f"clip{index + 1}")
         uri, path = uri + ".mp4", path + ".mp4"
         clip.write_videofile(
-            path, fps=12, codec="libx264", audio=False, preset="ultrafast", logger=None
+            path, fps=24, codec="libx264", audio=False, preset="ultrafast", logger=None
         )
         clip.close()
+        scene.video_model_used = resolve_video_engine(story, scene)
         return uri
 
     def last_frame(self, story: Story, clip_uri: str, index: int) -> str:
@@ -1219,25 +1375,71 @@ def clip_reference_cap() -> int:
     return max(1, min(model_cap, cfg.STORY_MAX_CLIP_REFERENCES))
 
 
+def resolve_video_engine(
+    story: Story, scene: Scene, default_model: str = ""
+) -> str:
+    """Resolve which video model generates `scene` ('hybrid' picks Omni for speech or >8s)."""
+    model = (
+        (getattr(story, "video_model", "") if story is not None else "")
+        or default_model
+        or Default().STORY_VIDEO_MODEL
+    ).strip()
+    if model == "hybrid":
+        if (scene.spoken and (scene.narration or "").strip()) or int(scene.duration) > 8:
+            return "gemini-omni-1.2-flash"
+        return "3.1-fast"
+    return model
+
+
+def _is_veo_model(model_id: str) -> bool:
+    mid = (model_id or "").strip()
+    if not mid:
+        return False
+    if mid.startswith("veo-"):
+        return True
+    from config.veo_models import get_veo_model_config
+
+    return get_veo_model_config(mid) is not None
+
+
+def _veo_version_id(model_id: str) -> str:
+    mid = (model_id or "").strip()
+    if mid.startswith("veo-"):
+        from config.veo_models import get_version_id_by_model_name
+
+        return get_version_id_by_model_name(mid) or "3.1-fast"
+    return mid or "3.1-fast"
+
+
 def clip_inputs(
     story: Story,
     scene: Scene,
     start_frame_uri: str,
     story_set=None,
+    end_frame_uri: str = "",
 ) -> dict:
     """Omni mode and media for a scene's first clip (not a continuation).
 
     A clip always opens on the picture it is given, so the video follows the
     storyboard: image to video from the frame (the storyboard frame, or the
-    previous clip's last frame with continuity). The storyboard frames are painted
-    from the set's faces, places and props (and the story's character
-    reference), so those stay in the picture. Only a clip with no frame at
-    all is made as reference to video from the set (capped, see
-    clip_reference_cap) or the character reference. `ref_labels` names each
-    reference for the prompt (pop it before building the request).
+    previous clip's last frame with continuity). When both `start_frame_uri`
+    and `end_frame_uri` are supplied (bridge mode), returns `first_last`.
+    The storyboard frames are painted from the set's faces, places and props
+    (and the story's character reference), so those stay in the picture. Only a
+    clip with no frame at all is made as reference to video from the set
+    (capped, see clip_reference_cap) or the character reference. `ref_labels`
+    names each reference for the prompt (pop it before building the request).
     """
     from models.requests import APIReferenceImage
 
+    if start_frame_uri and end_frame_uri:
+        return {
+            "omni_mode": "first_last",
+            "reference_image_gcs": start_frame_uri,
+            "reference_image_mime_type": _image_mime(start_frame_uri),
+            "last_reference_image_gcs": end_frame_uri,
+            "last_reference_image_mime_type": _image_mime(end_frame_uri),
+        }
     refs = (
         clip_refs(story_set, scene, "", clip_reference_cap())
         if story_set is not None and not start_frame_uri
@@ -1423,8 +1625,11 @@ def take_frame(story: Story, index: int) -> str:
 def take_turn_frame(story: Story, index: int, first: bool) -> str:
     """Storyboard frame sent with scene `index`'s turn of its take, which the
     turn opens on. The take's first clip only opens on its frame when it was
-    made fresh from it (not from the previous clip's last frame)."""
+    made fresh from it (not from the previous clip's last frame). When the
+    scene uses an `extend` transition, returns "" so Omni continues smoothly."""
     sc = story.scenes[index]
+    if sc.transition == "extend":
+        return ""
     return sc.frame_uri if not (first and sc.continues_from) else ""
 
 
@@ -1500,14 +1705,19 @@ class VertexStoryBackend:
         from models.requests import OmniVideoGenerationRequest
 
         scene = story.scenes[index]
+        model_id = extra.pop("model_version_id", None) or resolve_video_engine(
+            story, scene, getattr(self.cfg, "STORY_VIDEO_MODEL", "")
+        )
+        if _is_veo_model(model_id):
+            model_id = "gemini-omni-1.2-flash"
         caps = apply_caps(story.scene_count, scene.duration)
         seconds = extra.pop("duration_seconds", caps.duration)
         return OmniVideoGenerationRequest(
             prompt=prompt,
-            duration_seconds=clamp_duration(self.cfg.STORY_VIDEO_MODEL, int(seconds)),
+            duration_seconds=clamp_duration(model_id, int(seconds)),
             aspect_ratio=story.aspect_ratio,
             resolution=caps.resolution,
-            model_version_id=self.cfg.STORY_VIDEO_MODEL,
+            model_version_id=model_id,
             **extra,
         )
 
@@ -1559,6 +1769,105 @@ class VertexStoryBackend:
 
     def write_scenario(self, story: Story, story_set=None, note: str = "") -> str:
         """`note`: what went wrong in the last try, for the retry."""
+        if story.input_mode == "script" and story.raw_script.strip():
+            from services import story_director
+
+            parsed = story_director.parse_user_script(
+                story.raw_script,
+                language=story.language,
+                speech_mode=story.speech_mode,
+                pacing=story.pacing,
+                target_seconds=story.target_seconds,
+            )
+            return json.dumps(parsed)
+
+        threshold = getattr(self.cfg, "STORY_SEQUENCE_THRESHOLD_SCENES", 10)
+        if story.scene_count > threshold or story.target_seconds >= 90:
+            from concurrent.futures import ThreadPoolExecutor
+            from dataclasses import replace as _replace
+
+            from services import story_director
+            from services.story_models import _strip_fences
+
+            out_prompt = story_director.outline_prompt(story, story_set)
+            if note:
+                out_prompt = f"{out_prompt}\n\n{note}"
+            outline_text = self._json_text(
+                out_prompt,
+                task="story_outline",
+                media=scenario_media(story, story_set),
+                schema=story_director.outline_schema(story, story_set),
+                system=story_director.DIRECTOR_SYSTEM,
+                thinking=True,
+            )
+            outline = json.loads(_strip_fences(outline_text))
+            sequences = [
+                s for s in (outline.get("sequences") or []) if isinstance(s, dict)
+            ]
+            if sequences:
+                cast_payload = ""
+                if story_set is None and (
+                    outline.get("characters") or outline.get("locations")
+                ):
+                    cast_payload = json.dumps(
+                        {
+                            "characters": outline.get("characters") or [],
+                            "locations": outline.get("locations") or [],
+                            "props": outline.get("props") or [],
+                        }
+                    )
+                stage2_story = _replace(
+                    story,
+                    title=str(outline.get("title") or story.title or "").strip(),
+                    brief=str(outline.get("brief") or story.brief or "").strip(),
+                    visual_grammar=str(
+                        outline.get("visual_grammar") or story.visual_grammar or ""
+                    ).strip(),
+                    cast_json=cast_payload or story.cast_json,
+                )
+                with_links = story_set is not None or bool(cast_payload)
+                max_workers = max(
+                    1,
+                    min(
+                        len(sequences),
+                        getattr(self.cfg, "STORY_MAX_PARALLEL", 3),
+                    ),
+                )
+
+                def expand_seq(idx: int, seq: dict) -> list[dict]:
+                    shot_count = max(1, int(seq.get("shot_count") or 1))
+                    seq_prompt = story_director.sequence_shots_prompt(
+                        stage2_story,
+                        seq,
+                        idx,
+                        len(sequences),
+                        story_set=story_set,
+                    )
+                    if note:
+                        seq_prompt = f"{seq_prompt}\n\n{note}"
+                    seq_text = self._json_text(
+                        seq_prompt,
+                        task="story_sequence_shots",
+                        schema=story_director.sequence_shots_schema(
+                            shot_count, with_links=with_links
+                        ),
+                        system=story_director.DIRECTOR_SYSTEM,
+                        thinking=True,
+                    )
+                    data = json.loads(_strip_fences(seq_text))
+                    return [
+                        r for r in (data.get("scenes") or []) if isinstance(r, dict)
+                    ]
+
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    seq_shots = list(
+                        pool.map(lambda pair: expand_seq(*pair), enumerate(sequences))
+                    )
+                merged = story_director.merge_director_scenario(
+                    outline, seq_shots, stage2_story
+                )
+                return json.dumps(merged)
+
         prompt = scenario_prompt(story, story_set)
         return self._json_text(
             f"{prompt}\n\n{note}" if note else prompt,
@@ -1691,6 +2000,22 @@ class VertexStoryBackend:
                     if same_take
                     else "the look, palette and art style of the film"
                 )
+        if scene.location_id and len(refs) < FRAME_MAX_REFERENCES:
+            for prev in story.scenes[:index]:
+                if (
+                    prev.location_id == scene.location_id
+                    and prev.frame_uri
+                    and prev.frame_uri not in refs
+                ):
+                    if not labels and reference_uri and reference_uri in refs:
+                        labels.append(
+                            SAME_TAKE_REF
+                            if same_take
+                            else "the look, palette and art style of the film"
+                        )
+                    refs.append(prev.frame_uri)
+                    labels.append("an earlier shot in the same location")
+                    break
         uris, _, _, _, _ = generate_image_from_prompt_and_images(
             prompt=frame_prompt(
                 story,
@@ -1709,26 +2034,154 @@ class VertexStoryBackend:
             raise GenerationError("The image model returned no frame. Try again.")
         return uris[0]
 
-    def generate_clip(self, story: Story, index: int, start_frame_uri: str) -> str:
-        """One clip with Gemini Omni, with its own sound: the spoken line with
-        lip sync for on-camera scenes, ambient sound for narrated ones."""
-        from models.omni import generate_omni_video
+    def _generate_veo_clip(
+        self,
+        story: Story,
+        index: int,
+        start_frame_uri: str,
+        end_frame_uri: str = "",
+        model_id: str = "",
+        video_input_gcs: str = "",
+    ) -> str:
+        """One clip (or interpolation/r2v/extend) with Veo 3.1."""
+        from models.requests import APIReferenceImage, VideoGenerationRequest
+        from models.veo import generate_video
 
         scene = story.scenes[index]
         story_set = self._set(story)
-        extra = clip_inputs(story, scene, start_frame_uri, story_set)
-        labels = extra.pop("ref_labels", None)
-        prompt = clip_prompt(
+        version_id = _veo_version_id(
+            model_id
+            or resolve_video_engine(
+                story, scene, getattr(self.cfg, "STORY_VIDEO_MODEL", "")
+            )
+        )
+        caps = apply_caps(story.scene_count, scene.duration, model_id=version_id)
+        resolution = (
+            getattr(self.cfg, "STORY_VIDEO_RESOLUTION", "") or caps.resolution or "720p"
+        )
+        extra = clip_inputs(
             story,
             scene,
-            story_set=story_set,
-            ref_labels=labels,
+            start_frame_uri,
+            story_set,
+            end_frame_uri=end_frame_uri,
         )
-        parts = clip_parts(scene.duration)
+        labels = extra.pop("ref_labels", None)
+        prompt_kw: dict = {
+            "continuing": bool(video_input_gcs),
+            "story_set": story_set,
+            "ref_labels": labels[:3] if labels else None,
+        }
+        if start_frame_uri and end_frame_uri:
+            prompt_kw["bridge_to_next"] = True
+        prompt = clip_prompt(story, scene, **prompt_kw)
+
+        req_kwargs: dict = {
+            "prompt": prompt,
+            "aspect_ratio": story.aspect_ratio,
+            "resolution": resolution,
+            "video_count": 1,
+            "enhance_prompt": True,
+            "generate_audio": True,
+            "model_version_id": version_id,
+            "person_generation": "Allow (Adults only)",
+            "seed": story.seed or None,
+        }
+        if video_input_gcs:
+            req_kwargs["video_input_gcs"] = video_input_gcs
+            req_kwargs["video_input_mime_type"] = "video/mp4"
+            req_kwargs["duration_seconds"] = 7
+        elif start_frame_uri and end_frame_uri:
+            req_kwargs["reference_image_gcs"] = start_frame_uri
+            req_kwargs["reference_image_mime_type"] = _image_mime(start_frame_uri)
+            req_kwargs["last_reference_image_gcs"] = end_frame_uri
+            req_kwargs["last_reference_image_mime_type"] = _image_mime(end_frame_uri)
+            req_kwargs["duration_seconds"] = min(
+                (4, 6, 8), key=lambda d: (abs(d - int(scene.duration)), d)
+            )
+        elif start_frame_uri:
+            req_kwargs["reference_image_gcs"] = start_frame_uri
+            req_kwargs["reference_image_mime_type"] = _image_mime(start_frame_uri)
+            req_kwargs["duration_seconds"] = min(
+                (4, 6, 8), key=lambda d: (abs(d - int(scene.duration)), d)
+            )
+        elif extra.get("omni_mode") == "ref2v" and extra.get("r2v_references"):
+            req_kwargs["r2v_references"] = [
+                APIReferenceImage(gcs_uri=r.gcs_uri, mime_type=r.mime_type)
+                for r in extra["r2v_references"][:3]
+            ]
+            req_kwargs["duration_seconds"] = 8
+            if version_id == "3.1-lite":
+                req_kwargs["model_version_id"] = "3.1-fast"
+        else:
+            req_kwargs["duration_seconds"] = min(
+                (4, 6, 8), key=lambda d: (abs(d - int(scene.duration)), d)
+            )
+
+        video_uris, _ = generate_video(VideoGenerationRequest(**req_kwargs))
+        if not video_uris:
+            raise GenerationError("Veo returned no video for this scene.")
+        scene.video_model_used = req_kwargs["model_version_id"]
+        return video_uris[0]
+
+    def generate_clip(
+        self,
+        story: Story,
+        index: int,
+        start_frame_uri: str,
+        end_frame_uri: str = "",
+    ) -> str:
+        """One clip with Gemini Omni (or Veo 3.1 when configured), with its own
+        sound: the spoken line with lip sync for on-camera scenes, ambient sound
+        for narrated ones."""
+        from models.omni import generate_omni_video
+
+        scene = story.scenes[index]
+        engine = resolve_video_engine(
+            story, scene, getattr(self.cfg, "STORY_VIDEO_MODEL", "")
+        )
+        if _is_veo_model(engine):
+            return self._generate_veo_clip(
+                story,
+                index,
+                start_frame_uri,
+                end_frame_uri=end_frame_uri,
+                model_id=engine,
+            )
+
+        story_set = self._set(story)
+        extra = clip_inputs(
+            story,
+            scene,
+            start_frame_uri,
+            story_set,
+            end_frame_uri=end_frame_uri,
+        )
+        labels = extra.pop("ref_labels", None)
+        parts = clip_parts(scene.duration, single_clip_max(engine))
+        part_lines = (
+            split_narration_parts(scene.narration, parts)
+            if len(parts) > 1 and scene.spoken
+            else None
+        )
+        prompt_kw: dict = {
+            "story_set": story_set,
+            "ref_labels": labels,
+        }
+        if part_lines is not None:
+            prompt_kw["part_narration"] = part_lines[0]
+        if end_frame_uri:
+            prompt_kw["bridge_to_next"] = True
+        prompt = clip_prompt(story, scene, **prompt_kw)
         try:
             uri, interaction_id = generate_omni_video(
                 self._omni_request(
-                    story, index, prompt, duration_seconds=parts[0], **extra
+                    story,
+                    index,
+                    prompt,
+                    duration_seconds=parts[0],
+                    model_version_id=engine,
+                    **extra,
                 )
             )
         except GenerationError as exc:
@@ -1746,8 +2199,17 @@ class VertexStoryBackend:
             raise GenerationError("Gemini Omni returned no video for this scene.")
         if len(parts) > 1:
             uri, interaction_id = self._lengthen(
-                story, index, prompt, uri, interaction_id, parts[1:], story_set
+                story,
+                index,
+                prompt,
+                uri,
+                interaction_id,
+                parts[1:],
+                story_set,
+                part_lines=part_lines,
+                model_id=engine,
             )
+        scene.video_model_used = engine
         self._interactions[uri] = interaction_id
         return uri
 
@@ -1808,6 +2270,8 @@ class VertexStoryBackend:
         interaction_id: str,
         rest: list[int],
         story_set,
+        part_lines: list[str] | None = None,
+        model_id: str = "",
     ) -> tuple[str, str]:
         """Make a scene longer than one clip: continue the first clip in its
         Omni thread, one turn per part of `rest`, then join the parts into
@@ -1817,18 +2281,21 @@ class VertexStoryBackend:
         scene = story.scenes[index]
         history = _turn(prompt, uri)
         pieces = [uri]
-        for seconds in rest:
-            more = clip_prompt(story, scene, continuing=True, story_set=story_set)
+        for k, seconds in enumerate(rest, start=1):
+            more_kw: dict = {"continuing": True, "story_set": story_set}
+            if part_lines is not None and k < len(part_lines):
+                more_kw["part_narration"] = part_lines[k]
+            more = clip_prompt(story, scene, **more_kw)
+            req_kw: dict = {
+                "omni_mode": "t2v",
+                "duration_seconds": seconds,
+                "previous_interaction_id": interaction_id,
+                "chat_history_json": json.dumps(history),
+            }
+            if model_id:
+                req_kw["model_version_id"] = model_id
             new_uri, interaction_id = generate_omni_video(
-                self._omni_request(
-                    story,
-                    index,
-                    more,
-                    omni_mode="t2v",
-                    duration_seconds=seconds,
-                    previous_interaction_id=interaction_id,
-                    chat_history_json=json.dumps(history),
-                )
+                self._omni_request(story, index, more, **req_kw)
             )
             if not new_uri:
                 raise GenerationError(
@@ -1995,6 +2462,22 @@ class VertexStoryBackend:
         from services.story_timeline import clip_edges, probe
 
         scene = story.scenes[index]
+        engine = resolve_video_engine(
+            story, scene, getattr(self.cfg, "STORY_VIDEO_MODEL", "")
+        )
+        if _is_veo_model(engine):
+            uri = self._generate_veo_clip(
+                story, index, "", model_id=engine, video_input_gcs=prev_clip_uri
+            )
+            with tempfile.TemporaryDirectory() as tmp:
+                prev_path, new_path = os.path.join(tmp, "a.mp4"), os.path.join(tmp, "b.mp4")
+                _gcs_fetch(prev_clip_uri, prev_path)
+                _gcs_fetch(uri, new_path)
+                prev_len = clip_edges(prev_path)[0] or probe(prev_path)[0]
+                new_len = clip_edges(new_path)[0] or probe(new_path)[0]
+            joined = new_len > prev_len + 1.0
+            return uri, round(prev_len, 3) if joined else 0.0
+
         story_set = self._set(story)
         prev = story.scenes[index - 1] if index > 0 else None
         prev_id = (prev.interaction_id if prev else "") or self.interaction_of(
@@ -2024,6 +2507,7 @@ class VertexStoryBackend:
                 index,
                 prompt,
                 omni_mode="t2v",
+                model_version_id=engine,
                 previous_interaction_id=prev_id,
                 chat_history_json=json.dumps(
                     take_history(story, index, prev_clip_uri, story_set)
@@ -2038,6 +2522,7 @@ class VertexStoryBackend:
                 index,
                 prompt,
                 omni_mode="extend",
+                model_version_id=engine,
                 duration_seconds=min(OMNI_EXTEND_MAX_SECONDS, int(scene.duration)),
                 reference_video_gcs=prev_clip_uri,
                 reference_video_mime_type="video/mp4",
@@ -2045,6 +2530,7 @@ class VertexStoryBackend:
         uri, interaction_id = generate_omni_video(request)
         if not uri:
             raise GenerationError("Gemini Omni returned no video for this scene.")
+        scene.video_model_used = engine
         self._interactions[uri] = interaction_id
         with tempfile.TemporaryDirectory() as tmp:
             prev_path, new_path = os.path.join(tmp, "a.mp4"), os.path.join(tmp, "b.mp4")

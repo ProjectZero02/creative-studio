@@ -48,6 +48,7 @@ import tempfile
 import uuid
 
 TRACK_KINDS = ("video", "voice", "music", "text")
+JOIN_TYPES = ("cut", "bridge", "extend", "dissolve", "fade_black")
 TEXT_POSITIONS = ("top", "center", "bottom")
 TEXT_STYLES = ("clean", "boxed", "bold")
 # Fonts tried in order for on-film text: Noto covers Arabic and most scripts
@@ -116,6 +117,7 @@ def empty_timeline(width: int = 1280, height: int = 720, fps: int = 24) -> dict:
         "fps": fps,
         "width": width,
         "height": height,
+        "color_match": True,
         "tracks": [
             {"id": "video", "kind": "video", "clips": []},
             {"id": "voice", "kind": "voice", "clips": []},
@@ -183,6 +185,7 @@ def normalize(timeline: dict | str | None) -> dict:
         int(_num(src.get("height"), 720, 64, 3840)) // 2 * 2,
         int(_num(src.get("fps"), 24, 1, 60)),
     )
+    out["color_match"] = bool(src.get("color_match", True))
     by_kind: dict[str, dict] = {}
     for t in src.get("tracks") or []:
         if isinstance(t, dict) and t.get("kind") in TRACK_KINDS and t["kind"] not in by_kind:
@@ -240,6 +243,10 @@ def _clean_clip(kind: str, c: dict) -> dict | None:
     }
     if kind == "video":
         clean["fade_in"] = round(_num(c.get("fade_in"), 0, 0, 3), 3)
+        join = str(c.get("join") or "").strip().lower()
+        if join not in JOIN_TYPES:
+            join = "dissolve" if clean["fade_in"] > 0 else "cut"
+        clean["join"] = join
         clean["label"] = str(c.get("label") or "")[:60]
         clean["scene"] = int(_num(c.get("scene"), -1, -1, 999))
         if c.get("ambient"):
@@ -337,6 +344,8 @@ def _keep_video_edits(new: dict, old: dict) -> None:
         new_v.sort(key=lambda c: old_scenes.index(c["scene"]))
         for k, c in enumerate(new_v):
             c["fade_in"] = old_v[k]["fade_in"]
+            if "join" in old_v[k]:
+                c["join"] = old_v[k]["join"]
 
 
 def keep_edits(new: dict, old: dict | str | None) -> dict:
@@ -383,19 +392,37 @@ def build_timeline(
     (see :func:`clip_edges`), trimmed off so cuts land on movement.
     """
     tl = empty_timeline(width, height, fps)
+    tl["color_match"] = bool(getattr(story, "color_match", True))
     vids, voices = track(tl, "video")["clips"], track(tl, "voice")["clips"]
     voice_uris = voice_uris or {}
-    for seg in plan.segments:
+    segs = list(plan.segments)
+    for k, seg in enumerate(segs):
         i = seg.index
+        next_seg = segs[k + 1] if k + 1 < len(segs) else None
         cin = float(getattr(seg, "trim_head", 0.0))
         src_len = (clip_lengths or {}).get(i, cin + float(seg.duration))
         head, tail = (clip_stills or {}).get(i, (0.0, 0.0))
+        entering_seamless = (
+            getattr(seg, "join", "") in ("bridge", "extend")
+            or float(getattr(seg, "trim_head", 0.0)) > 0
+        )
+        exiting_seamless = (
+            next_seg is not None
+            and getattr(next_seg, "join", "") in ("bridge", "extend")
+        )
+        if entering_seamless:
+            head = 0.0
+        if exiting_seamless:
+            tail = 0.0
         cin = max(cin, min(head, src_len - MIN_KEEP))
         usable = max(cin + 0.1, src_len - tail)
         # The measured clip may be a little shorter than planned.
         length = max(0.1, min(float(seg.duration), usable - cin))
         default = 1.0 if seg.spoken else AMBIENT_GAIN
         gain = (clip_gains or {}).get(i, default)
+        join = str(getattr(seg, "join", "cut") or "cut")
+        if join not in JOIN_TYPES:
+            join = "dissolve" if seg.fade_in > 0 else "cut"
         clip = {
             "id": new_clip_id(),
             "src": seg.clip_uri,
@@ -405,6 +432,7 @@ def build_timeline(
             "src_max": round(max(src_len, cin + length), 3),
             "gain": round(gain, 3),
             "fade_in": seg.fade_in,
+            "join": join,
             "label": f"Scene {i + 1}",
             "scene": i,
         }
@@ -412,7 +440,7 @@ def build_timeline(
             clip["ambient"] = True
         vids.append(clip)
     _layout_video(vids)
-    for seg, vclip in zip(plan.segments, vids, strict=True):
+    for k, (seg, vclip) in enumerate(zip(segs, vids, strict=True)):
         vuri = voice_uris.get(seg.index, "")
         if not vuri:
             continue
@@ -420,15 +448,34 @@ def build_timeline(
         vlen = float((voice_lengths or {}).get(seg.index, length))
         begin = min(vclip["fade_in"] + 0.25, length / 3)
         room = max(0.3, length - begin - 0.05)
+        next_seg = segs[k + 1] if k + 1 < len(segs) else None
+        if vlen > room:
+            src_max = float(vclip.get("src_max", vclip["out"]))
+            next_seamless = (
+                next_seg is not None
+                and getattr(next_seg, "join", "") in ("bridge", "extend")
+            )
+            if src_max > vclip["out"] and not next_seamless:
+                vclip["out"] = round(min(src_max, vclip["out"] + (vlen - room)), 3)
+                _layout_video(vids)
+                length = clip_length(vclip)
+                begin = min(vclip["fade_in"] + 0.25, length / 3)
+                room = max(0.3, length - begin - 0.05)
+        if vlen > room and vlen / room <= 1.18:
+            tempo = round(vlen / room, 4)
+            vout = round(vlen, 3)
+        else:
+            tempo = 1.0
+            vout = round(min(vlen, room), 3)
         voices.append(
             {
                 "id": new_clip_id(),
                 "src": vuri,
                 "start": round(vclip["start"] + begin, 3),
                 "in": 0.0,
-                "out": round(min(vlen, room), 3),
+                "out": vout,
                 "gain": 1.0,
-                "tempo": 1.0,
+                "tempo": tempo,
                 "scene": seg.index,
             }
         )
@@ -603,6 +650,138 @@ def _atempo(tempo: float) -> str:
     return ",".join(f"atempo={t:.4f}" for t in stages)
 
 
+def loop_audio_crossfade(
+    src_path: str,
+    target_seconds: float,
+    out_path: str,
+    crossfade_s: float = 2.5,
+) -> str:
+    """Loop ``src_path`` to ``target_seconds`` as a 48 kHz stereo WAV using
+    equal-power cosine/sine crossfades across each loop boundary."""
+    import wave
+
+    import numpy as np
+
+    sr = 48000
+    raw = subprocess.run(
+        [
+            _ffmpeg(),
+            "-v",
+            "error",
+            "-i",
+            src_path,
+            "-ar",
+            str(sr),
+            "-ac",
+            "2",
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
+    samples = np.frombuffer(raw, dtype=np.float32)
+    n_frames = len(samples) // 2
+    samples = samples[: n_frames * 2].reshape(n_frames, 2)
+    target_n = max(1, int(round(max(0.1, float(target_seconds)) * sr)))
+    if n_frames == 0:
+        out = np.zeros((target_n, 2), dtype=np.float32)
+    elif n_frames >= target_n:
+        out = samples[:target_n].copy()
+    else:
+        src_dur = n_frames / sr
+        cf_s = max(0.0, min(float(crossfade_s), src_dur / 3.0))
+        cf_n = min(int(round(cf_s * sr)), n_frames // 3)
+        step = max(1, n_frames - cf_n)
+        out = np.zeros((target_n, 2), dtype=np.float32)
+        first_take = min(n_frames, target_n)
+        out[:first_take] = samples[:first_take]
+        if cf_n > 0:
+            theta = np.linspace(0.0, np.pi / 2.0, cf_n, dtype=np.float32)[:, None]
+            fade_out = np.cos(theta)
+            fade_in = np.sin(theta)
+        pos = step
+        while pos < target_n:
+            ov = min(cf_n, target_n - pos)
+            if ov > 0:
+                out[pos : pos + ov] = (
+                    out[pos : pos + ov] * fade_out[:ov]
+                    + samples[:ov] * fade_in[:ov]
+                )
+            body_start = pos + cf_n
+            if body_start < target_n:
+                rem = min(n_frames - cf_n, target_n - body_start)
+                out[body_start : body_start + rem] = samples[cf_n : cf_n + rem]
+            pos += step
+    pcm = (np.clip(out, -1.0, 1.0) * 32767.0).astype("<i2")
+    with wave.open(out_path, "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(pcm.tobytes())
+    return out_path
+
+
+def _frame_luma(path: str, at_seconds: float) -> float | None:
+    """Mean normalized luma [0, 1] of one frame near `at_seconds`, or None."""
+    if not path or not os.path.exists(path):
+        return None
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    for t in (max(0.0, float(at_seconds)), max(0.0, float(at_seconds) - 0.25)):
+        res = subprocess.run(
+            [
+                _ffmpeg(),
+                "-v",
+                "error",
+                "-ss",
+                f"{t:.3f}",
+                "-i",
+                path,
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
+                "pipe:1",
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout:
+            try:
+                img = Image.open(io.BytesIO(res.stdout)).convert("L")
+                return float(np.asarray(img, dtype=np.float32).mean() / 255.0)
+            except Exception:
+                return None
+    return None
+
+
+def compute_boundary_eq(
+    prev_path: str, prev_out: float, cur_path: str, cur_in: float
+) -> float:
+    """Brightness offset in [-0.08, 0.08] matching `cur` at `cur_in` to `prev`
+    near `prev_out`. Returns 0.0 for near-black/white frames or diff < 0.02."""
+    luma_prev = _frame_luma(prev_path, max(0.0, float(prev_out) - 0.08))
+    luma_cur = _frame_luma(cur_path, max(0.0, float(cur_in)))
+    if luma_prev is None or luma_cur is None:
+        return 0.0
+    if luma_prev < 0.05 or luma_cur < 0.05 or luma_prev > 0.95 or luma_cur > 0.95:
+        return 0.0
+    if abs(luma_prev - luma_cur) < 0.02:
+        return 0.0
+    ratio = luma_prev / luma_cur
+    offset = (ratio - 1.0) * 0.25
+    return round(max(-0.08, min(0.08, offset)), 4)
+
+
 def render_args(
     timeline: dict,
     paths: dict[str, str],
@@ -637,7 +816,9 @@ def render_args(
     # Narrated clips' own sound: a bed under the voice, mixed after the
     # ducking so it neither ducks the music nor is ducked.
     beds: list[str] = []
-    for k, c in enumerate(track(timeline, "video")["clips"]):
+    vclips = track(timeline, "video")["clips"]
+    color_match = bool(timeline.get("color_match", True))
+    for k, c in enumerate(vclips):
         idx = add_input(paths[c["src"]])
         length = clip_length(c)
         # Snap the clip's slot to whole output frames. A start like 11.96 s
@@ -646,6 +827,13 @@ def render_args(
         f0 = round(c["start"] * fps)
         frames = max(1, round((c["start"] + length) * fps) - f0)
         start, slot = f0 / fps, frames / fps
+        next_c = vclips[k + 1] if k + 1 < len(vclips) else None
+        prev_c = vclips[k - 1] if k > 0 else None
+        eq_b = 0.0
+        if color_match and prev_c is not None and c.get("join") == "bridge":
+            eq_b = compute_boundary_eq(
+                paths[prev_c["src"]], prev_c["out"], paths[c["src"]], c["in"]
+            )
         # One spare frame past the slot (hidden by `enable`): overlay treats a
         # clip as over at its last frame's time, which blacked out the film's
         # final frame.
@@ -653,13 +841,29 @@ def render_args(
             f"[{idx}:v]trim=start={c['in']:.3f}:end={c['out']:.3f},setpts=PTS-STARTPTS,"
             f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+        )
+        if abs(eq_b) > 0.001:
+            chain += f"eq=brightness={eq_b:.4f},"
+        chain += (
             # A clip whose picture ends early holds its last frame instead of
             # showing the black canvas, and never runs past its slot.
             f"tpad=stop_mode=clone:stop_duration={slot + 2 / fps:.3f},trim=end_frame={frames + 1},"
             "format=yuva420p"
         )
         if c.get("fade_in"):
-            chain += f",fade=t=in:st=0:d={c['fade_in']:.3f}:alpha=1"
+            if c.get("join") == "fade_black":
+                chain += f",fade=t=in:st=0:d={c['fade_in']:.3f}"
+            else:
+                chain += f",fade=t=in:st=0:d={c['fade_in']:.3f}:alpha=1"
+        if (
+            next_c is not None
+            and next_c.get("join") == "fade_black"
+            and next_c.get("fade_in", 0) > 0
+        ):
+            dip = min(next_c["fade_in"] / 2.0, slot / 2.0)
+            dip_st = max(0.0, (next_c["start"] - start) - dip)
+            if dip > 0.01:
+                chain += f",fade=t=out:st={dip_st:.3f}:d={dip:.3f}:alpha=1"
         # Offset by whole frames (the fps filter set the time base to 1/fps):
         # PTS+11.958333/TB rounds down to frame 286 instead of 287.
         chain += f",setpts=PTS+{f0}[v{k}]"
@@ -671,8 +875,13 @@ def render_args(
         last = f"o{k}"
         if c.get("gain", 0) > 0 and has_audio.get(c["src"]):
             bucket = beds if c.get("ambient") else dialogue
+            aclip = c
+            alen = length
+            if c.get("ambient") and c["out"] + 0.16 <= c.get("src_max", c["out"]):
+                aclip = {**c, "out": round(c["out"] + 0.16, 3)}
+                alen = clip_length(aclip)
             bucket.append(
-                _audio_chain(filters, idx, c, length, f"d{k}", fade=JOIN_FADE)
+                _audio_chain(filters, idx, aclip, alen, f"d{k}", fade=JOIN_FADE)
             )
     for k, c in enumerate(track(timeline, "text")["clips"]):
         png = overlays.get(c["id"])
@@ -701,7 +910,10 @@ def render_args(
     for k, c in enumerate(music_track["clips"]):
         if not has_audio.get(c["src"], True):
             continue
-        idx = add_input(paths[c["src"]], "-stream_loop", "-1")
+        if c.get("_looped"):
+            idx = add_input(paths[c["src"]])
+        else:
+            idx = add_input(paths[c["src"]], "-stream_loop", "-1")
         music.append(_audio_chain(filters, idx, c, clip_length(c), f"m{k}", fade=1.0))
 
     audio_out = ""
@@ -764,7 +976,8 @@ def _audio_chain(
     f = min(fade, length / 3)
     chain += (
         f",aformat=sample_rates=48000:channel_layouts=stereo,volume={c.get('gain', 1.0):.3f},"
-        f"afade=t=in:st=0:d={f:.3f},afade=t=out:st={max(0.0, length - f):.3f}:d={f:.3f},"
+        f"afade=t=in:st=0:d={f:.3f}:curve=qsin,"
+        f"afade=t=out:st={max(0.0, length - f):.3f}:d={f:.3f}:curve=qsin,"
         f"adelay={int(round(c['start'] * 1000))}:all=1[{label}]"
     )
     filters.append(chain)
@@ -891,6 +1104,7 @@ def render_timeline(
     with tempfile.TemporaryDirectory() as tmp:
         paths: dict[str, str] = {}
         has_audio: dict[str, bool] = {}
+        src_durations: dict[str, float] = {}
         for t in tl["tracks"]:
             for c in t["clips"]:
                 src = c.get("src")
@@ -900,7 +1114,23 @@ def render_timeline(
                 local = os.path.join(tmp, f"src{len(paths)}{ext}")
                 fetch(src, local)
                 paths[src] = local
-                has_audio[src] = probe(local)[1]
+                dur, aud = probe(local)
+                src_durations[src] = dur
+                has_audio[src] = aud
+        for k, c in enumerate(track(tl, "music")["clips"]):
+            src = c.get("src", "")
+            if not src or not has_audio.get(src, True):
+                continue
+            src_dur = src_durations.get(src, 0.0)
+            need = max(clip_length(c), float(c.get("out") or 0.0))
+            if src_dur > 0 and need > src_dur + 0.2:
+                loop_wav = os.path.join(tmp, f"music_loop_{k}.wav")
+                loop_audio_crossfade(paths[src], need + 0.5, loop_wav)
+                loop_key = f"__music_loop_{k}_{src}"
+                paths[loop_key] = loop_wav
+                has_audio[loop_key] = True
+                c["src"] = loop_key
+                c["_looped"] = True
         overlays = {
             c["id"]: text_overlay_png(
                 c, tl["width"], tl["height"], os.path.join(tmp, f"text_{c['id']}.png")

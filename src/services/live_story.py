@@ -20,11 +20,12 @@ it one step at a time, render the film, check status, and open it on screen.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
 from common.utils import create_display_url
-from services import story_autoset, story_jobs
+from services import story_autoset, story_director, story_jobs
 from services.live_jobs import LiveJob, RunResult
 from services.story_models import (
     ASPECT_RATIOS,
@@ -73,6 +74,25 @@ def _normalize_language(value: str) -> str:
     return ""
 
 
+def _extract_target_seconds(length: str) -> int:
+    raw = (length or "").strip()
+    if not raw:
+        return 0
+    if raw.isdigit():
+        return int(raw)
+    parsed = story_autoset.infer_settings(raw)
+    if parsed.get("film_seconds"):
+        return int(parsed["film_seconds"])
+
+    m_min = re.search(r"(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\b", raw, re.I)
+    if m_min:
+        return int(round(float(m_min.group(1)) * 60))
+    m_sec = re.search(r"(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b", raw, re.I)
+    if m_sec:
+        return int(round(float(m_sec.group(1))))
+    return 0
+
+
 def _parse_length(length: str, scene_count: int | None, duration: int | None):
     raw = (length or "").strip()
     if not raw:
@@ -100,13 +120,28 @@ def create_story_record(
         raise ValueError("Describe your idea in a sentence or two first.")
 
     inferred = story_autoset.infer_settings(cleaned)
-    scene_count = inferred.get("scene_count", 4)
-    duration = inferred.get("duration", 6)
-    if length:
-        scene_count, duration = _parse_length(length, None, None)
-        scene_count = scene_count or 4
-        duration = duration or 6
-    caps = apply_caps(scene_count, duration)
+    pacing = inferred.get("pacing", "cinematic")
+    video_model = inferred.get("video_model", "")
+    target_seconds = (
+        _extract_target_seconds(length)
+        if length
+        else int(inferred.get("film_seconds") or 0)
+    )
+    if target_seconds >= 90:
+        bp = story_director.plan_film_blueprint(
+            target_seconds, pacing=pacing, video_model=video_model
+        )
+        scene_count = int(bp["scene_count"])
+        duration = int(bp["duration"])
+    else:
+        target_seconds = 0
+        scene_count = inferred.get("scene_count", 4)
+        duration = inferred.get("duration", 6)
+        if length:
+            scene_count, duration = _parse_length(length, None, None)
+            scene_count = scene_count or 4
+            duration = duration or 6
+    caps = apply_caps(scene_count, duration, model_id=video_model)
 
     ar = (aspect_ratio or "").strip()
     chosen_aspect = ar if ar in ASPECT_RATIOS else inferred.get("aspect_ratio", "16:9")
@@ -124,6 +159,9 @@ def create_story_record(
         aspect_ratio=chosen_aspect,
         style=chosen_style,
         camera=inferred.get("camera", "auto"),
+        target_seconds=target_seconds,
+        pacing=pacing,
+        video_model=video_model,
         scenes=[],
         approved=False,
         step="scenario",
