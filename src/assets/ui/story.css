@@ -563,7 +563,8 @@ html body .ss-dl-btn.is-primary a:hover { background: color-mix(in srgb, var(--s
   .ss-edit-head, .ss-edit-music, .ss-edit-main { padding: 12px; }
   .ss-edit-name { width: 100%; }
   .ss-edit-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
-  .ss-edit-tools > :only-child, .ss-edit-tools > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .ss-edit-tools > component-renderer:last-of-type:nth-of-type(odd) { grid-column: 1 / -1; }
+  .ss-edit-tools > span:empty { display: none; }
   .ss-edit-tools .mat-mdc-button-base { width: 100%; min-width: 0; }
   .ss-export { padding: 12px; }
   .ss-export-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
