@@ -567,10 +567,32 @@ def start_storyboard(
 
         reference = story.reference_uri
         rest = list(targets)
+        painted: dict[int, str] = {}
+
+        def reference_for(i: int) -> str:
+            # A new take in the same place as the shot before it is painted
+            # from that take's frame, so a cut to a new angle keeps the venue,
+            # light and people. Otherwise scene 1's frame anchors the look.
+            p = same_place_source(story, i)
+            if p is not None:
+                uri = painted.get(p) or story.scenes[p].frame_uri
+                if uri:
+                    return uri
+            return reference
+
+        def run_chain(chain: list[int]) -> None:
+            for i in chain:
+                if job.cancel_event.is_set():
+                    break
+                if _run_task(tasks[i], lambda i=i: paint(i, reference_for(i)), job.cancel_event):
+                    painted[i] = tasks[i].result_uri
+
         if 0 in targets and not reference:
             ok = _run_task(tasks[0], lambda: paint(0, ""), job.cancel_event)
             rest.remove(0)
             reference = tasks[0].result_uri if ok else ""
+            if ok:
+                painted[0] = reference
         if (
             not reference
             and story.scenes
@@ -578,19 +600,38 @@ def start_storyboard(
             and 0 not in targets
         ):
             reference = story.scenes[0].frame_uri
+        # Frames that build on one another are painted in order (one chain);
+        # chains run side by side.
+        chains: list[list[int]] = []
+        chain_of: dict[int, list[int]] = {}
+        for i in rest:
+            p = same_place_source(story, i)
+            chain = chain_of.get(p) if p is not None else None
+            if chain is None:
+                chain = []
+                chains.append(chain)
+            chain.append(i)
+            chain_of[i] = chain
         workers = max(1, cfg.STORY_MAX_PARALLEL)
         with _Pool(max_workers=workers) as pool:
-            for i in rest:
+            for chain in chains:
                 if job.cancel_event.is_set():
                     break
-                pool.submit(
-                    _run_task,
-                    tasks[i],
-                    lambda i=i: paint(i, reference),
-                    job.cancel_event,
-                )
+                pool.submit(run_chain, chain)
 
     return _spawn(job, work)
+
+
+def same_place_source(story: Story, i: int) -> int | None:
+    """The take start whose frame scene `i` (a take start) should be painted
+    from: the take of the shot before it, when both are in the same place
+    (same location, or the story has no set). None otherwise."""
+    if i <= 0 or i >= len(story.scenes):
+        return None
+    here, before = story.scenes[i].location_id, story.scenes[i - 1].location_id
+    if story.set_id and here != before:
+        return None
+    return story.take_start(i - 1)
 
 
 def _bridge_end_frame(story: Story, i: int) -> str:

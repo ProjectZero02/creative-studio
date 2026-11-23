@@ -602,9 +602,11 @@ def test_full_pipeline_with_mock_backend(fast_backend, local_store):
     story_jobs.mutate_story(s.id, OWNER, lambda x: setattr(x, "approved", True))
     job = _run(story_jobs.start_storyboard(s.id, OWNER))
     assert job.status == "done"
-    # Scene 1 anchors the look: later frames get it as reference.
+    # Scene 1 anchors the look; a cut in the same place is painted from the
+    # frame before it.
     assert fast_backend.refs[0] == ""
-    assert fast_backend.refs[1] == fast_backend.refs[2] == f"local://{s.id}/frame0.png"
+    assert fast_backend.refs[1] == f"local://{s.id}/frame0.png"
+    assert fast_backend.refs[2] == f"local://{s.id}/frame1.png"
 
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [t.error for t in job.tasks]

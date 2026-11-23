@@ -339,10 +339,12 @@ class _FastMock(story_service.MockStoryBackend):
         super().__init__(speed=0)
         self.painted = []
         self.notes = {}
+        self.refs = {}
 
     def generate_frame(self, story, index, reference_uri, note=""):
         self.painted.append(index)
         self.notes[index] = note
+        self.refs[index] = reference_uri
         return f"local://{story.id}/frame{index}-{len(self.painted)}.png"
 
     def generate_clip(self, story, index, start_frame_uri, end_frame_uri=""):
@@ -408,6 +410,46 @@ def test_redo_frame_inside_a_take_repaints_the_take_start_with_the_note(jobs_env
     assert story.scenes[0].frame_uri.startswith("local://")
     assert story.scenes[1].clip_uri == ""  # the take's clips change with its frame
     assert story.scenes[3].frame_uri == "gs://b/3.png"
+
+
+def test_a_cut_in_the_same_place_is_painted_from_the_shot_before(jobs_env):
+    store, backend = jobs_env
+    # Three takes (cuts) with no set: one place, so each new angle is
+    # painted from the frame before it, in order.
+    story = store.save(_take_story(4, ("extend", "cut", "cut")), OWNER)
+    job = _run(story_jobs.start_storyboard(story.id, OWNER))
+    assert job.status == "done"
+    story = store.get(story.id, OWNER)
+    assert backend.painted == [0, 2, 3]
+    assert backend.refs[0] == ""
+    assert backend.refs[2] == story.scenes[0].frame_uri  # take 1's start frame
+    assert backend.refs[3] == story.scenes[2].frame_uri
+
+
+def test_a_cut_to_another_location_uses_scene_one_as_the_anchor(jobs_env):
+    store, backend = jobs_env
+    story = _take_story(3, ("cut", "cut"))
+    story.set_id = "set1"
+    for sc, loc in zip(story.scenes, ("stage", "stage", "street"), strict=True):
+        sc.location_id = loc
+    story = store.save(story, OWNER)
+    job = _run(story_jobs.start_storyboard(story.id, OWNER))
+    assert job.status == "done"
+    story = store.get(story.id, OWNER)
+    first = story.scenes[0].frame_uri
+    assert backend.refs[1] == first  # same stage
+    assert backend.refs[2] == first  # new place: only scene 1 anchors the look
+
+
+def test_redo_frame_uses_the_frame_before_in_the_same_place(jobs_env):
+    store, backend = jobs_env
+    story = _take_story(3, ("cut", "cut"))
+    for i in range(3):
+        story.scenes[i].frame_uri = f"gs://b/{i}.png"
+    story = store.save(story, OWNER)
+    job = _run(story_jobs.start_storyboard(story.id, OWNER, [2]))
+    assert job.status == "done"
+    assert backend.painted == [2] and backend.refs[2] == "gs://b/1.png"
 
 
 def test_make_film_needs_take_start_frames_only(jobs_env):
