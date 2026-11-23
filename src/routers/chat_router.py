@@ -18,6 +18,8 @@
 - ``GET /api/chat/jobs`` returns the chat's jobs with their status, for the
   page to poll until they finish.
 - ``POST /api/chat/reset`` starts a new conversation.
+- ``POST /api/chat/load`` reopens a saved chat (routers/chats_router.py):
+  the model gets its earlier turns and its jobs keep reporting.
 
 Everything is per caller (signed-in email). Browser requests must come from
 this site (Origin check) and send JSON.
@@ -93,6 +95,24 @@ async def upload(request: Request) -> dict:
 @router.get("/jobs")
 def jobs(request: Request) -> dict:
     return {"jobs": studio_chat.chat_jobs(_caller(request))}
+
+
+@router.post("/load")
+async def load(request: Request) -> dict:
+    """Reopen a saved chat: ``{"messages": [{role, text}], "job_ids": [...]}``."""
+    owner = _caller(request)
+    _same_site(request)
+    if "application/json" not in (request.headers.get("content-type") or ""):
+        raise HTTPException(status_code=415, detail="Send JSON")
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Bad JSON") from exc
+    body = body if isinstance(body, dict) else {}
+    messages = body.get("messages") if isinstance(body.get("messages"), list) else []
+    job_ids = body.get("job_ids") if isinstance(body.get("job_ids"), list) else []
+    kept = studio_chat.load_history(owner, messages[-200:], job_ids)
+    return {"ok": True, "turns": kept}
 
 
 @router.post("/reset")

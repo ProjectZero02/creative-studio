@@ -27,7 +27,13 @@
  * Messages go to POST /api/chat (services/studio_chat.py), which answers in
  * text and starts jobs; GET /api/chat/jobs is polled until they finish, and
  * each job's result (image, video, audio, film step) shows in the thread.
- * The thread is kept in sessionStorage so it survives moving between pages.
+ * Each chat is saved (POST/PATCH /api/chats, services/chat_store.py) after
+ * every exchange and job update, with a snapshot of its jobs, so it shows in
+ * the side menu's Recents and reopens later. sessionStorage keeps the open
+ * chat for quick returns between pages. The side menu (<gm-chat-nav>) opens
+ * and starts chats through window events: gm-open-chat {id}, gm-new-chat
+ * {project_id}; this element answers with gm-active-chat and
+ * gm-chats-changed. URL: /home?chat=<id> opens a chat, ?new=1 starts one.
  *
  * Box: one row like ChatGPT's: "+" on the left, then on the right Enhance
  * (rewrites the prompt with Gemini, shown once there is text), the dictation
@@ -122,6 +128,13 @@ class GmHomeChat extends LitElement {
     this._kind = ''; // the picked type chip ('' = chat)
     this._sample = {}; // kind -> index of the sample shown last
     this._enhancing = false;
+    const kept = load(STORE, {});
+    this._chatId = kept.chatId || ''; // saved chat id ('' until the first send)
+    this._projectId = kept.projectId || ''; // project for a new chat
+    this._saveTimer = null;
+    this._loading = false;
+    this._onOpenChat = (e) => this._openChat((e.detail && e.detail.id) || '');
+    this._onNewChat = (e) => this._newChat((e.detail && e.detail.project_id) || '');
   }
 
   get _kinds() {
@@ -134,6 +147,14 @@ class GmHomeChat extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    window.addEventListener('gm-open-chat', this._onOpenChat);
+    window.addEventListener('gm-new-chat', this._onNewChat);
+    let params = new URLSearchParams();
+    try { params = new URL(window.location.href).searchParams; } catch (_) { /* ignore */ }
+    const askedChat = params.get('chat') || '';
+    if (params.get('new')) this._newChat(params.get('project') || '');
+    else if (askedChat && askedChat !== this._chatId) this._openChat(askedChat);
+    else this._announce();
     if (this._pending().length) this._poll();
     const warm = () => HOVER_MEDIA.forEach((src) => { const i = new Image(); i.src = src; });
     if (!reduceMotion()) {
@@ -145,6 +166,9 @@ class GmHomeChat extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.removeEventListener('gm-open-chat', this._onOpenChat);
+    window.removeEventListener('gm-new-chat', this._onNewChat);
+    if (this._saveTimer) { clearTimeout(this._saveTimer); this._persist(); }
     clearTimeout(this._timer);
     if (this._rec) try { this._rec.stop(); } catch (_) { /* ignore */ }
     setTimeout(() => window.gmLive && window.gmLive.refreshLauncher && window.gmLive.refreshLauncher(), 60);
@@ -152,7 +176,8 @@ class GmHomeChat extends LitElement {
 
   updated(changed) {
     if (changed.has('_msgs') || changed.has('_jobs')) {
-      save(STORE, { msgs: this._msgs, jobs: this._jobs });
+      save(STORE, { msgs: this._msgs, jobs: this._jobs, chatId: this._chatId, projectId: this._projectId });
+      if (!this._loading && this._msgs.length) this._queueSave();
       // Keep the newest message in view: scroll the page's scroller to the end.
       const scroller = this.closest('.gm-page');
       if (scroller && this._msgs.length && changed.has('_msgs')) scroller.scrollTo({ top: scroller.scrollHeight, behavior: reduceMotion() ? 'auto' : 'smooth' });
@@ -239,14 +264,128 @@ class GmHomeChat extends LitElement {
     }, POLL_MS);
   }
 
-  async _newChat() {
+  async _newChat(projectId = '') {
     clearTimeout(this._timer);
+    if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
+    this._loading = true;
     this._msgs = [];
     this._jobs = {};
+    this._chatId = '';
+    this._projectId = projectId || '';
+    this._setUrl('');
+    this._announce();
     try {
       await fetch('/api/chat/reset', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } });
     } catch (_) { /* local reset is enough */ }
-    this.updateComplete.then(() => this._ta && this._ta.focus());
+    await this.updateComplete;
+    this._loading = false;
+    this._ta && this._ta.focus();
+  }
+
+  // ---------------------------------------------------------------- saved chats
+
+  _announce() {
+    window.gmActiveChat = this._chatId;
+    window.dispatchEvent(new CustomEvent('gm-active-chat', { detail: { id: this._chatId } }));
+  }
+
+  _setUrl(id) {
+    // Keep the address shareable (/home?chat=<id>) without a page load.
+    try {
+      const url = new URL(window.location.href);
+      if (!/^\/(home)?$/.test(url.pathname)) return;
+      ['chat', 'new', 'project'].forEach((k) => url.searchParams.delete(k));
+      if (id) url.searchParams.set('chat', id);
+      window.history.replaceState(window.history.state, '', url.pathname + url.search);
+    } catch (_) { /* ignore */ }
+  }
+
+  /** A job as stored in the chat: what the thread needs to draw it again. */
+  _snapshot(id) {
+    const j = this._jobs[id];
+    if (!j) return { id };
+    const p = j.params || {};
+    return {
+      id: j.id, kind: j.kind, status: j.status, handle: j.handle, prompt: j.prompt, error: j.error,
+      display_url: j.display_url, mime_type: j.mime_type,
+      params: { story_id: p.story_id, story_step: p.story_step, has_film: p.has_film },
+    };
+  }
+
+  _queueSave() {
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => { this._saveTimer = null; this._persist(); }, 700);
+  }
+
+  async _persist() {
+    if (!this._msgs.length) return;
+    const messages = this._msgs.map((m) => ({
+      role: m.role, text: m.text || '', images: (m.images || []).filter((u) => u && !String(u).startsWith('blob:')),
+      jobs: (m.jobs || []).map((id) => this._snapshot(typeof id === 'string' ? id : id.id)), ask: m.ask || null,
+    }));
+    const job_ids = Object.keys(this._jobs);
+    try {
+      if (!this._chatId) {
+        const r = await fetch('/api/chats', {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, job_ids, project_id: this._projectId }),
+        });
+        if (!r.ok) return;
+        const body = await r.json();
+        this._chatId = (body.chat && body.chat.id) || '';
+        save(STORE, { msgs: this._msgs, jobs: this._jobs, chatId: this._chatId, projectId: this._projectId });
+        this._setUrl(this._chatId);
+        this._announce();
+        // The first save has no title yet; this PATCH gives it one.
+        await fetch(`/api/chats/${this._chatId}`, {
+          method: 'PATCH', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages }),
+        });
+      } else {
+        await fetch(`/api/chats/${this._chatId}`, {
+          method: 'PATCH', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, job_ids }),
+        });
+      }
+      window.dispatchEvent(new CustomEvent('gm-chats-changed'));
+    } catch (_) { /* saved next time */ }
+  }
+
+  async _openChat(id) {
+    if (!id || id === this._chatId) { this._announce(); return; }
+    if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
+    let chat = null;
+    try {
+      const r = await fetch(`/api/chats/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+      if (r.ok) chat = (await r.json()).chat;
+    } catch (_) { /* below */ }
+    if (!chat) { this._newChat(); return; }
+    clearTimeout(this._timer);
+    this._loading = true;
+    const jobs = {};
+    const msgs = (chat.messages || []).map((m) => {
+      const ids = (m.jobs || []).map((j) => {
+        if (j && typeof j === 'object' && j.id) { jobs[j.id] = { ...j, params: j.params || {} }; return j.id; }
+        return String(j);
+      });
+      return { role: m.role, text: m.text, images: m.images || [], jobs: ids, ask: m.ask || undefined };
+    });
+    this._chatId = chat.id;
+    this._projectId = chat.project_id || '';
+    this._jobs = jobs;
+    this._msgs = msgs;
+    this._setUrl(chat.id);
+    this._announce();
+    // Give the studio chat the earlier turns, so "make a video from image 1" still works.
+    try {
+      await fetch('/api/chat/load', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: msgs.map((m) => ({ role: m.role, text: m.text || '' })), job_ids: Object.keys(jobs) }),
+      });
+    } catch (_) { /* the chat still shows */ }
+    await this.updateComplete;
+    this._loading = false;
+    if (this._pending().length) this._poll();
   }
 
   _prefill(text) {
@@ -565,7 +704,7 @@ class GmHomeChat extends LitElement {
             <h1 class="title">${S.title || "Google's creative AI, in one studio"}</h1>
           </section>`}
         <div class="dock">
-          ${chatting ? html`<button class="ghost newchat" type="button" @click=${this._newChat} title=${S.new_chat_tip || 'Start over with an empty chat'}>
+          ${chatting ? html`<button class="ghost newchat" type="button" @click=${() => this._newChat(this._projectId)} title=${S.new_chat_tip || 'Start over with an empty chat'}>
               ${svg(ICON.newchat, 18)}<span>${S.new_chat || 'New chat'}</span></button>` : nothing}
           ${this._box()}
           ${this._kindChips(chatting || this._hasText)}

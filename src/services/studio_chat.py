@@ -125,6 +125,36 @@ def reset(owner: str) -> None:
         _sessions.pop(owner, None)
 
 
+def load_history(
+    owner: str,
+    messages: list[dict],
+    job_ids: list[str] | None = None,
+    jobs: LiveJobs | None = None,
+) -> int:
+    """Start a fresh session that remembers a saved chat's earlier turns.
+
+    ``messages`` are ``{"role": "user"|"assistant", "text"}``; the last
+    MAX_HISTORY with text become the model's history, so a reopened chat can
+    still say "make a video from image 1". ``job_ids`` are the chat's jobs, so
+    any still running keep reporting. Returns how many turns were kept.
+    """
+    reset(owner)
+    s = session_for(owner, jobs)
+    history: list[types.Content] = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        text = str(m.get("text") or "").strip()[:MAX_MESSAGE]
+        if not text:
+            continue
+        role = "model" if m.get("role") == "assistant" else "user"
+        history.append(types.Content(role=role, parts=[types.Part.from_text(text=text)]))
+    with s.lock:
+        s.history = history[-MAX_HISTORY:]
+        s.job_ids = [str(j)[:64] for j in (job_ids or []) if j][-500:]
+    return len(s.history)
+
+
 def chat_jobs(owner: str, jobs: LiveJobs | None = None) -> list[dict]:
     """The jobs this person started from the chat, oldest first."""
     s = _sessions.get(owner)

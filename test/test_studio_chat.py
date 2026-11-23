@@ -117,6 +117,24 @@ def test_history_carries_into_the_next_message():
     assert roles == ["user", "model", "user"]
 
 
+def test_loaded_chat_gives_the_model_its_earlier_turns():
+    kept = studio_chat.load_history(
+        OWNER,
+        [
+            {"role": "user", "text": "a fox in snow"},
+            {"role": "assistant", "text": "Making image 1."},
+            {"role": "assistant", "text": ""},
+            "not a message",
+        ],
+        ["job-1"],
+    )
+    assert kept == 2
+    models = FakeModels([text("Sure.")])
+    studio_chat.send(OWNER, "now animate it", (SimpleNamespace(models=models), "m"))
+    assert [c.role for c in models.seen[0][1]] == ["user", "model", "user"]
+    assert studio_chat.session_for(OWNER).job_ids == ["job-1"]
+
+
 def test_model_error_is_said_not_raised():
     class Broken:
         def generate_content(self, **_kw):
@@ -163,6 +181,9 @@ def test_api_routes(monkeypatch, fresh):
     assert client.post("/api/chat", content="message=x", headers={"content-type": "text/plain"}).status_code == 415
     assert client.post("/api/chat/reset").json() == {"ok": True}
     assert client.get("/api/chat/jobs").json() == {"jobs": []}
+    loaded = client.post("/api/chat/load", json={"messages": [{"role": "user", "text": "hi"}], "job_ids": []})
+    assert loaded.json() == {"ok": True, "turns": 1}
+    assert client.post("/api/chat/load", json={"messages": []}, headers={"origin": "https://evil.test"}).status_code == 403
 
 
 PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="

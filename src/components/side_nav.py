@@ -19,6 +19,7 @@ import mesop as me
 
 from common import app_settings
 from common.i18n import current_lang, is_rtl, route_key, t, tr
+from components.chat_nav.chat_nav import chat_nav
 from components.styles import SIDENAV_MAX_WIDTH, SIDENAV_MIN_WIDTH
 from components.svg_icon.svg_icon import svg_icon
 from components.user_menu.user_menu import rail_user_menu
@@ -35,6 +36,10 @@ GROUP_LABELS = {
 
 # Nav group of the industry demo pages, hidden unless "Show demos" is on.
 DEMO_GROUP = "workflows"
+# Studio pages: off the menu (Home's chat and tiles open them).
+HIDDEN_GROUPS = ("foundation",)
+# Drawn by <gm-chat-nav> instead of as plain items.
+CHAT_NAV_ROUTES = ("/home", "/library_v2")
 
 
 def _tooltip_side() -> str:
@@ -132,12 +137,17 @@ def sidenav(current_page: Optional[str]):
     # align "menu" pages (My brand, Usage) live in the avatar menu and Settings.
     # The industry demos (group "workflows") show only when an admin turns on
     # "Show demos" in Settings (common/app_settings.py).
+    # The studios (group "foundation") leave the menu: Home's chat and type
+    # tiles reach them, and their links still work. Home and Library are drawn
+    # by <gm-chat-nav> (New chat, Library, Projects, Recents).
     show_demos = bool(app_settings.get("show_demos"))
     pages = [
         p
         for p in get_welcome_page_config()
         if p.get("route")
         and p.get("align") != "menu"
+        and p.get("group") not in HIDDEN_GROUPS
+        and p.get("route") not in CHAT_NAV_ROUTES
         and (show_demos or p.get("group") != DEMO_GROUP)
     ]
     top_items = [p for p in pages if p.get("align") != "bottom"]
@@ -211,6 +221,7 @@ def sidenav(current_page: Optional[str]):
                 classes="gm-nav-pages",
                 style=me.Style(flex_grow=1, min_height=0, overflow_y="auto", overflow_x="hidden"),
             ):
+                chat_nav(open=opened, current=current or "")
                 for group, items in sections:
                     label = (
                         tr(f"nav.group.{group}", GROUP_LABELS[group])
