@@ -16,13 +16,13 @@
 Layout (like ChatGPT, Gemini and Claude): optional reference tiles on top, the
 prompt textarea, then one row: a single "+" add menu at the bottom left
 (`render_add`, usually `composer_add_menu`), the page's chips (passed as
-children), and on the right Live, the dictation mic and a round send
-button. See docs/COMPOSER_FORMAT_PLAN.md.
+children), and on the right Enhance, Live, the dictation mic and a round
+send button. See docs/COMPOSER_FORMAT_PLAN.md.
 
-The right side holds only Live (voice), Dictate and Send. Enhance happens on
-send (common/auto_enhance.py) and Up/Down recall recent prompts
-(prompt_keys.js), so pages may still pass `on_enhance`, `on_clear` and
-`history` without a button being drawn for them.
+Enhance shows when a page passes `on_enhance` (it rewrites the prompt in the
+box); short prompts are also improved on send (common/auto_enhance.py).
+Up/Down recall recent prompts (prompt_keys.js). `on_clear` is still accepted
+but draws nothing.
 
 Enter generates, Shift+Enter adds a new line. Every icon button has a
 screen-reader name and a tooltip; buttons are 44px tall on phones (CSS in
@@ -191,9 +191,11 @@ def composer(
     placeholder = (
         tx(placeholder) if placeholder is not None else t("composer.placeholder")
     )
-    # on_enhance, enhancing, on_clear and their labels are accepted for older
-    # callers; Enhance now runs on send and Clear is gone (see module doc).
-    del on_enhance, enhance_label, enhancing, on_clear, clear_label
+    enhance_label = (
+        tx(enhance_label) if enhance_label is not None else t("composer.enhance")
+    )
+    # on_clear and its label are accepted for older callers; Clear is gone.
+    del on_clear, clear_label
     send_label = tx(send_label) if send_label is not None else t("composer.send")
     hint = tx(hint) if hint else ""
     with me.box(classes="gm-composer" + (" gm-busy" if busy else "")):
@@ -227,6 +229,26 @@ def composer(
             with me.box(classes="gm-composer-tools"):
                 me.slot()
             with me.box(classes="gm-composer-actions"):
+                if on_enhance:
+                    if enhancing:
+                        with me.box(
+                            classes="gm-composer-btn",
+                            style=me.Style(
+                                display="flex",
+                                align_items="center",
+                                justify_content="center",
+                                width=40,
+                                height=40,
+                            ),
+                        ):
+                            me.progress_spinner(diameter=20, stroke_width=3)
+                    else:
+                        composer_icon_button(
+                            icon="auto_awesome",
+                            label=enhance_label,
+                            on_click=on_enhance,
+                            disabled=busy,
+                        )
                 if Default.LIVE_AGENT_ENABLED:
                     with me.box(classes="gm-composer-live"):
                         live_call_button(compact=True, key="composer_live")

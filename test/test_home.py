@@ -40,14 +40,24 @@ def test_lede_reads_as_one_sentence_in_both_languages(monkeypatch):
     assert "{" not in "".join(s["text"] for s in ar)
 
 
-def test_word_media_files_exist():
-    for rel in (
-        "posters/gemini-image__page-cover.webp",
-        "posters/gemini-omni__page-cover__hero.webp",
-        "home/word-video.webp",
-        "home/word-film.webp",
-    ):
-        assert os.path.exists(os.path.join(ASSETS, rel)), rel
+def test_lede_is_plain_text():
+    assert hc.lede() == "Turn one idea into images, video, voice and music, or a finished short film."
+
+
+def test_type_chips_open_real_studios_with_samples(monkeypatch):
+    routes = {p.get("route") for p in get_welcome_page_config()}
+    chips = hc.kinds()
+    assert [c["kind"] for c in chips] == ["image", "video", "music", "voice", "film"]
+    for c in chips:
+        assert c["href"] in routes, c
+        assert c["label"]
+        assert len(c["samples"]) >= 2 and all(c["samples"])
+    monkeypatch.setattr(i18n, "current_lang", lambda: "ar")
+    assert all(c["label"] != "Image" for c in hc.kinds() if c["kind"] == "image")
+
+
+def test_placeholder_is_short():
+    assert hc.strings()["placeholder"] == "Ask me anything"
 
 
 def test_examples_cover_different_kinds():

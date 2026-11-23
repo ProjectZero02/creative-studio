@@ -1302,7 +1302,7 @@ class LiveCallButton extends LitElement {
   static properties = {
     stringsJson: { type: String },
     compact: { type: Boolean, reflect: true },
-    pill: { type: Boolean, reflect: true }, // Home prompt box: gradient text, no fill
+    pill: { type: Boolean, reflect: true }, // Home prompt box: 44px round icon
   };
 
   static styles = css`
@@ -1315,29 +1315,23 @@ class LiveCallButton extends LitElement {
     button:focus-visible { outline: 3px solid var(--sys-primary, #1a5fd8); outline-offset: 3px; }
     svg { width: 22px; height: 22px; fill: currentColor; }
     p { margin: 10px 0 0; font: 13px "Google Sans Text", Roboto, Arial, sans-serif; color: var(--sys-on-surface-variant, #44474e); }
-    /* compact: a 40px round icon button, like the composer's mic. */
-    :host([compact]) button { width: 40px; height: 40px; padding: 0; gap: 0; justify-content: center;
+    /* compact (studios, 40px) and pill (Home, 44px): a plain round icon
+       button with five sound bars. On hover the bars take the Gemini
+       gradient and move like a voice wave; at rest they are quiet grey. */
+    :host([compact]) button, :host([pill]) button { width: 40px; height: 40px; padding: 0; gap: 0; justify-content: center;
       background: transparent; color: var(--sys-on-surface-variant, #44474e); box-shadow: none; }
-    :host([compact]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(21, 23, 28, 0.10)); }
+    :host([pill]) button { width: 44px; height: 44px; }
+    :host([compact]) button:hover, :host([pill]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14)); }
     :host([compact]) button.on { background: var(--sys-primary, #1a5fd8); color: var(--sys-on-primary, #fff); }
-    :host([compact]) svg { width: 22px; height: 22px; }
-    /* Home: no pill. The wave and label carry the Gemini gradient, so Talk
-       stands out from the plain Dictate and Send icons beside it; a soft fill
-       shows only on hover. */
-    :host([pill]) button { height: 44px; padding: 0 14px 0 10px; gap: 8px; font-size: 15px; font-weight: 500; box-shadow: none;
-      background: transparent; color: var(--sys-on-surface, #15171c); }
-    :host([pill]) button:hover { transform: none; box-shadow: none; background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14)); }
-    :host([pill]) svg { width: 22px; height: 22px; fill: url(#gm-talk-grad); }
-    :host([pill]) .lbl { background: linear-gradient(90deg, #1a73e8, #7b3fe4 60%, #c2185b); -webkit-background-clip: text;
-      background-clip: text; color: transparent; }
-    :host-context(body.dark-theme):host([pill]) .lbl { background-image: linear-gradient(90deg, #8ab4f8, #b388ff 60%, #f48fb1); }
-    :host([pill]) button:hover svg path { animation: gm-talk 900ms ease-in-out infinite alternate; transform-origin: 50% 50%; }
-    @keyframes gm-talk { from { transform: scaleY(0.75); } to { transform: scaleY(1.08); } }
-    @media (prefers-reduced-motion: reduce) { :host([pill]) button:hover svg path { animation: none; } }
-    @media (max-width: 600px) {
-      :host([pill]) button { width: 44px; padding: 0; justify-content: center; gap: 0; }
-      :host([pill]) .lbl { display: none; }
-    }
+    :host([compact]) svg, :host([pill]) svg { width: 22px; height: 22px; overflow: visible; }
+    .bar { fill: currentColor; transform-box: fill-box; transform-origin: 50% 50%; transition: fill 160ms ease; }
+    button:hover .bar, button:focus-visible .bar { fill: url(#gm-live-grad); animation: gm-wave 900ms ease-in-out infinite; }
+    button:hover .b2, button:focus-visible .b2 { animation-delay: -150ms; }
+    button:hover .b3, button:focus-visible .b3 { animation-delay: -450ms; }
+    button:hover .b4, button:focus-visible .b4 { animation-delay: -300ms; }
+    button:hover .b5, button:focus-visible .b5 { animation-delay: -600ms; }
+    @keyframes gm-wave { 0%, 100% { transform: scaleY(0.45); } 50% { transform: scaleY(1.15); } }
+    @media (prefers-reduced-motion: reduce) { button:hover .bar, button:focus-visible .bar { animation: none; } }
   `;
 
   connectedCallback() {
@@ -1354,15 +1348,13 @@ class LiveCallButton extends LitElement {
     let s = DEFAULT_STRINGS;
     try { if (this.stringsJson) s = { ...s, ...JSON.parse(this.stringsJson) }; } catch (e) { /* defaults */ }
     if (this.compact || this.pill) {
-      // Compact (studios) and pill (Home) use a sound-wave icon, so Live never
-      // looks like the Dictate mic next to it.
-      const wave = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z"/></svg>`;
-      if (this.pill) {
-        const grad = html`<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gm-talk-grad" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stop-color="#4f8df7"/><stop offset="0.6" stop-color="#9b6cf6"/><stop offset="1" stop-color="#e06aa5"/></linearGradient></defs>
-          <path d="M7 18h2V6H7zm4 4h2V2h-2zm-8-8h2v-4H3zm12 4h2V6h-2zm4-8v4h2v-4z"/></svg>`;
-        return html`<button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>${grad}<span class="lbl">${s.talk}</span></button>`;
-      }
+      // A sound-wave icon, so Live never looks like the Dictate mic beside it.
+      // Five separate bars so each can move on its own on hover.
+      const wave = html`<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gm-live-grad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#4f8df7"/><stop offset="0.6" stop-color="#9b6cf6"/><stop offset="1" stop-color="#e06aa5"/></linearGradient></defs>
+        <rect class="bar b1" x="3" y="10" width="2" height="4" rx="1"/><rect class="bar b2" x="7" y="6" width="2" height="12" rx="1"/>
+        <rect class="bar b3" x="11" y="2" width="2" height="20" rx="1"/><rect class="bar b4" x="15" y="6" width="2" height="12" rx="1"/>
+        <rect class="bar b5" x="19" y="10" width="2" height="4" rx="1"/></svg>`;
       return html`<button type="button" @click=${() => gmLive().toggle()} aria-label=${s.talk} title=${s.talk}>${wave}</button>`;
     }
     return html`

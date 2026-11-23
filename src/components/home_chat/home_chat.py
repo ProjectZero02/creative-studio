@@ -11,7 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Python API for <gm-home-chat> (the Home page's one prompt box)."""
+"""Python API for <gm-home-chat> (the Home page's one prompt box).
+
+Under the box sit type chips (Image, Video, Music, Voice, Film). A chip fills
+the box with a sample prompt; sending it then opens that studio with
+``?prompt=...&go=1``, which starts making it right away
+(common/prompt_prefill.take_autostart). Without a chip the box is a chat.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +28,7 @@ import mesop as me
 
 from common.i18n import t, tr
 
-# The headline's media words: what each one opens and what it says on hover.
+# The subtitle's media words and the studio each one belongs to.
 WORDS = {
     "images": ("image", "/nano-banana", "Open Image Studio"),
     "video": ("video", "/veo", "Open Video Studio"),
@@ -55,6 +61,61 @@ def lede_segments() -> list[dict]:
     return out
 
 
+def lede() -> str:
+    """The subtitle as plain text, in the current language."""
+    return "".join(seg["text"] for seg in lede_segments())
+
+
+# Type chips under the box: (kind, label key, English label, studio route).
+KINDS = (
+    ("image", "home.mode.image.label", "Image", "/nano-banana"),
+    ("video", "home.mode.video.label", "Video", "/veo"),
+    ("music", "home.mode.music.label", "Music", "/lyria"),
+    ("voice", "home.mode.voice.label", "Voice", "/voice"),
+    ("film", "home.mode.film.label", "Film", "/story"),
+)
+
+# Two sample prompts per chip (clicking a chip again shows the next one).
+_SAMPLES = {
+    "image": (
+        "A perfume bottle on wet black stone, studio light",
+        "Our sneaker on a Tokyo street at night",
+    ),
+    "video": (
+        "Slow dolly in on a barista pouring latte art",
+        "Drone shot over a desert road at sunrise",
+    ),
+    "music": (
+        "Warm lo-fi beat with soft piano, 80 bpm",
+        "Uplifting cinematic strings for a product launch",
+    ),
+    "voice": (
+        "Welcome to our store. Today only, everything is 20% off.",
+        "Thanks for calling. Your order is on its way.",
+    ),
+    "film": (
+        "A 30-second ad for an electric bike in the city",
+        "A lighthouse keeper finds a message in a bottle",
+    ),
+}
+
+
+def kinds() -> list[dict]:
+    """The type chips: {"kind", "label", "href", "samples"} in the page language."""
+    return [
+        {
+            "kind": kind,
+            "label": tr(label_key, label),
+            "href": href,
+            "samples": [
+                tr(f"home.mode.{kind}.ex{i + 1}", text)
+                for i, text in enumerate(_SAMPLES[kind])
+            ],
+        }
+        for kind, label_key, label, href in KINDS
+    ]
+
+
 def examples() -> list[dict]:
     """Three starters of different kinds, so people see it does anything.
 
@@ -69,7 +130,10 @@ def examples() -> list[dict]:
 
 _STRINGS = {
     "title": ("home.title", "Google's creative AI, in one studio"),
-    "placeholder": ("home.chat.placeholder", "Ask for an image, a video, music, a voice-over or a short film"),
+    "placeholder": ("home.chat.placeholder", "Ask me anything"),
+    "enhance": ("composer.enhance", "Enhance prompt"),
+    "enhancing": ("home.chat.enhancing", "Enhancing…"),
+    "kinds": ("home.chat.kinds", "What to make"),
     "send": ("home.chat.send", "Send"),
     "new_chat": ("home.chat.new", "New chat"),
     "new_chat_tip": ("home.chat.new_tip", "Start over with an empty chat"),
@@ -109,7 +173,7 @@ def strings() -> dict:
 
 @me.web_component(path="./home_chat.js")
 def home_chat(*, live: bool = False, key: str | None = "home-chat"):
-    """The Home chat: hero, prompt box and conversation."""
+    """The Home chat: hero, prompt box, type chips and conversation."""
     from components.live_agent.live_agent import _strings as live_strings
 
     return me.insert_web_component(
@@ -117,8 +181,8 @@ def home_chat(*, live: bool = False, key: str | None = "home-chat"):
         name="gm-home-chat",
         properties={
             "stringsJson": json.dumps(strings(), ensure_ascii=False),
-            "ledeJson": json.dumps(lede_segments(), ensure_ascii=False),
-            "examplesJson": json.dumps(examples(), ensure_ascii=False),
+            "lede": lede(),
+            "kindsJson": json.dumps(kinds(), ensure_ascii=False),
             "talkJson": json.dumps({**live_strings(), "talk": t("live.talk", "Talk to the studio")}, ensure_ascii=False),
             "live": live,
         },
