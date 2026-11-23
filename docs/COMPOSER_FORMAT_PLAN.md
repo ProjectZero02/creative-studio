@@ -35,7 +35,8 @@ pattern people already know from chat apps.
 ## Where
 
 - `components/header.py`, `components/composer/composer.py` (+ new
-  `dictation.js`), `components/result_grid/result_card.py`
+  `prompt_tools.js`: Enhance with undo, mic, Live/Send, shared with Story Studio
+  and Writers Workshop), `components/result_grid/result_card.py`
 - `components/home_prompt/home_prompt.js`, `components/live_agent/live_agent.js`,
   `pages/home.py`
 - `pages/gemini_image_generation.py`, `pages/veo.py`, `pages/lyria.py`,

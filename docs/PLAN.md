@@ -88,6 +88,13 @@ Research: Gemini puts a removable type chip in the box and example prompts per t
 - **Settings:** solid header, short copy, grey secondary buttons, My brand laid out as a row of brands over a full-width editor, Usage shows a plain error, My brand no longer hangs on a deep link.
 - Not done: a Gemini-backed completion (it would call the model on every pause in typing; the local one is instant and free).
 
+## Prompt tools everywhere (2026-11-23)
+
+- **One set of prompt buttons** (`components/composer/prompt_tools.js`) in every prompt box: Home, the Image, Video, Music and Voice studios, Story Studio's idea box and Writers Workshop. Enhance slides in once there is text; the mic is always there; Live shows while the box is empty and Send takes its place (Story and Workshop have no Send, so Live just fades out).
+- **Enhance can be undone:** the text goes in as one native edit, so Ctrl+Z restores your prompt, and the button turns into Undo until you edit again. Enhance now runs in the browser (`/api/prompts/enhance`) on every page.
+- **No floating mic:** Live lives in the prompt boxes, so the bottom-right launcher is gone.
+- **Dropdowns:** no stray line where the floating label starts (the notch border), a chevron instead of the triangle, a rounded menu with inset rows, a tinted selected row, and the menu grows to fit its options.
+
 ## Follow-ups
 
 - Self-host Lit instead of loading it from jsdelivr: the chip menus paint late on a cold phone load (Video Studio lab LCP 4.2–4.6 s at 390 px; 1 s on desktop).

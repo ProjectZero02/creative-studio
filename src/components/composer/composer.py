@@ -16,11 +16,13 @@
 Layout (like ChatGPT, Gemini and Claude): optional reference tiles on top, the
 prompt textarea, then one row: a single "+" add menu at the bottom left
 (`render_add`, usually `composer_add_menu`), the page's chips (passed as
-children), and on the right Enhance, Live, the dictation mic and a round
-send button. See docs/COMPOSER_FORMAT_PLAN.md.
+children), and on the right Enhance, the dictation mic and one round slot
+that is Live while the box is empty and Send once there is text. See docs/COMPOSER_FORMAT_PLAN.md.
 
-Enhance shows when a page passes `on_enhance` (it rewrites the prompt in the
-box); short prompts are also improved on send (common/auto_enhance.py).
+Enhance shows when a page passes `on_enhance`. It runs in the browser
+(prompt_tools.js, /api/prompts/enhance) so it can be undone with its button or
+Ctrl+Z; the handler itself is no longer called. Short prompts are also
+improved on send (common/auto_enhance.py).
 Up/Down recall recent prompts (prompt_keys.js). `on_clear` is still accepted
 but draws nothing.
 
@@ -30,15 +32,23 @@ assets/ui/studio.src.css, `.gm-composer`).
 """
 
 import inspect
+import json
 import typing
 
 import mesop as me
 
 from common.i18n import t, tx
-from components.live_agent.live_agent import live_call_button
 from config.default import Default
 
 ENTER = me.Shortcut(key="Enter")
+
+# Which prompt rewriter Enhance uses, by the page's history key.
+_KIND_BY_PAGE = {
+    "gemini_image_generation": "image",
+    "veo": "video",
+    "lyria": "music",
+    "voice": "voice",
+}
 
 
 @me.web_component(path="./prompt_keys.js")
@@ -58,15 +68,60 @@ def composer_prompt_keys(
     )
 
 
-@me.web_component(path="./dictation.js")
-def composer_dictation(*, key: str | None = None):
-    """Mic button: browser speech-to-text into the composer's prompt box."""
+def _tool_strings() -> dict:
+    return {
+        "enhance": t("composer.enhance"),
+        "enhancing": t("composer.enhancing"),
+        "undo_enhance": t("composer.undo_enhance"),
+        "dictate": t("composer.dictate"),
+        "dictate_stop": t("composer.dictate_stop"),
+        "send": t("composer.send"),
+        "generating": t("composer.generating"),
+    }
+
+
+@me.web_component(path="./prompt_tools.js")
+def prompt_tools(
+    *,
+    kind: str = "",
+    enhance: bool = True,
+    dictation: bool = True,
+    send: bool = False,
+    busy: bool = False,
+    strings: dict | None = None,
+    scope: str = ".gm-composer",
+    field: str = "textarea",
+    key: str | None = None,
+):
+    """Enhance, mic and Live (and Send) for the textarea inside `scope`.
+
+    The same buttons and behaviour as Home's prompt box, so every prompt box
+    works alike: Enhance appears once there is text and can be undone (button
+    or Ctrl+Z), Live shows while the box is empty. `kind` picks the rewriter
+    (image, video, music, voice, film).
+
+    For a Material textarea, wrap the textarea and this component in
+    `me.box(classes="gm-prompt-field")` and pass `scope=".gm-prompt-field"`;
+    the CSS puts the buttons inside the box, bottom right.
+    """
+    from components.live_agent.live_agent import (  # pylint: disable=import-outside-toplevel
+        live_strings_json,
+    )
+
     return me.insert_web_component(
         key=key,
-        name="gm-dictation",
+        name="gm-prompt-tools",
         properties={
-            "label": t("composer.dictate"),
-            "stopLabel": t("composer.dictate_stop"),
+            "scope": scope,
+            "field": field,
+            "kind": kind,
+            "enhance": enhance,
+            "dictation": dictation,
+            "send": send,
+            "busy": busy,
+            "live": bool(Default.LIVE_AGENT_ENABLED),
+            "stringsJson": json.dumps(strings or _tool_strings()),
+            "talkJson": live_strings_json(),
         },
     )
 
@@ -128,34 +183,6 @@ def composer_add_menu(
                     )
 
 
-@me.component
-def composer_icon_button(
-    *,
-    icon: str,
-    label: str,
-    on_click: typing.Callable[[me.ClickEvent], typing.Any],
-    disabled: bool = False,
-    key: str | None = None,
-    primary: bool = False,
-):
-    """A round icon button with a tooltip and a screen-reader name."""
-    with me.box(
-        classes="gm-composer-btn gm-composer-send" if primary else "gm-composer-btn"
-    ):
-        with (
-            me.tooltip(message=label),
-            me.content_button(
-                type="icon",
-                on_click=on_click,
-                disabled=disabled,
-                key=key,
-            ),
-        ):
-            me.icon(icon)
-            with me.box(classes="gm-sr-only"):
-                me.text(label)
-
-
 @me.content_component
 def composer(
     *,
@@ -168,6 +195,7 @@ def composer(
     enhance_label: str | None = None,
     busy: bool = False,
     enhancing: bool = False,
+    enhance_kind: str | None = None,
     send_label: str | None = None,
     textarea_key: str = "composer_prompt",
     hint: str | None = None,
@@ -205,7 +233,11 @@ def composer(
         tx(enhance_label) if enhance_label is not None else t("composer.enhance")
     )
     # on_clear and its label are accepted for older callers; Clear is gone.
-    del on_clear, clear_label
+    # `enhancing` too (Enhance runs in the browser, prompt_tools.js), and
+    # on_click_send (Send is read by prompt_keys.js and calls on_submit).
+    del on_clear, clear_label, enhancing, on_click_send
+    if enhance_kind is None:
+        enhance_kind = _KIND_BY_PAGE.get(history, "")
     send_label = tx(send_label) if send_label is not None else t("composer.send")
     hint = tx(hint) if hint else ""
     with me.box(classes="gm-composer" + (" gm-busy" if busy else "")):
@@ -239,46 +271,21 @@ def composer(
             with me.box(classes="gm-composer-tools"):
                 me.slot()
             with me.box(classes="gm-composer-actions"):
-                if on_enhance:
-                    if enhancing:
-                        with me.box(
-                            classes="gm-composer-btn",
-                            style=me.Style(
-                                display="flex",
-                                align_items="center",
-                                justify_content="center",
-                                width=40,
-                                height=40,
-                            ),
-                        ):
-                            me.progress_spinner(diameter=20, stroke_width=3)
-                    else:
-                        composer_icon_button(
-                            icon="auto_awesome",
-                            label=enhance_label,
-                            on_click=on_enhance,
-                            disabled=busy,
-                        )
-                if Default.LIVE_AGENT_ENABLED:
-                    with me.box(classes="gm-composer-live"):
-                        live_call_button(compact=True, key="composer_live")
-                if dictation:
-                    with me.box(classes="gm-composer-mic"):
-                        composer_dictation(key="composer_mic")
-                if busy:
-                    with me.box(
-                        classes="gm-composer-btn gm-composer-send gm-composer-wait",
-                    ):
-                        me.progress_spinner(diameter=22, stroke_width=3)
-                        with me.box(classes="gm-sr-only"):
-                            me.text(t("composer.generating"))
-                else:
-                    composer_icon_button(
-                        icon="arrow_upward",
-                        label=send_label,
-                        on_click=on_click_send,
-                        primary=True,
-                    )
+                # Enhance, mic and Live/Send, the same as Home's prompt box
+                # (prompt_tools.js). Send is read by prompt_keys.js below.
+                prompt_tools(
+                    kind=enhance_kind,
+                    enhance=on_enhance is not None,
+                    dictation=dictation,
+                    send=True,
+                    busy=busy,
+                    strings={
+                        **_tool_strings(),
+                        "enhance": enhance_label,
+                        "send": send_label,
+                    },
+                    key=f"tools-{history or textarea_key}",
+                )
 
         def _on_fast_send(e: me.WebEvent):
             val = str((e.value or {}).get("value", ""))

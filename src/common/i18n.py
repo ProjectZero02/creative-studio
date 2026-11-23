@@ -174,6 +174,8 @@ EN: dict[str, str] = {
     "composer.library": "Choose from library",
     "composer.dictate": "Dictate",
     "composer.dictate_stop": "Stop dictation",
+    "composer.enhancing": "Enhancing…",
+    "composer.undo_enhance": "Undo enhance",
     "composer.undo_hint": "Puts the chips back for your next run. The run already started keeps the new settings.",
     "settings.undone": "Chips put back for your next run. This run keeps the settings from your prompt.",
     # Settings read from a typed prompt (common/prompt_settings.py passes the
@@ -694,6 +696,8 @@ AR: dict[str, str] = {
     "composer.library": "اختيار من المكتبة",
     "composer.dictate": "إملاء صوتي",
     "composer.dictate_stop": "إيقاف الإملاء",
+    "composer.enhancing": "جارٍ التحسين…",
+    "composer.undo_enhance": "التراجع عن التحسين",
     "composer.undo_hint": "يعيد الإعدادات كما كانت لطلبك التالي. الطلب الجاري يحتفظ بالإعدادات الجديدة.",
     "settings.undone": "أُعيدت الإعدادات لطلبك التالي. هذا الطلب يحتفظ بالإعدادات من وصفك.",
     "settings.from_prompt": "من وصفك: {items}.",

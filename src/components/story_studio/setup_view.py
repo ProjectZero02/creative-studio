@@ -28,6 +28,7 @@ from dataclasses import dataclass
 import mesop as me
 
 from common import brand_kit
+from components.composer.composer import prompt_tools
 from components.story_studio.widgets import story_idea_watch
 from config.default import Default
 from services import story_director, story_refs
@@ -359,7 +360,7 @@ def render_setup(
                 story_idea_watch(
                     on_idea=h.on_idea_live, delay_ms=400, key="ss-idea-watch"
                 )
-                with me.box(classes="ss-idea-field"):
+                with me.box(classes="ss-idea-field gm-prompt-field"):
                     me.textarea(
                         label="Your idea",
                         value=s.idea,
@@ -369,6 +370,12 @@ def render_setup(
                         on_blur=h.on_idea_blur,
                         style=me.Style(width="100%"),
                         key="ss-idea",
+                    )
+                    # Enhance, mic and Live, like every other prompt box.
+                    prompt_tools(
+                        kind="film",
+                        scope=".gm-prompt-field",
+                        key="ss-idea-tools",
                     )
                 h.render_auto_note()
 
