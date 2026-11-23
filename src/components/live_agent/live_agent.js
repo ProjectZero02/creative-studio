@@ -474,7 +474,8 @@ class GmLive {
 
   _renderState(speaking) {
     const active = this.state !== 'idle';
-    this.launch.classList.toggle('gml-hidden', active || this._heroVisible());
+    // Live lives in each prompt box now; the floating launcher never shows.
+    this.launch.classList.add('gml-hidden');
     const wasHidden = this.call.classList.contains('gml-hidden');
     this.call.classList.toggle('gml-hidden', !active);
     if (active && wasHidden) this._applyCallPos();
@@ -493,10 +494,6 @@ class GmLive {
     this.stateText.textContent = label;
     this.mstate.textContent = label;
     this.muteBtn.classList.toggle('gml-hidden', !this.micStream);
-  }
-
-  _heroVisible() {
-    return !!document.querySelector('live-call-button, home-prompt[live], gm-home-chat[live]');
   }
 
   refreshLauncher() { this._renderState(); }
