@@ -75,3 +75,13 @@ def test_strings_have_every_label():
     s = hc.strings()
     for key in ("placeholder", "send", "new_chat", "making", "ready", "failed", "download"):
         assert s[key], key
+
+
+def test_jobs_panel_labels_in_both_languages(monkeypatch):
+    keys = ("jobs", "jobs_running", "close", "reference", "reference_tip", "animate_lead", "open_short")
+    en = hc.strings()
+    assert all(en[k] for k in keys)
+    monkeypatch.setattr(i18n, "current_lang", lambda: "ar")
+    ar = hc.strings()
+    for k in keys:
+        assert ar[k] and ar[k] != en[k], k

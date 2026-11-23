@@ -331,6 +331,12 @@ def default_runners() -> dict[str, Runner]:
     }
 
 
+def _settings(job: LiveJob) -> dict[str, str]:
+    """The Home box's settings for this job (see services/studio_options.py)."""
+    raw = job.params.get("settings") if isinstance(job.params, dict) else None
+    return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
 def _story_runner(job: LiveJob) -> RunResult:
     from services.live_story import run_story_job
 
@@ -383,6 +389,7 @@ def _real_image(job: LiveJob) -> RunResult:
     from models.gemini import generate_image_from_prompt_and_images
 
     inputs = [job.source_uri] if job.source_uri.startswith("gs://") else []
+    settings = _settings(job)
     gcs_uris, seconds, captions, _grounding, _thoughts = (
         generate_image_from_prompt_and_images(
             prompt=job.prompt,
@@ -390,7 +397,8 @@ def _real_image(job: LiveJob) -> RunResult:
             aspect_ratio=job.aspect_ratio,
             gcs_folder="gemini_image_generations",
             file_prefix="live_image",
-            image_size="1K",
+            image_size=settings.get("size") or "1K",
+            model_name=settings.get("model") or None,
         )
     )
     if not gcs_uris:
@@ -423,17 +431,20 @@ def _real_video(job: LiveJob) -> RunResult:
     from services.veo_service import create_initial_job, process_veo_generation_task
 
     from_image = job.source_uri if job.source_uri.startswith("gs://") else None
+    # Settings from the Home box's Video controls (services/studio_options.py,
+    # already checked against the model); the agent's jobs use the defaults.
+    settings = _settings(job)
     request = VideoGenerationRequest(
         prompt=job.prompt,
-        duration_seconds=8,
+        duration_seconds=int(settings.get("duration") or 8),
         video_count=1,
         aspect_ratio=job.aspect_ratio
-        if job.aspect_ratio in ("16:9", "9:16")
+        if settings or job.aspect_ratio in ("16:9", "9:16")
         else "16:9",
-        resolution="720p",
+        resolution=settings.get("resolution") or "720p",
         enhance_prompt=True,
-        generate_audio=True,
-        model_version_id=DEFAULT_STUDIO_MODEL_ID,  # Gemini Omni by default
+        generate_audio=settings.get("audio", "on") != "off",
+        model_version_id=settings.get("model") or DEFAULT_STUDIO_MODEL_ID,  # Gemini Omni by default
         person_generation="Allow (Adults only)",
         reference_image_gcs=from_image,
         reference_image_mime_type="image/png" if from_image else None,
@@ -461,7 +472,7 @@ def _real_music(job: LiveJob) -> RunResult:
     from models.lyria import generate_music_with_lyria
 
     start = time.time()
-    model_name = Default().LYRIA_MODEL_VERSION
+    model_name = _settings(job).get("model") or Default().LYRIA_MODEL_VERSION
     lyrics = str(job.params.get("lyrics") or "").strip()
     gcs_uris, _c2pa, text_outputs = generate_music_with_lyria(
         prompt=job.prompt,
@@ -502,11 +513,17 @@ def _real_voice(job: LiveJob) -> RunResult:
     from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE, DEFAULT_VOICE_ENGINE
     from models.voice import VoiceRequest, describe, synthesize_voice, validate
 
+    settings = _settings(job)
+
     request = VoiceRequest(
         engine=DEFAULT_VOICE_ENGINE,
         text=job.prompt,
-        voice=str(job.params.get("voice") or DEFAULT_VOICE),
-        language_code=str(job.params.get("language") or DEFAULT_LANGUAGE),
+        voice=str(settings.get("voice") or job.params.get("voice") or DEFAULT_VOICE),
+        language_code=str(
+            settings.get("language") or job.params.get("language") or DEFAULT_LANGUAGE
+        ),
+        style=settings.get("style") or "natural",
+        pace=settings.get("pace") or "normal",
     )
     problem = validate(request)
     if problem:
