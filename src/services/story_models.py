@@ -93,13 +93,23 @@ CAMERA_PRESETS: dict[str, dict[str, str]] = {
         "label": "Dolly out",
         "prompt": "slow smooth dolly out revealing the surroundings",
     },
+    # Direction spelled out as what the viewer sees: "pan right" alone was
+    # read either way by the video model.
     "pan_left": {
         "label": "Pan left",
-        "prompt": "smooth horizontal camera pan left across the scene",
+        "prompt": (
+            "slow, steady horizontal pan to the LEFT: the camera turns toward "
+            "the left side of the scene, so everything in view slides from "
+            "left to right across the frame and new things appear on the left"
+        ),
     },
     "pan_right": {
         "label": "Pan right",
-        "prompt": "smooth horizontal camera pan right across the scene",
+        "prompt": (
+            "slow, steady horizontal pan to the RIGHT: the camera turns toward "
+            "the right side of the scene, so everything in view slides from "
+            "right to left across the frame and new things appear on the right"
+        ),
     },
     "tilt_up": {
         "label": "Tilt up",
@@ -531,19 +541,40 @@ class Story:
             sc.spoken and sc.narration.strip()
         )
 
+    def _wants_take(self, index: int) -> bool:
+        """Scene `index` should carry on the previous scene's shot: its join
+        is set to Extend, or left on Auto between two spoken scenes. Cut,
+        Bridge, Dissolve and Fade black always start a new shot."""
+        if index <= 0 or index >= len(self.scenes):
+            return False
+        trans = (self.scenes[index].transition or "auto").strip().lower()
+        if trans == "extend":
+            return True
+        return trans == "auto" and self._spoken_pair(index)
+
     def continues_take(self, index: int) -> bool:
         """Scene `index` continues the previous clip (a continuous take):
-        both scenes are spoken on camera, continuous takes are on, and the
-        take stays within STORY_TAKE_MAX_SECONDS (then it cuts to a new one)."""
-        if not self.continuous_takes or not self._spoken_pair(index):
+        continuous takes are on, the scene wants to (see `_wants_take`), and
+        the take fits the video model: it is still within
+        STORY_TAKE_CONTEXT_SECONDS before this scene (the model reads only
+        that much of it) and within STORY_TAKE_MAX_SECONDS after it."""
+        if not self.continuous_takes or not self._wants_take(index):
             return False
-        cap = Default().STORY_TAKE_MAX_SECONDS
+        cfg = Default()
+        cap = cfg.STORY_TAKE_MAX_SECONDS
+        context = getattr(cfg, "STORY_TAKE_CONTEXT_SECONDS", cap)
         single = single_clip_max()
         take = 0.0
         for i in range(index + 1):
             d = float(self.scenes[i].duration)
             # A scene longer than one clip is extended in its own thread.
-            joins = i > 0 and self._spoken_pair(i) and take + d <= cap and d <= single
+            joins = (
+                i > 0
+                and self._wants_take(i)
+                and take <= context
+                and take + d <= cap
+                and d <= single
+            )
             take = take + d if joins else d
             if i == index:
                 return joins
@@ -1987,9 +2018,20 @@ def clip_prompt(
     cast_text = _cast_text(story, scene, story_set)
     motion = (getattr(scene, "motion_prompt", "") or "").strip()
     grammar = (getattr(story, "visual_grammar", "") or "").strip()
-    base = f"{scene.visual} Camera: {cam or 'natural camera movement'}."
+    # One layout for every clip: shot, camera, picture, action, style, then
+    # sound. The camera move leads and is said to win, so the action text
+    # cannot turn the camera the other way.
+    moving = bool(cam) and scene.camera not in ("static", "auto")
+    base = "Single continuous shot, no scene cuts."
+    if cam:
+        base += f" Camera, for the whole clip: {cam}."
+    else:
+        base += " Camera: natural camera movement."
+    base += f" {scene.visual}"
     if motion:
-        base += f" Motion: {motion}."
+        base += f" Action: {motion}."
+        if moving:
+            base += " Keep the camera move above; the action does not change it."
     base += f" Style: {style['prompt']}."
     if grammar:
         base += f" Visual grammar: {grammar}."
@@ -2008,10 +2050,16 @@ def clip_prompt(
             )
         else:
             base = (
-                f"Continue this exact shot without a cut: the same person{who}, "
-                "outfit, place, lighting and camera, and the same voice, pace "
-                f"and room sound as before. {base}"
+                f"Continue this exact shot without a cut, from its last frame: "
+                f"the same person{who}, outfit, place and lighting, the camera "
+                "moving the same way and at the same speed as before, and the "
+                f"same voice, pace and room sound. {base}"
             )
+    if moving:
+        base += (
+            " Avoid: cuts, a new location, the camera stopping or reversing "
+            "direction."
+        )
     if continuing and start_frame:
         base += (
             " Start exactly on the attached image (this scene's storyboard "
@@ -2212,6 +2260,8 @@ class Segment:
     # clip's first frame, which repeats the previous clip's last frame.
     trim_head: float = 0.0
     join: str = "cut"
+    # The clip extends the previous segment's clip (one continuous take).
+    same_take: bool = False
 
 
 @dataclass
@@ -2324,7 +2374,29 @@ def build_stitch_plan(
                 spoken=bool(s.spoken and s.narration.strip()),
                 trim_head=round(trim, 4),
                 join=join,
+                same_take=bool(extended),
             )
         )
         t = start + d - trim
+    _one_file_per_take(segments)
     return StitchPlan(segments=segments, crossfade=xf, total=round(t, 3))
+
+
+def _one_file_per_take(segments: list[Segment]) -> None:
+    """A continuous take is one file. Each extension returns the whole take
+    so far, so every scene of the take is cut from the take's last file at
+    its own offset (the same seconds it had in its own file). Cutting the
+    take from several files showed a jump at every join: each file encodes
+    the shared seconds a little differently, and the sound changed source."""
+    k = len(segments) - 1
+    while k > 0:
+        if not segments[k].same_take:
+            k -= 1
+            continue
+        last = segments[k].clip_uri
+        j = k
+        while j > 0 and segments[j].same_take:
+            j -= 1
+        for m in range(j, k):
+            segments[m].clip_uri = last
+        k = j - 1

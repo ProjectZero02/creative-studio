@@ -204,16 +204,73 @@ def test_stale_extension_still_trims_old_seconds():
 
 
 def test_take_is_cut_after_the_take_cap():
-    """Omni continues a thread up to STORY_TAKE_MAX_SECONDS (30 s): two 15 s
-    spoken scenes are one take, the third starts a new one."""
+    """Omni returns up to 40 s but reads only the last 30 s of its input: a
+    take grows while it is at most 30 s long and stays within 40 s."""
     from config.default import Default
 
-    assert Default.__dataclass_fields__["STORY_TAKE_MAX_SECONDS"].default == 30
+    fields = Default.__dataclass_fields__
+    assert fields["STORY_TAKE_MAX_SECONDS"].default == 40
+    assert fields["STORY_TAKE_CONTEXT_SECONDS"].default == 30
     s = Story(
         scenes=[Scene(spoken=True, narration=f"line {i}", duration=d) for i, d in enumerate([15, 15, 10, 10])]
     )
-    assert [s.continues_take(i) for i in range(4)] == [False, True, False, True]
-    assert [s.take_start(i) for i in range(4)] == [0, 0, 2, 2]
+    assert [s.continues_take(i) for i in range(4)] == [False, True, True, False]
+    assert [s.take_start(i) for i in range(4)] == [0, 0, 0, 3]
+    # The live test: four 8 s shots are one 32 s take (24 s before the last).
+    s = Story(scenes=[Scene(spoken=True, narration=f"l{i}", duration=8) for i in range(4)])
+    assert [s.continues_take(i) for i in range(4)] == [False, True, True, True]
+
+
+def test_join_picker_decides_the_take():
+    """Extend joins even without speech; Cut, Bridge, Dissolve and Fade
+    black always start a new shot; Auto joins two spoken scenes."""
+    s = Story(scenes=[Scene(duration=8), Scene(duration=8, transition="extend")])
+    assert s.continues_take(1)
+    for t in ("cut", "bridge", "dissolve", "fade_black"):
+        s = Story(
+            scenes=[
+                Scene(spoken=True, narration="a", duration=8),
+                Scene(spoken=True, narration="b", duration=8, transition=t),
+            ]
+        )
+        assert not s.continues_take(1), t
+
+
+def test_a_take_is_cut_from_its_last_file():
+    """Each extension returns the whole take so far: every scene of the take
+    is cut from the last file at its own offset, so nothing switches files."""
+    a = Scene(clip_uri="c1", duration=8)
+    b = Scene(clip_uri="c2", duration=8, extends_from="c1", clip_in=8.0)
+    c = Scene(clip_uri="c3", duration=8, extends_from="c2", clip_in=16.0)
+    d = Scene(clip_uri="c4", duration=8)
+    plan = build_stitch_plan([a, b, c, d], 0.0, seamless=True)
+    assert [s.clip_uri for s in plan.segments] == ["c3", "c3", "c3", "c4"]
+    assert [s.trim_head for s in plan.segments[:3]] == [0.0, 8.0, 16.0]
+    assert [s.start for s in plan.segments] == [0.0, 8.0, 16.0, 24.0]
+    # A scene only set to Extend, but made as its own clip, keeps its file.
+    e = Scene(clip_uri="c5", duration=8, transition="extend")
+    plan = build_stitch_plan([d, e], 0.0, seamless=True)
+    assert [s.clip_uri for s in plan.segments] == ["c4", "c5"]
+
+
+def test_render_plays_a_take_straight_through():
+    """Back-to-back pieces of one file render as one piece (one trim, one
+    sound chain), so nothing is cut or faded at the join."""
+    from services.story_timeline import merge_runs
+
+    clips = [
+        {"src": "t", "start": 0.0, "in": 0.0, "out": 8.0, "gain": 1.0, "fade_in": 0},
+        {"src": "t", "start": 8.0, "in": 8.0, "out": 16.0, "gain": 1.0, "fade_in": 0},
+        {"src": "t", "start": 16.0, "in": 16.04, "out": 24.0, "gain": 1.0, "fade_in": 0},
+        {"src": "u", "start": 24.0, "in": 0.0, "out": 8.0, "gain": 1.0, "fade_in": 0},
+        {"src": "u", "start": 32.0, "in": 3.0, "out": 5.0, "gain": 1.0, "fade_in": 0},
+    ]
+    runs = merge_runs(clips, 24)
+    assert [(r["src"], r["in"], r["out"]) for r in runs] == [
+        ("t", 0.0, 24.0),
+        ("u", 0.0, 8.0),
+        ("u", 3.0, 5.0),
+    ]
 
 
 def test_clear_clip_forgets_the_omni_thread():

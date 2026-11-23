@@ -398,7 +398,13 @@ class Default:
     STORY_VIDEO_MODEL: str = os.environ.get(
         "STORY_VIDEO_MODEL", os.environ.get("OMNI_MODEL_ID", "gemini-omni-1.2-flash")
     )
-    STORY_TAKE_MAX_SECONDS: int = int(os.environ.get("STORY_TAKE_MAX_SECONDS", 30))
+    # Omni on Vertex returns up to 40 s per extension but reads only the last
+    # 30 s of its input, so a take keeps growing while it is at most
+    # STORY_TAKE_CONTEXT_SECONDS long and stays within STORY_TAKE_MAX_SECONDS.
+    STORY_TAKE_MAX_SECONDS: int = int(os.environ.get("STORY_TAKE_MAX_SECONDS", 40))
+    STORY_TAKE_CONTEXT_SECONDS: int = int(
+        os.environ.get("STORY_TAKE_CONTEXT_SECONDS", 30)
+    )
     # Longest scene. Past the video model's single-clip limit (15 s for Omni
     # 1.2 Flash) a scene is one clip plus extensions in the same Omni thread
     # (3 to 10 s each); Omni extends up to 30 s in all.

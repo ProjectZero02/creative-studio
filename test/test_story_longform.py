@@ -445,8 +445,11 @@ def test_split_narration_parts_and_extend_take_turn_frame():
         ),
     ]
     story = Story(idea="Extend", continuous_takes=True, scenes=scenes)
+    # Later turns of a take never open on a painted frame (it pulled the
+    # camera back); only the take's first clip does.
     assert story_service.take_turn_frame(story, 1, first=False) == ""
-    assert story_service.take_turn_frame(story, 2, first=False) == "gs://b/f3.jpg"
+    assert story_service.take_turn_frame(story, 2, first=False) == ""
+    assert story_service.take_turn_frame(story, 0, first=True) == "gs://b/f1.jpg"
 
 
 def test_omni_resolve_gcs_uris_caps_inline_videos(monkeypatch):

@@ -889,8 +889,15 @@ def start_video(story_id: str, owner: str) -> Job:
             try:
                 uri, clip_in = backend.extend_clip(current, i, prev_clip)
             except Exception:
-                logger.exception("Omni continuation failed; making a normal clip")
-                return animate(i, current.scenes[i].frame_uri)
+                # Start the new clip on the take's last frame, not on the
+                # scene's own painted frame (a different-looking place).
+                logger.exception("Omni continuation failed; starting from its last frame")
+                try:
+                    start = backend.last_frame(current, prev_clip, i)
+                except Exception:
+                    logger.exception("Could not take the last frame of %s", prev_clip)
+                    return animate(i, current.scenes[i].frame_uri)
+                return animate(i, start, prev_clip)
             thread = _interaction_of(backend, uri)
             scene_obj = current.scenes[i]
             scene_id = scene_obj.id
