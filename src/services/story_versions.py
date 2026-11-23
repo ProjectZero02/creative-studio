@@ -76,10 +76,22 @@ def restore(story, uri: str) -> bool:
         if v["uri"] == uri:
             story.final_uri = v["uri"]
             if v.get("timeline_json"):
-                story.timeline_json = v["timeline_json"]
+                story.timeline_json = _without_rev(v["timeline_json"])
             story.film_edited = False
             return True
     return False
+
+
+def _without_rev(text: str) -> str:
+    """The timeline without the editor's revision tag, so the editor takes a
+    restored timeline as new instead of as its own echo."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(data, dict) and data.pop("rev", None) is not None:
+        return json.dumps(data)
+    return text
 
 
 def ago(at: float, now: float | None = None) -> str:

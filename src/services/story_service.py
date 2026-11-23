@@ -184,7 +184,7 @@ class StoryBackend(Protocol):
         self, story: Story, index: int, prev_clip_uri: str
     ) -> tuple[str, float]: ...
     def interaction_of(self, clip_uri: str) -> str: ...
-    def render_timeline(self, story: Story, timeline: dict) -> str: ...
+    def render_timeline(self, story: Story, timeline: dict, **opts) -> str: ...
     def save_audio_upload(self, data: bytes, mime_type: str) -> str: ...
     def save_to_library(self, story: Story, final_uri: str, owner: str) -> str: ...
     def save_upload(self, data: bytes, mime_type: str) -> str: ...
@@ -436,6 +436,8 @@ def make_film(
             lambda uri, dest: shutil.copyfile(local(uri), dest),
             out_path,
             check_seams=True,
+            # The first film carries the brand logo too, like every export.
+            **_logo_args(story),
         )
         jumps = [s for s in timeline.get("seams", []) if s.get("jump")]
         if jumps:
@@ -456,7 +458,33 @@ def _logo_args(story: Story) -> dict:
     kit = brand_kit.from_json(story.brand_json)
     if not kit["logo_uri"]:
         return {}
-    return {"logo": kit["logo_uri"], "logo_corner": kit["corner"]}
+    return {
+        "logo": kit["logo_uri"],
+        "logo_corner": kit["corner"],
+        "logo_size": kit["logo_size"],
+    }
+
+
+def render_opts(story: Story, opts: dict) -> tuple[dict, str, str]:
+    """Keyword arguments for story_timeline.render_timeline from a backend
+    render call's options, and the output's file extension and MIME type.
+
+    Options: fmt (EXPORT_FORMATS key), short_side (0 = the clips'
+    own size), crf, preset, branding (draw the brand logo;
+    default on)."""
+    from services.story_timeline import EXPORT_FORMATS
+
+    fmt = opts.get("fmt") if opts.get("fmt") in EXPORT_FORMATS else "mp4"
+    kwargs = {
+        "fmt": fmt,
+        "short_side": int(opts.get("short_side") or 0),
+        "crf": int(opts.get("crf") or 20),
+        "preset": str(opts.get("preset") or "veryfast"),
+    }
+    if opts.get("branding", True):
+        kwargs.update(_logo_args(story))
+    info = EXPORT_FORMATS[fmt]
+    return kwargs, info["ext"], info["mime"]
 
 
 # ---------------------------------------------------------------------------
@@ -1288,20 +1316,22 @@ class MockStoryBackend:
         """Demo clips have no Omni thread."""
         return ""
 
-    def render_timeline(self, story: Story, timeline: dict) -> str:
+    def render_timeline(self, story: Story, timeline: dict, **opts) -> str:
         import shutil
 
         from services.story_timeline import render_timeline
 
-        self._sleep(0.5, 1.0)
-        uri, path = self._new_uri(story, "film")
+        kwargs, ext, _ = render_opts(story, opts)
+        if not opts.get("proxy"):
+            self._sleep(0.5, 1.0)
+        uri, path = self._new_uri(story, "proxy" if opts.get("proxy") else "film")
         render_timeline(
             timeline,
             lambda u, dest: shutil.copyfile(local_path(u), dest),
-            path + ".mp4",
-            **_logo_args(story),
+            f"{path}.{ext}",
+            **kwargs,
         )
-        return uri + ".mp4"
+        return f"{uri}.{ext}"
 
     def save_audio_upload(self, data: bytes, mime_type: str) -> str:
         ext = _AUDIO_EXT.get(mime_type)
@@ -2463,22 +2493,31 @@ class VertexStoryBackend:
             timeline = make_film(story, plan, music_uri, voice_uris, _gcs_fetch, out)
             return self._store_film(story, out), timeline
 
-    def _store_film(self, story: Story, path: str) -> str:
+    def _store_film(
+        self,
+        story: Story,
+        path: str,
+        ext: str = "mp4",
+        mime: str = "video/mp4",
+        name: str = "film",
+    ) -> str:
         from common.storage import store_to_gcs
 
         with open(path, "rb") as f:
             data = f.read()
         return store_to_gcs(
-            self._folder(story), f"film_{uuid.uuid4().hex[:8]}.mp4", "video/mp4", data
+            self._folder(story), f"{name}_{uuid.uuid4().hex[:8]}.{ext}", mime, data
         )
 
-    def render_timeline(self, story: Story, timeline: dict) -> str:
+    def render_timeline(self, story: Story, timeline: dict, **opts) -> str:
         from services.story_timeline import render_timeline
 
+        kwargs, ext, mime = render_opts(story, opts)
         with tempfile.TemporaryDirectory() as tmp:
-            out = os.path.join(tmp, "film.mp4")
-            render_timeline(timeline, _gcs_fetch, out, **_logo_args(story))
-            return self._store_film(story, out)
+            out = os.path.join(tmp, f"film.{ext}")
+            render_timeline(timeline, _gcs_fetch, out, **kwargs)
+            name = "proxy" if opts.get("proxy") else "film"
+            return self._store_film(story, out, ext, mime, name)
 
     def extend_clip(
         self, story: Story, index: int, prev_clip_uri: str

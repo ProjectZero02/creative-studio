@@ -276,7 +276,7 @@ class _FastMock(story_service.MockStoryBackend):
     def stitch(self, story, plan, music_uri, voice_uris):
         return "local://film2.mp4", _timeline()
 
-    def render_timeline(self, story, timeline):
+    def render_timeline(self, story, timeline, **opts):
         self.renders.append(timeline)
         return "local://export.mp4"
 

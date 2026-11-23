@@ -633,7 +633,8 @@ def test_rerender_keeps_order_trims_and_transitions():
     v[1]["out"] = 4.0  # scene 2 trimmed to 4 s
     v[1]["fade_in"], v[2]["fade_in"] = 0.5, 0.0
     v[1]["gain"] = 0.4
-    old = T.normalize(old)
+    # The editor moves each line with its scene, as it does on every edit.
+    old = T.follow_scenes(_scenes_tl(), T.normalize(old))
     new = _scenes_tl()  # a fresh render in story order, same clips
     out = T.keep_edits(new, json.dumps(old))
     vids = T.track(out, "video")["clips"]
