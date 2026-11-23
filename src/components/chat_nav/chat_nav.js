@@ -36,6 +36,16 @@
 import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const OPEN_KEY = 'gm-nav-projects-open';
+// The five things Home makes. A row sets Home's mode (window event
+// gm-pick-kind {kind}); on another page it opens /home?mode=<kind>.
+const KINDS = ['image', 'video', 'music', 'voice', 'film'];
+const KIND_ICON = {
+  image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V5h14zm-5.1-6.7-2.7 3.5-1.9-2.3L6.5 17h11z',
+  video: 'M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11zM15 16H5V8h10z',
+  music: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3z',
+  voice: 'M9 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 8c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4zm-6 4c.2-.7 3.3-2 6-2s5.8 1.3 6 2zM16 5.1a6 6 0 0 1 0 7.8l1.4 1.4a8 8 0 0 0 0-10.6z',
+  film: 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4zm2 14H4V10h16z',
+};
 const ICON = {
   newchat: 'M3 17.2V21h3.8l11-11-3.8-3.8zM20.7 7a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0l-1.8 1.8 3.8 3.8z',
   library: 'M22 16V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2zm-11-4 2 2.7 3-3.7 4 5H8zM2 6v14a2 2 0 0 0 2 2h14v-2H4V6z',
@@ -112,6 +122,8 @@ class GmChatNav extends LitElement {
     try { this._openProjects = new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]')); } catch (_) { this._openProjects = new Set(); }
     this._onChanged = () => this._load();
     this._onActive = (e) => { this._active = (e.detail && e.detail.id) || ''; };
+    this._kind = window.gmKind || '';
+    this._onKind = (e) => { this._kind = (e.detail && e.detail.kind) || ''; this.requestUpdate(); };
     this._onDocClick = (e) => { if (this._menu && !e.composedPath().includes(this)) this._menu = null; };
   }
 
@@ -124,6 +136,7 @@ class GmChatNav extends LitElement {
     window.addEventListener('gm-chats-changed', this._onChanged);
     window.addEventListener('gm-active-chat', this._onActive);
     window.addEventListener('gm-active-project', this._onActiveProject);
+    window.addEventListener('gm-kind-changed', this._onKind);
     document.addEventListener('click', this._onDocClick);
     try {
       const url = new URL(window.location.href);
@@ -142,6 +155,7 @@ class GmChatNav extends LitElement {
     window.removeEventListener('gm-chats-changed', this._onChanged);
     window.removeEventListener('gm-active-chat', this._onActive);
     window.removeEventListener('gm-active-project', this._onActiveProject);
+    window.removeEventListener('gm-kind-changed', this._onKind);
     document.removeEventListener('click', this._onDocClick);
     this._navObserver?.disconnect();
   }
@@ -199,6 +213,12 @@ class GmChatNav extends LitElement {
     this._menu = null;
     if (this._home()) window.dispatchEvent(new CustomEvent('gm-new-chat', { detail: { project_id: projectId } }));
     else this._go('/home', projectId ? { new: '1', project: projectId } : { new: '1' });
+  }
+
+  _pickKind(kind) {
+    this._menu = null;
+    if (this._home()) window.dispatchEvent(new CustomEvent('gm-pick-kind', { detail: { kind } }));
+    else this._go('/home', { mode: kind });
   }
 
   _openChat(id) {
@@ -390,6 +410,12 @@ class GmChatNav extends LitElement {
       <nav aria-label=${S.nav || 'Chats'}>
         ${this._row({ icon: ICON.newchat, label: S.new_chat || 'New chat', onClick: () => this._newChat() })}
         ${this._row({ icon: ICON.library, label: S.library || 'Library', active: /library/.test(this.current || ''), onClick: () => this._go('/library_v2') })}
+        <div class="kinds" role="group" aria-label=${S.create || 'Create'}>
+          ${KINDS.map((k) => this._row({
+            icon: KIND_ICON[k], label: S[`kind_${k}`] || k, onClick: () => this._pickKind(k),
+            active: this._kind === k && /^\/(home)?$/.test(window.location.pathname),
+          }))}
+        </div>
         ${this.open ? html`<div class="lists">${this._lists()}</div>` : nothing}
         ${this._menuView()}
       </nav>`;
@@ -401,6 +427,7 @@ class GmChatNav extends LitElement {
     button { font: inherit; color: inherit; }
     svg { fill: currentColor; flex: none; }
     nav { display: flex; flex-direction: column; gap: 2px; }
+    .kinds { display: flex; flex-direction: column; gap: 2px; margin: 8px 0 4px; }
     /* Rows match the rail's Mesop items: 40px, icon at 10px, pill shape. */
     .row { display: flex; align-items: center; gap: 14px; width: 100%; height: 40px; padding: 0 9px; border: 0; border-radius: 20px;
       background: transparent; cursor: pointer; text-align: start; font-size: 14px; color: var(--sys-on-surface, #e8eaed); overflow: hidden; }

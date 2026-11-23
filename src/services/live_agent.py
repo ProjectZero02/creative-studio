@@ -674,9 +674,22 @@ class LiveCall:
         aspect_ratio: str = "",
         style: str = "",
         language: str = "",
+        **setup: Any,
     ) -> Deferred:
+        """``setup``: Story Studio's other setup choices (Home's Film fields:
+        speech_mode, camera, pacing, video_model, scene_count, scene_seconds,
+        script); not in the model's declaration."""
         from services import live_story
 
+        allowed = {
+            "speech_mode",
+            "camera",
+            "pacing",
+            "video_model",
+            "scene_count",
+            "scene_seconds",
+            "script",
+        }
         story = live_story.create_story_record(
             self.owner,
             idea,
@@ -684,6 +697,7 @@ class LiveCall:
             aspect_ratio=aspect_ratio,
             style=style,
             language=language,
+            **{k: v for k, v in setup.items() if k in allowed},
         )
         return await self._start_story(story, "scenario", "scenario", story.idea)
 

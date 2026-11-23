@@ -26,6 +26,9 @@ def test_every_kind_has_fields_with_valid_defaults():
         fields = studio_options.fields(kind)
         assert fields, kind
         for f in fields:
+            assert f["tier"] in ("main", "advanced"), (kind, f["name"])
+            if f["type"] not in ("select", "toggle"):
+                continue
             values = {o["value"] for o in f["options"]}
             assert f["default"] in values, (kind, f["name"])
             for model, choice in (f.get("by_model") or {}).items():

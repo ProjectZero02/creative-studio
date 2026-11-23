@@ -33,6 +33,11 @@ import time
 logger = logging.getLogger(__name__)
 
 DEFAULTS: dict = {"show_demos": False}
+# Saved switches older than this version are dropped once, so a demo switch
+# left on while testing goes back to off (owner, 2026-11-23). Bump it to reset
+# every saved setting again.
+VERSION = 2
+VERSION_KEY = "settings_version"
 CACHE_SECONDS = 30
 LOCAL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".local", "app_settings.json")
 COLLECTION = "app_settings"
@@ -77,7 +82,10 @@ def get_all() -> dict:
         if _cache and time.monotonic() - _cache[0] < CACHE_SECONDS:
             return dict(_cache[1])
     try:
-        values = {**DEFAULTS, **_read()}
+        stored = _read()
+        if stored.get(VERSION_KEY, 0) < VERSION:
+            stored = {}
+        values = {**DEFAULTS, **{k: v for k, v in stored.items() if k in DEFAULTS}}
     except Exception:  # pylint: disable=broad-except
         logger.warning("app_settings: read failed, using defaults", exc_info=True)
         values = dict(DEFAULTS)
@@ -96,12 +104,12 @@ def set_value(name: str, value) -> None:
     if name not in DEFAULTS:
         raise KeyError(name)
     if _local():
-        values = {**get_all(), name: value}
+        values = {**get_all(), name: value, VERSION_KEY: VERSION}
         os.makedirs(os.path.dirname(LOCAL_PATH), exist_ok=True)
         with open(LOCAL_PATH, "w", encoding="utf-8") as f:
             json.dump(values, f)
     else:
-        _doc().set({name: value}, merge=True)
+        _doc().set({name: value, VERSION_KEY: VERSION}, merge=True)
     with _lock:
         _cache = None
 

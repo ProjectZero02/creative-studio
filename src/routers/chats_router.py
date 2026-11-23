@@ -17,8 +17,9 @@ Chats:
 - ``GET /api/chats`` lists the caller's chats, newest first, without
   messages. ``?project=<id>`` limits to one project; ``?project=`` (empty)
   to chats in no project.
-- ``POST /api/chats`` creates one: ``{"title"?, "project_id"?, "pinned"?,
-  "messages"?, "job_ids"?}``.
+- ``POST /api/chats`` creates one: ``{"id"?, "title"?, "project_id"?,
+  "pinned"?, "messages"?, "job_ids"?}``. A page-chosen ``id`` (12 hex
+  characters) makes the call safe to repeat: the same chat is updated.
 - ``GET /api/chats/{id}`` returns it with messages.
 - ``PATCH /api/chats/{id}`` changes ``title``, ``project_id``, ``pinned``,
   ``messages`` or ``job_ids``. A chat with no user-set title gets one from
@@ -39,6 +40,8 @@ Writes must come from this site and send JSON (same guards as /api/chat).
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
@@ -48,6 +51,8 @@ from services import chat_store
 router = APIRouter(prefix="/api", tags=["chats"])
 
 CHAT_FIELDS = ("title", "project_id", "pinned", "messages", "job_ids")
+# Ids a page may choose for a new chat (same shape as chat_store.new_id()).
+CLIENT_ID = re.compile(r"[0-9a-f]{12}")
 
 
 async def _body(request: Request) -> dict:
@@ -122,7 +127,13 @@ def list_chats(request: Request, project: str | None = None) -> dict:
 async def create_chat(request: Request) -> dict:
     owner = _caller(request)
     body = await _body(request)
-    chat: dict = {"id": chat_store.new_id()}
+    # The page may pick the id itself, so a repeated create (two saves racing
+    # before the first answer, a double click) updates one chat instead of
+    # making two.
+    wanted = str(body.get("id") or "")
+    chat: dict = {"id": wanted if CLIENT_ID.fullmatch(wanted) else chat_store.new_id()}
+    if wanted and chat["id"] == wanted:
+        chat = chat_store.get_store().get_chat(wanted, owner) or chat
     _apply(chat, body)
     chat = await run_in_threadpool(_with_title, chat)
     return {"chat": await run_in_threadpool(_save_chat, chat, owner)}

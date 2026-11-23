@@ -30,14 +30,20 @@ this site (Origin check) and send JSON.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from common.identity import ANONYMOUS_USER_EMAIL, require_authenticated_user
 from config.default import Default
 from services import studio_chat
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -61,7 +67,11 @@ def _same_site(request: Request) -> None:
 
 
 @router.post("")
-async def chat(request: Request) -> dict:
+async def chat(request: Request):
+    """``{"message", "stream"?}``. With ``"stream": true`` the answer is NDJSON:
+    ``{"type": "step", "label", "detail"}`` lines as the chat works, then
+    ``{"type": "done", "reply", "jobs", "trace", "offline"}`` (or
+    ``{"type": "error", "message"}``)."""
     owner = _caller(request)
     _same_site(request)
     if "application/json" not in (request.headers.get("content-type") or ""):
@@ -70,8 +80,42 @@ async def chat(request: Request) -> dict:
         body = await request.json()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Bad JSON") from exc
-    message = str((body or {}).get("message") or "")
-    return await run_in_threadpool(studio_chat.send, owner, message)
+    body = body if isinstance(body, dict) else {}
+    message = str(body.get("message") or "")
+    if not body.get("stream"):
+        return await run_in_threadpool(studio_chat.send, owner, message)
+    return StreamingResponse(
+        _stream(owner, message),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _stream(owner: str, message: str):
+    """Run the chat on a worker thread and yield its steps as they happen."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def on_step(step: dict) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, step)
+
+    def work() -> dict:
+        return studio_chat.send(owner, message, True, on_step)
+
+    task = loop.run_in_executor(None, work)
+    task.add_done_callback(lambda _f: loop.call_soon_threadsafe(queue.put_nowait, None))
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        yield json.dumps(item, ensure_ascii=False) + "\n"
+    try:
+        out = task.result()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Studio chat stream failed")
+        yield json.dumps({"type": "error", "message": str(exc)[:300] or "Something went wrong."}) + "\n"
+        return
+    yield json.dumps({"type": "done", **out}, ensure_ascii=False) + "\n"
 
 
 @router.post("/upload")
@@ -99,15 +143,16 @@ async def upload(request: Request) -> dict:
 def options(request: Request) -> dict:
     """The Home box's type controls: ``{"image": [field, ...], ...}``."""
     _caller(request)
-    from services.studio_options import all_fields
+    from services.studio_options import all_fields, all_inputs
 
-    return {"kinds": all_fields()}
+    return {"kinds": all_fields(), "inputs": all_inputs()}
 
 
 @router.post("/job")
 async def make_job(request: Request) -> dict:
     """Start a job from the type controls:
-    ``{"kind", "prompt", "settings": {...}, "source": "image 2"}``."""
+    ``{"kind", "prompt", "settings": {...}, "source": "image 2",
+    "inputs": {"first_frame": ["image 2"], "video": ["video 1"], ...}}``."""
     from services.live_jobs import JobLimitError
 
     owner = _caller(request)
@@ -119,14 +164,17 @@ async def make_job(request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Bad JSON") from exc
     body = body if isinstance(body, dict) else {}
+    raw_inputs = body.get("inputs")
     try:
         return await run_in_threadpool(
-            studio_chat.make,
-            owner,
-            str(body.get("kind") or ""),
-            str(body.get("prompt") or ""),
-            body.get("settings"),
-            str(body.get("source") or ""),
+            lambda: studio_chat.make(
+                owner,
+                str(body.get("kind") or ""),
+                str(body.get("prompt") or ""),
+                body.get("settings"),
+                str(body.get("source") or ""),
+                inputs=raw_inputs if isinstance(raw_inputs, dict) else None,
+            )
         )
     except JobLimitError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc

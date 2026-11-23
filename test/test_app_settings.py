@@ -49,3 +49,14 @@ def test_side_menu_hides_demo_group(local_settings):
 
     demos = [p for p in get_welcome_page_config() if p.get("group") == side_nav.DEMO_GROUP]
     assert {p["display"] for p in demos} >= {"Fashion", "Interiors", "Product 360", "Brand kit"}
+
+
+def test_old_saved_demo_switch_is_reset_once(local_settings):
+    import json
+
+    with open(local_settings.LOCAL_PATH, "w", encoding="utf-8") as f:
+        json.dump({"show_demos": True}, f)  # saved before settings_version
+    assert local_settings.get("show_demos") is False
+    local_settings.set_value("show_demos", True)  # an admin turns it on again
+    local_settings.clear_cache()
+    assert local_settings.get("show_demos") is True
