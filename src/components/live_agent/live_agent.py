@@ -161,6 +161,11 @@ def _strings_json() -> str:
     return _strings_json_for_lang(current_lang(), Default.LIVE_AVATAR)
 
 
+def live_strings_json() -> str:
+    """The Live button's words, for web components that draw their own one."""
+    return _strings_json()
+
+
 @me.web_component(path="./live_agent.js")
 def live_agent_bridge(
     *,

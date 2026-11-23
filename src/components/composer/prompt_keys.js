@@ -26,7 +26,7 @@
  *   once from /api/prompts/<page> and added after the local ones.
  * - The textarea is a Mesop native textarea: after changing it we fire
  *   `input` and `blur`, so Mesop stores the text like a normal edit (the same
- *   path as dictation.js).
+ *   path as prompt_tools.js).
  */
 import { LitElement } from '/ui/vendor/lit-3.2.1.js';
 

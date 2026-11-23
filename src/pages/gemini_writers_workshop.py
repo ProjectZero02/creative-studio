@@ -23,6 +23,7 @@ from common.analytics import track_click
 from common.prompt_template_service import PromptTemplate, prompt_template_service
 from common.storage import store_to_gcs
 from common.utils import create_display_url
+from components.composer.composer import prompt_tools
 from components.copy_button.copy_button import copy_button
 from components.dialog import dialog
 from components.header import header
@@ -355,16 +356,20 @@ def gemini_writers_workshop_page_content():
                     "Type a prompt and optionally add media assets",
                     style=me.Style(margin=me.Margin(bottom=16)),
                 )
-                me.textarea(
-                    label="Prompt",
-                    rows=5,
-                    max_rows=20,
-                    autosize=True,
-                    on_blur=on_prompt_blur,
-                    value=me.state(PageState).prompt,
-                    style=me.Style(width="100%", margin=me.Margin(bottom=2)),
-                    appearance="outline",
-                )
+                with me.box(classes="gm-prompt-field"):
+                    me.textarea(
+                        label="Prompt",
+                        rows=5,
+                        max_rows=20,
+                        autosize=True,
+                        on_blur=on_prompt_blur,
+                        value=me.state(PageState).prompt,
+                        style=me.Style(width="100%", margin=me.Margin(bottom=2)),
+                        appearance="outline",
+                    )
+                    prompt_tools(
+                        kind="", scope=".gm-prompt-field", key="workshop-prompt-tools"
+                    )
                 # Media upload
                 _media_upload_slots()
 

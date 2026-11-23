@@ -57,6 +57,7 @@ const ICON = {
   send: 'M4 12l1.4 1.4L11 7.8V20h2V7.8l5.6 5.6L20 12l-8-8z',
   mic: 'M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z',
   stop: 'M7 7h10v10H7z',
+  undo: 'M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z',
   plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z',
   close: 'M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z',
   newchat: 'M3 17.2V21h3.8l11-11-3.8-3.8zM20.7 7a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0l-1.8 1.8 3.8 3.8z',
@@ -173,6 +174,7 @@ class GmHomeChat extends LitElement {
     _auto: { state: true },
     _dismissed: { state: true },
     _enhancing: { state: true },
+    _undo: { state: true },
     _panel: { state: true },
     _settings: { state: true },
     _dragOver: { state: true },
@@ -213,6 +215,7 @@ class GmHomeChat extends LitElement {
     this._auto = null; // { kind, word } from the text
     this._dismissed = ''; // a detected mode the person turned off for this message
     this._enhancing = false;
+    this._undo = null; // { before, after } until the enhanced text is edited
     this._menu = null; // open dropdown: { id, x, y, w, up, items }
     this._adv = false; // the Advanced panel behind "+"
     this._thinking = null; // live steps while the chat works: { steps, start }
@@ -1078,9 +1081,31 @@ class GmHomeChat extends LitElement {
 
   // ---------------------------------------------------------------- enhance
 
+  /** Replace the whole box as one undoable edit, so Ctrl+Z brings the old text back. */
+  _replaceUndoable(text) {
+    const ta = this._ta;
+    if (!ta) return;
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('insertText', false, text); } catch (_) { ok = false; }
+    if (!ok || ta.value !== text) { this._prefill(text); return; }
+    ta.setSelectionRange(text.length, text.length);
+  }
+
   async _enhance() {
-    const text = (this._ta?.value || '').trim();
-    if (!text || this._enhancing) return;
+    const ta = this._ta;
+    if (!ta || this._enhancing) return;
+    // Second press: put their own words back (Ctrl+Z does the same).
+    if (this._undo && ta.value === this._undo.after) {
+      const { before } = this._undo;
+      this._undo = null;
+      this._replaceUndoable(before);
+      return;
+    }
+    const before = ta.value;
+    const text = before.trim();
+    if (!text) return;
     this._enhancing = true;
     try {
       const r = await fetch('/api/prompts/enhance', {
@@ -1092,7 +1117,10 @@ class GmHomeChat extends LitElement {
       if (r.ok) {
         const body = await r.json();
         // Replace only what was enhanced (the person may have kept typing).
-        if (body.prompt && this._ta && this._ta.value.trim() === text) this._prefill(body.prompt);
+        if (body.prompt && this._ta && this._ta.value === before && body.prompt !== before) {
+          this._replaceUndoable(body.prompt);
+          this._undo = { before, after: this._ta.value };
+        }
       }
     } catch (_) { /* keep their words */ }
     this._enhancing = false;
@@ -1239,6 +1267,7 @@ class GmHomeChat extends LitElement {
 
   _onInput() {
     this._fit();
+    if (this._undo && this._ta && this._ta.value !== this._undo.after) this._undo = null;
     this._armed = true;
     const text = this._ta?.value || '';
     const has = !!text.trim();
@@ -1356,7 +1385,7 @@ class GmHomeChat extends LitElement {
     // One round slot: Live while empty, Send once there is something to send.
     // Both stay in the page and cross-fade, so typing never makes it jump.
     const showLive = this.live && !ready && !this._busy;
-    const enhanceLabel = this._enhancing ? (S.enhancing || 'Enhancing…') : (S.enhance || 'Enhance prompt');
+    const enhanceLabel = this._enhancing ? (S.enhancing || 'Enhancing…') : this._undo ? (S.undo_enhance || 'Undo enhance') : (S.enhance || 'Enhance prompt');
     const empty = !this._hasText && !this._files.length;
     const how = S[`how_${mode || 'auto'}`] || '';
     // Read out the whole word being completed ("cinematic"), not only its tail.
@@ -1385,9 +1414,10 @@ class GmHomeChat extends LitElement {
           </span>
           <span class="grow"></span>
           <div class="tools">
-            <button class="icon enh ${this._hasText ? 'shown' : ''} ${this._enhancing ? 'working' : ''}" type="button" @click=${this._enhance}
+            <button class="icon enh ${this._hasText ? 'shown' : ''} ${this._enhancing ? 'working' : ''} ${this._undo ? 'undo' : ''}" type="button" @click=${this._enhance}
+              @mousedown=${(e) => e.preventDefault()}
               ?disabled=${this._enhancing || !this._hasText} tabindex=${this._hasText ? '0' : '-1'} aria-hidden=${this._hasText ? 'false' : 'true'}
-              aria-label=${enhanceLabel} title=${enhanceLabel}>${svg(ICON.enhance, 20)}</button>
+              aria-label=${enhanceLabel} title=${enhanceLabel}>${svg(this._undo ? ICON.undo : ICON.enhance, 20)}</button>
             ${Recognition ? html`<button class="icon ${this._listening ? 'on' : ''}" type="button" @click=${this._toggleMic}
                 aria-pressed=${this._listening ? 'true' : 'false'}
                 aria-label=${this._listening ? (S.dictate_stop || 'Stop dictation') : (S.dictate || 'Dictate')}
@@ -1809,6 +1839,7 @@ class GmHomeChat extends LitElement {
     .icon svg, .send svg, .act svg, .ghost svg { fill: currentColor; }
     .icon:hover:not(:disabled) { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface, #15171c); }
     .icon.on { background: #d93025; color: #fff; }
+    .icon.undo { color: var(--sys-primary, #1a73e8); }
     .send { color: var(--sys-on-primary, #fff); background: var(--sys-primary, #1a73e8);
       box-shadow: 0 2px 10px color-mix(in srgb, var(--sys-primary, #1a73e8) 35%, transparent); }
     .send:hover:not(:disabled) { filter: brightness(1.08); }

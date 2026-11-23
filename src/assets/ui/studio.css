@@ -330,6 +330,12 @@ html body .mat-mdc-form-field .mdc-notched-outline.mdc-notched-outline .mdc-notc
 html body .mat-mdc-form-field textarea:focus-visible,
 html body .mat-mdc-form-field input:focus-visible { outline: none !important; }
 
+/* Prompt fields (.gm-prompt-field around a Material textarea): Enhance, mic
+   and Live sit inside the box at the bottom right (prompt_tools.js). */
+html body .gm-prompt-field { position: relative; }
+html body .gm-prompt-field .mat-mdc-form-field-infix { padding-bottom: 52px !important; }
+html body .gm-prompt-field gm-prompt-tools { position: absolute; inset-inline-end: 8px; bottom: 30px; z-index: 2; }
+
 /* ---------- Dropdowns (mat-select) ---------- */
 /* Field: a chevron instead of Material's solid triangle. */
 html body .mat-mdc-select-arrow { width: 16px; height: 16px; }

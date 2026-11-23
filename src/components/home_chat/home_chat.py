@@ -144,6 +144,7 @@ _STRINGS = {
     "placeholder": ("home.chat.placeholder", "Ask me anything"),
     "enhance": ("composer.enhance", "Enhance prompt"),
     "enhancing": ("home.chat.enhancing", "Enhancing…"),
+    "undo_enhance": ("composer.undo_enhance", "Undo enhance"),
     "kinds": ("home.chat.kinds", "What to make"),
     "send": ("home.chat.send", "Send"),
     "new_chat": ("home.chat.new", "New chat"),
