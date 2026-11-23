@@ -24,7 +24,7 @@ from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common import prompt_settings
 from common.i18n import t, tr
 from common.auto_enhance import enhance_on_send
-from common.prompt_prefill import prefill_prompt
+from common.prompt_prefill import prefill_prompt, take_autostart
 from common.studio_history import hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from common.utils import create_display_url
@@ -76,7 +76,8 @@ cfg = Default()
 def on_lyria_load(e: me.LoadEvent):  # pylint: disable=unused-argument
     """Prefill the music prompt from ?prompt= (sent by the home page)."""
     state = me.state(PageState)
-    if prefill_prompt(state, "music_prompt_input"):
+    filled = prefill_prompt(state, "music_prompt_input")
+    if filled:
         # The composer shows music_prompt_placeholder; keep both in step.
         state.music_prompt_placeholder = state.music_prompt_input
         state.music_prompt_textarea_key += 1  # redraw the prompt box
@@ -89,6 +90,8 @@ def on_lyria_load(e: me.LoadEvent):  # pylint: disable=unused-argument
         skip_if_populated=mock_enabled(),
     )
     yield
+    if take_autostart(filled):  # Home type chip: make it now
+        yield from on_click_lyria(e)
 
 
 @me.page(

@@ -25,7 +25,7 @@ from common.auto_enhance import enhance_on_send
 from common.i18n import t, tr
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, placeholder_image
-from common.prompt_prefill import prefill_prompt
+from common.prompt_prefill import prefill_prompt, take_autostart
 from common.studio_history import hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from common.prompt_template_service import prompt_template_service
@@ -1583,7 +1583,8 @@ def on_load(e: me.LoadEvent):
             state.uploaded_image_display_urls.append(
                 create_display_url(final_gcs_uri),
             )
-    if prefill_prompt(state, "prompt"):
+    filled = prefill_prompt(state, "prompt")
+    if filled:
         state.prompt_key += 1  # redraw the composer with the idea
     owner = getattr(me.state(AppState), "user_email", "")
     hydrate_studio_history(
@@ -1593,6 +1594,8 @@ def on_load(e: me.LoadEvent):
         skip_if_populated=mock_enabled(),
     )
     yield
+    if take_autostart(filled):  # Home type chip: make it now
+        yield from generate_images(e)
 
 
 @me.page(

@@ -28,7 +28,11 @@ import mesop as me
 from common.analytics import get_logger
 from common import brand_kit
 from common.notify import notify
-from common.prompt_prefill import is_new_prompt_arrival, read_prompt_param
+from common.prompt_prefill import (
+    is_new_prompt_arrival,
+    read_prompt_param,
+    take_autostart,
+)
 from components.dialog import dialog, dialog_actions
 from components.header import header
 from components.library.events import LibrarySelectionChangeEvent
@@ -137,8 +141,10 @@ def on_load(e: me.LoadEvent):
             step = me.query_params.get("step", "")
             if step and can_enter(step, _story()):
                 s.step = step
-    _prefill_idea()
+    filled = _prefill_idea()
     yield
+    if take_autostart(filled):  # Home type chip: write the scenario now
+        yield from on_generate_scenario(e)
 
 
 # The step each story job shows while it runs (as the page's own buttons do).
@@ -168,7 +174,7 @@ def open_for_agent(story_id: str, step: str = "") -> None:
         s.step = step
 
 
-def _prefill_idea() -> None:
+def _prefill_idea() -> bool:
     """?prompt= (from the home page) opens Create with the idea filled in.
 
     Runs once per arrival. It starts a new story only from the Stories list or
@@ -177,15 +183,16 @@ def _prefill_idea() -> None:
     """
     s = me.state(StoryState)
     if me.query_params.get("id", ""):
-        return
+        return False
     prompt = read_prompt_param()
     if not is_new_prompt_arrival(s, prompt):
-        return
+        return False
     if s.step != "stories" and (s.idea or "").strip():
-        return
+        return False
     if s.step == "stories" or s.story_id:
         _start_new_story()
     s.idea = prompt
+    return True
 
 
 @me.page(

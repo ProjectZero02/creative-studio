@@ -66,3 +66,21 @@ def prefill_prompt(
         return False
     setattr(state, field, prompt)
     return True
+
+
+def take_autostart(filled: bool, params: Mapping[str, str] | None = None) -> bool:
+    """True once when ``?go=1`` came with a prompt that was just filled in.
+
+    Drops ``go`` from the page URL so reloading the page never starts the
+    same run again. ``filled`` is what the page's prefill returned: a prompt
+    that did not replace the person's own text never starts anything.
+    """
+    if params is None:
+        params = me.query_params
+    if str(params.get("go", "") or "") != "1":
+        return False
+    try:
+        del params["go"]
+    except (KeyError, TypeError):  # read-only mapping (tests)
+        pass
+    return bool(filled)

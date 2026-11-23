@@ -80,6 +80,42 @@ def test_prefill_without_param_is_noop():
     assert state.prompt_prefill_seen == ""
 
 
+def test_take_autostart_needs_go_and_a_fill_and_drops_go():
+    params = {"prompt": "a cat", "go": "1"}
+    assert prompt_prefill.take_autostart(True, params)
+    assert "go" not in params  # a reload will not start it again
+    assert not prompt_prefill.take_autostart(True, params)
+    assert not prompt_prefill.take_autostart(False, {"go": "1"})
+    assert not prompt_prefill.take_autostart(True, {"prompt": "a cat"})
+
+
+def test_go_param_starts_the_studio():
+    import pages.lyria as ly
+    from state.lyria_state import PageState
+
+    started = []
+
+    def fake_generate(e):
+        started.append(me_state.music_prompt_input)
+        yield
+
+    me_state = PageState()
+    with patch.object(ly, "on_click_lyria", fake_generate):
+        _load(ly.on_lyria_load, me_state, {"prompt": "lofi beat", "go": "1"})
+    assert started == ["lofi beat"]
+
+
+def test_go_param_does_not_start_over_user_text():
+    import pages.lyria as ly
+    from state.lyria_state import PageState
+
+    started = []
+    state = PageState(music_prompt_input="mine")
+    with patch.object(ly, "on_click_lyria", lambda e: iter([started.append(1)])):
+        _load(ly.on_lyria_load, state, {"prompt": "lofi beat", "go": "1"})
+    assert started == []
+
+
 # --- /nano-banana and /banana-studio -----------------------------------------
 
 
