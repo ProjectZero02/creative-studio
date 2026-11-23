@@ -199,11 +199,15 @@ def _num(value, default: float, lo: float, hi: float) -> float:
     return min(hi, max(lo, v))
 
 
-def normalize(timeline: dict | str | None) -> dict:
+def normalize(timeline: dict | str | None, keep_rev: bool = False) -> dict:
     """Validate and tidy a timeline from the editor (never trust the browser).
 
     Unknown tracks and fields are dropped, numbers are clamped, clips without
     a source are removed, and the video track is laid end to end.
+    ``keep_rev`` keeps the editor's revision tag ``rev``; every other caller
+    drops it, so a timeline the server made never looks like the editor's
+    own echo. ``removed`` lists the scene clips the user deleted, so a
+    re-render does not bring them back (see :func:`keep_edits`).
     """
     if isinstance(timeline, str):
         try:
@@ -217,6 +221,16 @@ def normalize(timeline: dict | str | None) -> dict:
         int(_num(src.get("fps"), 24, 1, 60)),
     )
     out["color_match"] = bool(src.get("color_match", True))
+    if keep_rev and src.get("rev"):
+        out["rev"] = str(src["rev"])[:40]
+    removed: list[dict] = []
+    for r in src.get("removed") or []:
+        if isinstance(r, dict) and r.get("src"):
+            item = {"scene": int(_num(r.get("scene"), -1, -1, 999)), "src": str(r["src"])}
+            if item["scene"] >= 0 and item not in removed:
+                removed.append(item)
+    if removed:
+        out["removed"] = removed[:200]
     by_kind: dict[str, dict] = {}
     for t in src.get("tracks") or []:
         if isinstance(t, dict) and t.get("kind") in TRACK_KINDS and t["kind"] not in by_kind:
@@ -280,6 +294,9 @@ def _clean_clip(kind: str, c: dict) -> dict | None:
         clean["join"] = join
         clean["label"] = str(c.get("label") or "")[:60]
         clean["scene"] = int(_num(c.get("scene"), -1, -1, 999))
+        if c.get("level") is not None:
+            # The clip's own sound as first levelled: the editor's "100%".
+            clean["level"] = round(_num(c.get("level"), 1.0, 0.01, MAX_GAIN), 3)
         if c.get("ambient"):
             clean["ambient"] = True
         if c.get("src_max") is not None:
@@ -344,7 +361,7 @@ def follow_scenes(prev: dict, cur: dict) -> dict:
         c = next((x for x in now if x["in"] - 0.001 <= src < x["out"]), now[0])
         line["start"] = round(max(0.0, c["start"] + (src - c["in"])), 3)
         keep.append(line)
-    track(cur, "voice")["clips"] = keep
+    track(cur, "voice")["clips"] = no_overlap(keep)
     old_end, end = duration(prev), duration(cur)
     for m in track(cur, "music")["clips"]:
         if old_end > 0 and abs(clip_end(m) - old_end) < 0.05 and end > m["start"]:
@@ -352,50 +369,140 @@ def follow_scenes(prev: dict, cur: dict) -> dict:
     return cur
 
 
-def _keep_video_edits(new: dict, old: dict) -> None:
-    """Re-apply the editor's per-scene changes to a fresh render: the scene
-    order (when the same scenes are there), and each unchanged clip's trims,
-    level and the transitions of its join. A scene whose clip was remade
-    starts fresh."""
+VOICE_GAP = 0.05
+MIN_LEN = 0.3  # the editor's shortest clip
+
+
+def no_overlap(lines: list[dict]) -> list[dict]:
+    """Voice lines in time order, each ending before the next one starts:
+    a line that would run into the next is cut short there, and dropped when
+    less than MIN_LEN of it is left (two narrators never talk at once). The
+    same rule as the editor's `_noOverlap` (story_timeline.js)."""
+    out: list[dict] = []
+    # From the last line back, so each line yields to the next one kept.
+    for line in sorted(lines, key=lambda c: float(c["start"]), reverse=True):
+        nxt = out[0] if out else None
+        if nxt is not None and clip_end(line) > float(nxt["start"]) - VOICE_GAP + 1e-6:
+            room = float(nxt["start"]) - VOICE_GAP - float(line["start"])
+            if room < MIN_LEN:
+                continue
+            tempo = float(line.get("tempo") or 1.0) or 1.0
+            line["out"] = round(float(line["in"]) + room * tempo, 3)
+        out.insert(0, line)
+    return out
+
+
+def _scene_groups(clips: list[dict]) -> dict[int, list[dict]]:
+    groups: dict[int, list[dict]] = {}
+    for c in clips:
+        groups.setdefault(int(c.get("scene", -1)), []).append(c)
+    return groups
+
+
+def _keep_video_edits(new: dict, old: dict) -> set[int]:
+    """Re-apply the editor's per-scene changes to a fresh render. A scene is
+    kept as the user left it (its pieces after splits, their order, trims,
+    levels and transitions) when its clip is the same file in both; a scene
+    whose clip was remade starts fresh, where its old pieces were. Scenes the
+    user deleted stay deleted while their clip is unchanged. Returns the
+    scenes that were kept."""
     old_v, new_v = track(old, "video")["clips"], track(new, "video")["clips"]
     if not old_v or not all(_linked(c) for c in old_v + new_v):
-        return
-    old_scenes = [c["scene"] for c in old_v]
-    if len(set(old_scenes)) != len(old_scenes):
-        return  # a split scene: too ambiguous to carry over
-    by_scene = {c["scene"]: c for c in old_v}
-    for c in new_v:
-        o = by_scene.get(c["scene"])
-        if o and o["src"] == c["src"]:
-            top = c.get("src_max", c["out"])
-            c["in"] = min(o["in"], top - 0.1)
-            c["out"] = max(c["in"] + 0.1, min(o["out"], top))
-            c["gain"] = o["gain"]
-    if sorted(old_scenes) == sorted(c["scene"] for c in new_v):
-        new_v.sort(key=lambda c: old_scenes.index(c["scene"]))
-        for k, c in enumerate(new_v):
-            c["fade_in"] = old_v[k]["fade_in"]
-            if "join" in old_v[k]:
-                c["join"] = old_v[k]["join"]
+        return set()
+    removed = {(r["scene"], r["src"]) for r in old.get("removed", [])}
+    new_by = _scene_groups(new_v)
+    old_by = _scene_groups(old_v)
+    kept: set[int] = set()
+    for scene, olds in old_by.items():
+        fresh = new_by.get(scene)
+        if fresh and all(o["src"] == fresh[0]["src"] for o in olds):
+            kept.add(scene)
+    out: list[dict] = []
+    placed: set[int] = set()
+    for o in old_v:
+        scene = o["scene"]
+        if scene in kept:
+            top = float(new_by[scene][0].get("src_max", new_by[scene][0]["out"]))
+            c = dict(o)
+            c["src_max"] = max(top, 0.1)
+            c["in"] = min(float(o["in"]), top - 0.1)
+            c["out"] = max(c["in"] + 0.1, min(float(o["out"]), top))
+            out.append(c)
+        elif scene not in placed and scene in new_by:
+            out.extend(new_by[scene])
+        placed.add(scene)
+    # Scenes the old timeline did not have: in story order, unless the user
+    # deleted that very clip.
+    for scene in sorted(s for s in new_by if s not in placed):
+        fresh = [c for c in new_by[scene] if (scene, c["src"]) not in removed]
+        if not fresh:
+            continue
+        at = 0
+        for k, c in enumerate(out):
+            if c["scene"] < scene:
+                at = k + 1
+        out[at:at] = fresh
+    new_v[:] = out
+    still = [
+        r
+        for r in old.get("removed", [])
+        if any(c["src"] == r["src"] for c in new_by.get(r["scene"], []))
+    ]
+    if still:
+        new["removed"] = still
+    else:
+        new.pop("removed", None)
+    return kept
+
+
+def _map_lines(lines: list[dict], prev: dict, cur: dict) -> list[dict]:
+    """Voice lines placed on `prev`'s video track, moved onto `cur`'s."""
+    if not lines:
+        return []
+    tmp = {"tracks": [{"kind": "video", "clips": track(cur, "video")["clips"]},
+                      {"kind": "voice", "clips": copy.deepcopy(lines)}]}
+    follow_scenes(prev, tmp)
+    return track(tmp, "voice")["clips"]
 
 
 def keep_edits(new: dict, old: dict | str | None) -> dict:
     """Carry the user's own edits from the previous timeline into a freshly
-    rendered one: titles, music level and ducking, and per scene its order,
-    trims, level and transitions (see _keep_video_edits). Voice lines and
-    music follow the scenes."""
+    rendered one: titles; per scene its pieces, order, trims, levels and
+    transitions, and deleted scenes (see _keep_video_edits); voice lines of
+    unchanged scenes with their level and place; the music clips when the
+    music file is the same, else the music level; ducking. A scene whose
+    clip or voice was remade starts fresh."""
     if not old:
         return new
     old, new = normalize(old), normalize(new)
     track(new, "text")["clips"] = track(old, "text")["clips"]
+    before = copy.deepcopy(new)
+    kept = _keep_video_edits(new, old)
+    _layout_video(track(new, "video")["clips"])
+    # Voice: an unchanged line keeps its level and place on its scene.
+    old_lines = {(c.get("scene", -1), c["src"]): c for c in track(old, "voice")["clips"]}
+    carried, fresh = [], []
+    for line in track(before, "voice")["clips"]:
+        o = old_lines.get((line.get("scene", -1), line["src"]))
+        if o is not None and line.get("scene", -1) in kept:
+            carried.append(copy.deepcopy(o))
+        else:
+            fresh.append(line)
+    track(new, "voice")["clips"] = no_overlap(
+        _map_lines(carried, old, new) + _map_lines(fresh, before, new)
+    )
+    # Music: the same file keeps its trims; a new file keeps the level.
     old_music, new_music = track(old, "music"), track(new, "music")
     new_music["duck"] = old_music.get("duck", True)
     if old_music["clips"] and new_music["clips"]:
-        new_music["clips"][0]["gain"] = old_music["clips"][0]["gain"]
-    before = copy.deepcopy(new)
-    _keep_video_edits(new, old)
-    _layout_video(track(new, "video")["clips"])
-    return follow_scenes(before, new)
+        if {c["src"] for c in old_music["clips"]} == {c["src"] for c in new_music["clips"]}:
+            tmp = {"tracks": [{"kind": "video", "clips": track(new, "video")["clips"]},
+                              {"kind": "music", "clips": copy.deepcopy(old_music["clips"])}]}
+            follow_scenes(old, tmp)
+            new_music["clips"] = track(tmp, "music")["clips"]
+        else:
+            new_music["clips"][0]["gain"] = old_music["clips"][0]["gain"]
+    return normalize(new)
 
 
 def build_timeline(
@@ -462,6 +569,7 @@ def build_timeline(
             "out": round(cin + length, 3),
             "src_max": round(max(src_len, cin + length), 3),
             "gain": round(gain, 3),
+            "level": round(gain, 3),
             "fade_in": seg.fade_in,
             "join": join,
             "label": f"Scene {i + 1}",
@@ -821,17 +929,23 @@ def render_args(
     out_path: str,
     preset: str = "veryfast",
     logo_png: str = "",
+    crf: int = 20,
+    fmt: str = "mp4",
 ) -> list[str]:
     """ffmpeg argv that renders `timeline` (already normalized).
 
     ``paths`` maps each clip src to a local file, ``has_audio`` says which
     files have sound, ``overlays`` maps text clip ids to full-frame RGBA PNGs.
     ``logo_png`` is a full-frame PNG shown for the whole film (brand logo).
+    ``fmt`` is a key of EXPORT_FORMATS; the audio formats skip the picture.
     """
     w, h, fps = timeline["width"], timeline["height"], timeline["fps"]
     total = max(0.1, duration(timeline))
+    video = EXPORT_FORMATS.get(fmt, EXPORT_FORMATS["mp4"])["video"]
     args = [_ffmpeg(), "-v", "error", "-y"]
     filters: list[str] = []
+    # Picture filters; an audio-only render leaves them out.
+    vf: list[str] = filters if video else []
     n = 0
 
     def add_input(path: str, *pre: str) -> int:
@@ -841,7 +955,7 @@ def render_args(
         return n - 1
 
     # Video: black canvas, each clip overlaid at its start (fades = crossfades).
-    filters.append(f"color=c=black:s={w}x{h}:r={fps}:d={total:.3f}[base]")
+    vf.append(f"color=c=black:s={w}x{h}:r={fps}:d={total:.3f}[base]")
     last = "base"
     dialogue: list[str] = []
     # Narrated clips' own sound: a bed under the voice, mixed after the
@@ -861,7 +975,7 @@ def render_args(
         next_c = vclips[k + 1] if k + 1 < len(vclips) else None
         prev_c = vclips[k - 1] if k > 0 else None
         eq_b = 0.0
-        if color_match and prev_c is not None and c.get("join") == "bridge":
+        if video and color_match and prev_c is not None and c.get("join") == "bridge":
             eq_b = compute_boundary_eq(
                 paths[prev_c["src"]], prev_c["out"], paths[c["src"]], c["in"]
             )
@@ -898,8 +1012,8 @@ def render_args(
         # Offset by whole frames (the fps filter set the time base to 1/fps):
         # PTS+11.958333/TB rounds down to frame 286 instead of 287.
         chain += f",setpts=PTS+{f0}[v{k}]"
-        filters.append(chain)
-        filters.append(
+        vf.append(chain)
+        vf.append(
             f"[{last}][v{k}]overlay=eof_action=pass:enable='between(t,{start:.6f},"
             f"{start + slot - 0.5 / fps:.6f})'[o{k}]"
         )
@@ -917,21 +1031,21 @@ def render_args(
             bucket.append(
                 _audio_chain(filters, idx, aclip, alen, f"d{k}", fade=JOIN_FADE)
             )
-    for k, c in enumerate(track(timeline, "text")["clips"]):
+    for k, c in enumerate(track(timeline, "text")["clips"] if video else []):
         png = overlays.get(c["id"])
         if not png:
             continue
         idx = add_input(png, "-loop", "1", "-t", f"{total:.3f}")
         end = min(total, c["start"] + c["dur"])
-        filters.append(
+        vf.append(
             f"[{last}][{idx}:v]overlay=0:0:enable='between(t,{c['start']:.3f},{end:.3f})'[t{k}]"
         )
         last = f"t{k}"
-    if logo_png:
+    if logo_png and video:
         idx = add_input(logo_png, "-loop", "1", "-t", f"{total:.3f}")
-        filters.append(f"[{last}][{idx}:v]overlay=0:0[logo]")
+        vf.append(f"[{last}][{idx}:v]overlay=0:0[logo]")
         last = "logo"
-    filters.append(f"[{last}]format=yuv420p[vout]")
+    vf.append(f"[{last}]format=yuv420p[vout]")
 
     for k, c in enumerate(track(timeline, "voice")["clips"]):
         if not has_audio.get(c["src"], True):
@@ -990,14 +1104,95 @@ def render_args(
         )
         audio_out = "aout"
 
-    args += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
+    if not video and not audio_out:
+        # Audio only, and nothing makes a sound: silence the film's length.
+        filters.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{total:.3f}[aout]")
+        audio_out = "aout"
+    args += ["-filter_complex", ";".join(filters)]
+    if video:
+        args += ["-map", "[vout]"]
     if audio_out:
-        args += ["-map", f"[{audio_out}]", "-c:a", "aac", "-b:a", "192k"]
-    args += [
-        "-c:v", "libx264", "-preset", preset, "-crf", "20", "-pix_fmt", "yuv420p",
-        "-r", str(fps), "-t", f"{total:.3f}", "-movflags", "+faststart", out_path,
-    ]
+        args += ["-map", f"[{audio_out}]"]
+    args += encode_args(fmt, preset, crf, fps, total, bool(audio_out))
+    args.append(out_path)
     return args
+
+
+# Export menu formats: picture codec, sound codec, container.
+EXPORT_FORMATS = {
+    "mp4": {"label": "MP4 (H.264)", "ext": "mp4", "mime": "video/mp4", "video": True},
+    "mov": {"label": "MOV", "ext": "mov", "mime": "video/quicktime", "video": True},
+    "webm": {"label": "WebM", "ext": "webm", "mime": "video/webm", "video": True},
+    "mp3": {"label": "MP3", "ext": "mp3", "mime": "audio/mpeg", "video": False},
+    "wav": {"label": "WAV", "ext": "wav", "mime": "audio/wav", "video": False},
+}
+# Export sizes by the short side (9:16 at "1080p" is 1080 wide).
+RESOLUTIONS = (540, 720, 1080, 2160)
+RESOLUTION_LABELS = {540: "540p", 720: "720p", 1080: "1080p", 2160: "4K"}
+# The preview proxy: quick to make, small to stream; the same picture and
+# sound as an export, only softer.
+PROXY_SHORT_SIDE = 540
+PROXY_CRF = 30
+PROXY_PRESET = "ultrafast"
+
+
+def encode_args(
+    fmt: str, preset: str, crf: int, fps: int, total: float, audio: bool
+) -> list[str]:
+    """ffmpeg output options for an EXPORT_FORMATS key (without the path)."""
+    t = ["-t", f"{total:.3f}"]
+    if fmt == "mp3":
+        return ["-vn", "-c:a", "libmp3lame", "-q:a", "2", *t]
+    if fmt == "wav":
+        return ["-vn", "-c:a", "pcm_s16le", "-ar", "48000", *t]
+    quick = preset == PROXY_PRESET
+    if fmt == "webm":
+        out = [
+            "-c:v", "libvpx-vp9", "-crf", str(min(63, crf + 11)), "-b:v", "0",
+            "-deadline", "realtime" if quick else "good",
+            "-cpu-used", "8" if quick else "4", "-row-mt", "1",
+            "-pix_fmt", "yuv420p", "-r", str(fps),
+        ]
+        if audio:
+            out += ["-c:a", "libopus", "-b:a", "128k"]
+        return out + t
+    out = [
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        "-r", str(fps),
+    ]
+    if audio:
+        out += ["-c:a", "aac", "-b:a", "128k" if quick else "192k"]
+    if fmt == "mov":
+        out += ["-f", "mov"]
+    return out + [*t, "-movflags", "+faststart"]
+
+
+def source_short_side(timeline: dict) -> int:
+    """The timeline's own frame size by its short side (720 for 1280x720)."""
+    return int(min(timeline.get("width") or 1280, timeline.get("height") or 720))
+
+
+def resolution_options(timeline: dict) -> list[dict]:
+    """Export sizes: up to the clips' own size, and the sizes above it
+    marked as upscaled: {"short": 1080, "label": "1080p", "upscale": True}."""
+    src = source_short_side(timeline)
+    out = [
+        {"short": p, "label": RESOLUTION_LABELS[p], "upscale": p > src}
+        for p in RESOLUTIONS
+    ]
+    if src not in RESOLUTIONS:
+        out.append({"short": src, "label": f"{src}p", "upscale": False})
+        out.sort(key=lambda r: r["short"])
+    return out
+
+
+def scaled_size(width: int, height: int, short: int) -> tuple[int, int]:
+    """(width, height) with the short side at `short`, both even."""
+    scale = short / max(1, min(width, height))
+    return (
+        max(2, int(round(width * scale / 2)) * 2),
+        max(2, int(round(height * scale / 2)) * 2),
+    )
 
 
 def _audio_chain(
@@ -1125,12 +1320,18 @@ def render_timeline(
     out_path: str,
     preset: str = "veryfast",
     logo: str = "",
-    logo_corner: str = "br",
+    logo_corner: str = "auto",
     check_seams: bool = False,
+    logo_size: str = "s",
+    short_side: int = 0,
+    crf: int = 20,
+    fmt: str = "mp4",
 ) -> str:
-    """Render a timeline to MP4. ``fetch(uri, local_path)`` copies a source
-    file to disk (GCS download, or a local copy in demo mode). ``logo`` is an
-    image uri drawn small in ``logo_corner`` for the whole film.
+    """Render a timeline to a file (MP4 unless ``fmt`` says otherwise, see
+    EXPORT_FORMATS). ``fetch(uri, local_path)`` copies a source file to disk
+    (GCS download, or a local copy in demo mode). ``logo`` is an image uri
+    drawn in ``logo_corner`` at ``logo_size`` for the whole film.
+    ``short_side`` scales the film (0 keeps the timeline's size).
     ``check_seams`` measures every join of the result into
     ``timeline["seams"]`` (see :func:`seam_check`)."""
     from common.error_handling import GenerationError
@@ -1138,6 +1339,8 @@ def render_timeline(
     tl = normalize(timeline)
     if not track(tl, "video")["clips"]:
         raise GenerationError("The timeline has no video clips.")
+    if short_side:
+        tl["width"], tl["height"] = scaled_size(tl["width"], tl["height"], short_side)
     with tempfile.TemporaryDirectory() as tmp:
         paths: dict[str, str] = {}
         has_audio: dict[str, bool] = {}
@@ -1183,14 +1386,21 @@ def render_timeline(
                 raw = os.path.join(tmp, f"logo_src{ext}")
                 fetch(logo, raw)
                 logo_png = logo_overlay_png(
-                    raw, tl["width"], tl["height"], os.path.join(tmp, "logo.png"), logo_corner
+                    raw,
+                    tl["width"],
+                    tl["height"],
+                    os.path.join(tmp, "logo.png"),
+                    logo_corner,
+                    size=logo_size,
                 )
             except Exception:  # a broken logo never stops the film
                 from common.analytics import get_logger
 
                 get_logger(__name__).warning("Brand logo skipped", exc_info=True)
                 logo_png = ""
-        args = render_args(tl, paths, has_audio, overlays, out_path, preset, logo_png)
+        args = render_args(
+            tl, paths, has_audio, overlays, out_path, preset, logo_png, crf=crf, fmt=fmt
+        )
         result = subprocess.run(args, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             from common.analytics import get_logger

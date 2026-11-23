@@ -466,6 +466,17 @@ class Story:
     subtitle_lines_json: str = ""
     # {"en": {"uri": film, "key": what it was made from}, ...}
     film_variants_json: str = ""
+    # The timeline final_uri was made from, and that film's URI (when the
+    # film changes elsewhere, the timeline at the first edit is its source).
+    # "Edited since the last export" compares the current edit with it.
+    film_timeline_json: str = ""
+    film_timeline_uri: str = ""
+    # Preview: a fast, small render of the current timeline (proxy_key is
+    # the hash of what it shows, see story_jobs.proxy_key).
+    proxy_uri: str = ""
+    proxy_key: str = ""
+    # Files made from the Export menu: {option key: {"uri", "name", "tl"}}.
+    exports_json: str = ""
     # A copy of the owner's brand kit (common/brand_kit.py) when "Use my brand
     # kit" was on at Create: colours and tone go into the prompts, the logo
     # into the exported film.

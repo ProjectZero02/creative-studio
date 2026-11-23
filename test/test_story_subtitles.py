@@ -181,7 +181,7 @@ def test_subtitle_job_translates_once_then_renders(monkeypatch):
             calls["translate"] += 1
             return ["ثعلب", "تركض"]
 
-        def render_timeline(self, s, timeline):
+        def render_timeline(self, s, timeline, **opts):
             calls["timeline"] = timeline
             return "gs://b/ar.mp4"
 

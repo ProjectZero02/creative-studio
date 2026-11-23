@@ -1316,57 +1316,284 @@ def _film_and_timeline(result) -> tuple[str, dict | None]:
     return result, None
 
 
-def save_timeline(story_id: str, owner: str, timeline) -> Story:
-    """Store the editor's timeline (validated) on the story."""
+def film_timeline(s: Story) -> dict | None:
+    """The timeline the current film was made from, or None when unknown."""
     from services.story_timeline import normalize
 
-    clean = normalize(timeline)
+    if s.final_uri and s.film_timeline_uri == s.final_uri and s.film_timeline_json:
+        return normalize(s.film_timeline_json)
+    return None
+
+
+def _mark_film_timeline(s: Story, timeline) -> None:
+    from services.story_timeline import normalize
+
+    s.film_timeline_json = json.dumps(normalize(timeline))
+    s.film_timeline_uri = s.final_uri
+
+
+def save_timeline(story_id: str, owner: str, timeline) -> Story:
+    """Store the editor's timeline (validated, with the editor's revision
+    tag so its own echo is ignored) on the story, and mark the film edited
+    when the timeline differs from the one the current film was made from
+    (undoing back to it clears the mark). Then start the preview render."""
+    from services.story_timeline import normalize
+
+    clean = normalize(timeline, keep_rev=True)
+    plain = normalize(clean)
 
     def apply(s: Story) -> None:
-        if s.final_uri and clean != normalize(s.timeline_json):
-            s.film_edited = True
+        if s.final_uri:
+            base = film_timeline(s)
+            if base is None:
+                # The film came from a render or a restored version: the
+                # timeline before this first edit is the one it shows.
+                _mark_film_timeline(s, s.timeline_json)
+                base = normalize(s.film_timeline_json)
+            s.film_edited = plain != base
         s.timeline_json = json.dumps(clean)
 
-    return mutate_story(story_id, owner, apply)
+    story = mutate_story(story_id, owner, apply)
+    request_proxy(story_id, owner)
+    return story
 
 
-def start_export(story_id: str, owner: str) -> Job:
-    """Render the edited timeline to a new film and add it to the library."""
+# ---------------------------------------------------------------------------
+# Preview proxy: one small, fast render of the current timeline
+# ---------------------------------------------------------------------------
+
+PROXY_DELAY = 0.8  # seconds of quiet after an edit before rendering
+PROXY_VERSION = "p1"
+# Tests turn background previews off (test/conftest.py).
+PROXY_ENABLED = True
+_proxy_lock = threading.Lock()
+_proxy_timers: dict[str, threading.Timer] = {}
+_proxy_running: set[str] = set()
+_proxy_dirty: set[str] = set()
+_proxy_failed: dict[str, str] = {}
+
+
+def proxy_key(story: Story) -> str:
+    """What the preview must show: the timeline (without the editor's
+    revision tag) and the brand logo, as a short hash."""
+    import hashlib
+
+    from services.story_service import _logo_args
+    from services.story_timeline import normalize
+
+    raw = json.dumps(
+        [PROXY_VERSION, normalize(story.timeline_json), _logo_args(story)], sort_keys=True
+    )
+    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def preview(story: Story) -> tuple[str, str]:
+    """(uri, state) for the editor's player. state is "film" (the film is
+    this exact edit), "ready" (an up-to-date proxy), "making" (a proxy is
+    being made; uri is the last one, maybe ""), or "failed"."""
+    if not story.timeline_json:
+        return story.final_uri, "film"
+    if story.final_uri and not story.film_edited:
+        return story.final_uri, "film"
+    key = proxy_key(story)
+    if story.proxy_uri and story.proxy_key == key:
+        return story.proxy_uri, "ready"
+    last = story.proxy_uri or story.final_uri
+    if _proxy_failed.get(story.id) == key:
+        return last, "failed"
+    return last, "making"
+
+
+def proxy_busy(story_id: str) -> bool:
+    with _proxy_lock:
+        return story_id in _proxy_running or story_id in _proxy_timers
+
+
+def request_proxy(story_id: str, owner: str, delay: float = PROXY_DELAY) -> None:
+    """Render the preview proxy once edits pause for `delay` seconds. A
+    request while one renders is picked up as soon as it finishes."""
+
+    def fire() -> None:
+        with _proxy_lock:
+            _proxy_timers.pop(story_id, None)
+            if story_id in _proxy_running:
+                _proxy_dirty.add(story_id)
+                return
+            _proxy_running.add(story_id)
+        threading.Thread(
+            target=_proxy_worker, args=(story_id, owner), daemon=True, name="story-proxy"
+        ).start()
+
+    if not PROXY_ENABLED:
+        return
+    with _proxy_lock:
+        old = _proxy_timers.pop(story_id, None)
+        if old is not None:
+            old.cancel()
+        timer = threading.Timer(max(0.0, delay), fire)
+        timer.daemon = True
+        _proxy_timers[story_id] = timer
+    timer.start()
+
+
+def ensure_proxy(story: Story, owner: str) -> None:
+    """Start a proxy render when the preview is stale and none is under way
+    (for example after a restart)."""
+    _, state = preview(story)
+    if state == "making" and not proxy_busy(story.id):
+        request_proxy(story.id, owner, delay=0.0)
+
+
+def _proxy_worker(story_id: str, owner: str) -> None:
+    from services.story_timeline import (
+        PROXY_CRF,
+        PROXY_PRESET,
+        PROXY_SHORT_SIDE,
+        normalize,
+    )
+
+    try:
+        while True:
+            story = get_store().get(story_id, owner)
+            if story is not None:
+                _, state = preview(story)
+                if state == "making":
+                    key = proxy_key(story)
+                    try:
+                        uri = get_backend().render_timeline(
+                            story,
+                            normalize(story.timeline_json),
+                            fmt="mp4",
+                            short_side=PROXY_SHORT_SIDE,
+                            crf=PROXY_CRF,
+                            preset=PROXY_PRESET,
+                            proxy=True,
+                        )
+                    except Exception:
+                        logger.warning("Story %s: preview render failed", story_id, exc_info=True)
+                        _proxy_failed[story_id] = key
+                    else:
+                        _proxy_failed.pop(story_id, None)
+
+                        def apply(s: Story, uri=uri, key=key) -> None:
+                            if proxy_key(s) == key:
+                                s.proxy_uri, s.proxy_key = uri, key
+
+                        mutate_story(story_id, owner, apply)
+            with _proxy_lock:
+                if story_id in _proxy_dirty:
+                    _proxy_dirty.discard(story_id)
+                    continue
+                _proxy_running.discard(story_id)
+                return
+    except Exception:
+        logger.exception("Story %s: preview worker stopped", story_id)
+        with _proxy_lock:
+            _proxy_running.discard(story_id)
+            _proxy_dirty.discard(story_id)
+
+
+def start_export(story_id: str, owner: str, options: dict | None = None) -> Job:
+    """Render the edited timeline with the Export menu's options (see
+    services/story_export.py): size, format, audio only, subtitles in the
+    picture, logo on or off. Subtitle lines not in the story yet are
+    translated first. An MP4 at the clips' own size without burned-in
+    subtitles becomes the story's film (and goes to the library); every
+    other export is an extra download. The file is kept in exports_json."""
+    from services import story_export as ex
+    from services import story_subtitles as subs
+    from services.story_timeline import normalize
+
     story = get_store().get(story_id, owner)
     if story is None:
         raise StoryAccessError("Story not found.")
     if not story.timeline_json:
         raise GenerationError("Render the film once before editing it.")
-    job = _new_job(owner, story_id, "export")
-    render_task = _add_task(job, "Exporting your edit · video, sound and titles", "stitch")
-    library_task = _add_task(job, "Saving to your library", "library")
+    opts = ex.clean(options, normalize(story.timeline_json))
+    job = _new_job(owner, story_id, "export", {"options": opts, "key": ex.key(opts)})
+    missing = [c for c in ex.sub_langs(opts) if subs.lines_for(story, c) is None]
+    translate_task = (
+        _add_task(
+            job,
+            "Subtitles · translating to " + " and ".join(subs.LANGS[c] for c in missing),
+            "translate",
+        )
+        if missing
+        else None
+    )
+    has_logo = bool(logo_of(story))
+    film = ex.makes_film(opts, has_logo)
+    render_task = _add_task(
+        job, "Exporting · " + ex.label(opts, normalize(story.timeline_json)), "stitch"
+    )
+    library_task = _add_task(job, "Saving to your library", "library") if film else None
 
     def work(job: Job) -> None:
         backend = get_backend()
-        from services.story_timeline import normalize
 
-        timeline = normalize(story.timeline_json)
-        if not _run_task(
-            render_task, lambda: backend.render_timeline(story, timeline), job.cancel_event
-        ):
-            library_task.status = SKIPPED
+        def translate() -> str:
+            for code in missing:
+                lines = backend.translate_subtitles(story, code)
+
+                def keep(s: Story, code=code, lines=lines) -> None:
+                    s.subtitle_lines_json = subs.with_cached_lines(s, code, lines)
+
+                mutate_story(story_id, owner, keep)
+            return ""
+
+        if translate_task and not _run_task(translate_task, translate, job.cancel_event):
+            render_task.status = SKIPPED
+            if library_task:
+                library_task.status = SKIPPED
             return
-        film = render_task.result_uri
+        current = get_store().get(story_id, owner) or story
+        if ex.burns_subtitles(opts):
+            lines = {c: subs.lines_for(current, c) for c in ex.sub_langs(opts)}
+            timeline = subs.variant_timeline(current, current.timeline_json, opts["lang"], lines)
+        else:
+            timeline = normalize(current.timeline_json)
+        made = ex.made_from(current, opts)
+        if not _run_task(
+            render_task,
+            lambda: backend.render_timeline(
+                current,
+                timeline,
+                fmt=opts["fmt"],
+                short_side=opts["short"],
+                branding=opts["branding"],
+            ),
+            job.cancel_event,
+        ):
+            if library_task:
+                library_task.status = SKIPPED
+            return
+        uri = render_task.result_uri
+        name = ex.filename(current.title, opts, timeline)
 
         def apply(s: Story) -> None:
-            # Same clips as the render, so set_version stays as it was.
-            s.final_uri = film
-            s.film_edited = False
-            story_versions.remember(s, "export")
+            s.exports_json = ex.with_export(s, opts, uri, name, made)
+            if film:
+                # Same clips as the render, so set_version stays as it was.
+                s.final_uri = uri
+                s.film_edited = False
+                _mark_film_timeline(s, current.timeline_json)
+                story_versions.remember(s, "export")
 
         mutate_story(story_id, owner, apply)
-        _run_task(
-            library_task,
-            lambda: backend.save_to_library(story, film, owner),
-            job.cancel_event,
-        )
+        if library_task:
+            _run_task(
+                library_task,
+                lambda: backend.save_to_library(current, uri, owner),
+                job.cancel_event,
+            )
 
     return _spawn(job, work)
+
+
+def logo_of(story: Story) -> str:
+    from services.story_service import _logo_args
+
+    return _logo_args(story).get("logo", "")
 
 
 def start_subtitled(story_id: str, owner: str, variant: str) -> Job:
