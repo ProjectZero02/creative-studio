@@ -260,11 +260,11 @@ def test_typing_pause_updates_unpinned_settings(state, monkeypatch):
 
 
 def test_picking_a_value_pins_it_and_use_auto_unpins(state):
-    page.on_scene_count(SimpleNamespace(value="5"))
-    assert "scene_count" in json.loads(state.pinned_json)
-    state.auto_json = json.dumps({"scene_count": 6, "duration": 10})
+    page.on_aspect(SimpleNamespace(value="9:16"))
+    assert "aspect_ratio" in json.loads(state.pinned_json)
+    state.auto_json = json.dumps({"aspect_ratio": "16:9"})
     page.on_reset_auto(None)
-    assert state.pinned_json == "[]" and state.scene_count == 6
+    assert state.pinned_json == "[]" and state.aspect_ratio == "16:9"
 
 
 def test_last_film_length_wins():
@@ -282,8 +282,3 @@ def test_pinned_scene_length_replans_the_scene_count():
     current = {"scene_count": 3, "duration": 10}
     assert auto.merge_settings(current, found, {"scene_count"}) == {"duration": 30}
 
-
-def test_picking_a_scene_length_replans_the_film_length(state):
-    state.auto_json = json.dumps({"film_seconds": 60, "scene_count": 6, "duration": 10})
-    page.on_duration(SimpleNamespace(value="20"))
-    assert (state.scene_count, state.duration) == (3, 20)

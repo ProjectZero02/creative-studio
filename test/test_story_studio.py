@@ -177,9 +177,14 @@ def test_caps_total_film_length(monkeypatch):
 
 def test_caps_force_configured_resolution(monkeypatch):
     monkeypatch.setattr(story_models, "Default", _caps_cfg())
-    caps = apply_caps(4, 6, resolution="4k")
+    # A resolution the engine cannot make falls back to the configured one.
+    caps = apply_caps(4, 6, resolution="8k")
     assert caps.resolution == "720p"
     assert any("Resolution" in n for n in caps.notes)
+    # One it can make is kept (Setup picks it per story).
+    allowed = story_models.resolution_options()
+    caps = apply_caps(4, 6, resolution=allowed[-1])
+    assert caps.resolution == allowed[-1] and not caps.notes
 
 
 # ---------------------------------------------------------------------------
@@ -1520,7 +1525,7 @@ def test_continuation_without_a_frame_keeps_the_shot(omni_calls, monkeypatch):
     assert not req.reference_image_gcs
 
 
-def test_later_frames_of_a_continuous_take_are_painted_from_its_first(
+def test_later_scenes_of_a_continuous_take_get_no_frame_of_their_own(
     fast_backend, local_store
 ):
     def line(text):
@@ -1537,7 +1542,8 @@ def test_later_frames_of_a_continuous_take_are_painted_from_its_first(
     assert s.continues_take(2) and not s.continues_take(1)
     job = _run(story_jobs.start_storyboard(s.id, OWNER))
     assert job.status == "done"
-    # Scene 2 opens a new take (from scene 1's look); scene 3 continues it,
-    # so it is painted from scene 2's frame and keeps that set.
+    # Scene 2 opens a new take (from scene 1's look); scene 3 continues it
+    # from the take's clip, so only take starts are painted.
     assert fast_backend.refs[1] == f"local://{s.id}/frame0.png"
-    assert fast_backend.refs[2] == f"local://{s.id}/frame1.png"
+    assert 2 not in fast_backend.refs
+    assert story_models.frames_ready(local_store.get(s.id, OWNER))
