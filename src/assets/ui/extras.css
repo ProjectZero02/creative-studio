@@ -6,11 +6,12 @@
 /* Usage page (/usage). */
 .gm-usage { display: flex; flex-direction: column; gap: 16px; max-width: 1040px; }
 .gm-usage-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+/* Same quiet glass card as Settings (.gm-set-card), not a bright outline. */
 .gm-usage-stat, .gm-usage-card {
-  display: flex; flex-direction: column; gap: 6px; padding: 16px;
-  border-radius: var(--gm-radius-lg, 16px);
-  background: var(--sys-surface-container-low, rgba(127, 127, 127, 0.06));
-  border: 1px solid var(--sys-outline-variant, rgba(127, 127, 127, 0.2));
+  display: flex; flex-direction: column; gap: 6px; padding: 16px 20px;
+  border-radius: var(--gm-radius-xl, 20px);
+  background: var(--gm-glass-fill, var(--sys-surface-container-low, rgba(127, 127, 127, 0.06)));
+  border: 1px solid var(--gm-glass-border, rgba(127, 127, 127, 0.14));
 }
 .gm-usage-stat-label { font-size: 13px; color: var(--sys-on-surface-variant); }
 .gm-usage-stat-value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -77,13 +78,47 @@
 .gm-brand-swatch .mat-mdc-form-field-subscript-wrapper { display: none; }
 .gm-brand-swatch input[type="color"] { height: 28px; padding: 0; border: 0; background: none; cursor: pointer; }
 .gm-brand-hex { font-family: ui-monospace, monospace; font-size: 13px; }
-.gm-brand-logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.gm-brand-logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
 .gm-brand-logo { width: 96px; height: 64px; display: flex; align-items: center; justify-content: center; padding: 6px;
   border-radius: 10px; background: repeating-conic-gradient(rgba(127,127,127,.15) 0% 25%, transparent 0% 50%) 50% / 12px 12px; }
 .gm-brand-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.gm-brand-logo-row .mat-mdc-form-field { width: 170px; }
+.gm-brand-logo-row .mat-mdc-form-field { width: 180px; }
 .gm-brand-logo-row .mat-mdc-form-field-subscript-wrapper { display: none; }
+/* The Corner select at the same 40px height as the buttons beside it. */
+.gm-brand-logo-row .mat-mdc-form-field {
+  --mat-form-field-container-height: 40px;
+  --mat-form-field-container-vertical-padding: 8px;
+}
+.gm-brand-logo-row .mat-mdc-form-field-infix {
+  min-height: var(--gm-control-h, 40px) !important; box-sizing: border-box;
+  padding-top: calc((var(--gm-control-h, 40px) - 24px) / 2) !important;
+  padding-bottom: calc((var(--gm-control-h, 40px) - 24px) / 2) !important;
+}
+/* The whole field is the tap area, so the select itself needs no 44px floor. */
+.gm-brand-logo-row .mat-mdc-form-field .mat-mdc-select { line-height: 24px; min-height: 24px; }
 .gm-brand-actions { display: flex; align-items: center; gap: 12px; }
+/* Secondary brand actions (Add colour, Upload logo, Remove, Delete...) are
+   tonal buttons, not bare blue text. */
+.gm-brand .mat-mdc-button:not(.mat-mdc-unelevated-button) {
+  height: var(--gm-control-h, 40px); padding: 0 16px; border-radius: 999px;
+  background-color: var(--gm-tonal, rgba(127, 127, 127, 0.08));
+  --mdc-text-button-label-text-color: var(--sys-on-surface);
+  --mat-text-button-label-text-color: var(--sys-on-surface);
+  color: var(--sys-on-surface);
+}
+.gm-brand .mat-mdc-button:not(.mat-mdc-unelevated-button):not(:disabled):hover { background-color: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14)); }
+.gm-brand .mat-mdc-button:focus-visible,
+.gm-brand .mat-mdc-unelevated-button:focus-visible,
+.gm-brand-card:focus-visible { outline: 2px solid var(--sys-primary); outline-offset: 2px; }
+.gm-brand-color .mat-mdc-button { height: 32px !important; padding: 0 12px !important; }
+/* Colour chip: a compact swatch so the chip matches the 40px buttons. */
+.gm-brand-color { height: var(--gm-control-h, 40px); box-sizing: border-box; padding: 4px; }
+.gm-brand-swatch .mat-mdc-form-field { width: 44px; }
+.gm-brand-swatch .mat-mdc-text-field-wrapper { padding: 0 !important; background: transparent !important; }
+.gm-brand-swatch .mat-mdc-form-field-infix { min-height: 32px !important; width: auto; padding: 0 !important; display: flex; align-items: center; }
+.gm-brand-swatch .mdc-notched-outline { display: none; }
+.gm-brand-swatch input[type="color"] { width: 44px; height: 32px; border-radius: 8px; }
+.gm-brand-colors { margin-top: 6px; }
 /* Brands list: cards on the left, the editor on the right. */
 .gm-brand-page { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .gm-brand-page .gm-brand { max-width: none; }

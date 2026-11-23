@@ -83,28 +83,33 @@ def visible_sections() -> list[Section]:
 
 
 def _open(key: str):
-    """Show a section and load what it needs (generator)."""
+    """Show a section and load what it needs (generator).
+
+    Loads before the first yield on purpose: the first render mounts the
+    theme, language and pref web components, which send their own events
+    straight away. A render in between (spinner state) let one of those
+    events return the stale "not loaded" state, so My brand could hang on
+    its spinner when opened from a link.
+    """
     keys = {s.key for s in visible_sections()}
     key = key if key in keys else "general"
     me.state(SettingsState).section = key
     if key == "usage":
         from pages import usage
 
-        yield
-        yield from usage.on_load(None)
+        s = me.state(usage.UsageState)
+        usage._load(s)  # pylint: disable=protected-access
+        s.loading = False
     elif key == "brand":
         from pages import brand
 
-        yield
         brand.on_load(None)
-        yield
     elif key == "account":
         from pages import account
 
-        yield
-        yield from account.on_load(None)
-    else:
-        yield
+        for _ in account.on_load(None):
+            pass
+    yield
 
 
 def on_load(e: me.LoadEvent):  # pylint: disable=unused-argument
@@ -158,10 +163,6 @@ def _general() -> None:
         with me.box(classes="gm-set-row"):
             with me.box(classes="gm-set-row-text"):
                 _text(tr("settings.theme", "Appearance"), "gm-set-row-title")
-                _text(
-                    tr("settings.theme_desc", "Light or dark screens. Also in the top bar."),
-                    "gm-set-row-desc",
-                )
             demo_mode_switch(
                 value="dark" if dark else "light",
                 options=[
@@ -174,10 +175,6 @@ def _general() -> None:
         with me.box(classes="gm-set-row"):
             with me.box(classes="gm-set-row-text"):
                 _text(tr("settings.lang", "Language"), "gm-set-row-title")
-                _text(
-                    tr("settings.lang_desc", "The language of menus and buttons."),
-                    "gm-set-row-desc",
-                )
             demo_mode_switch(
                 value=app.lang,
                 options=[("en", "English", ""), ("ar", "العربية", "")],
@@ -190,8 +187,7 @@ def _general() -> None:
                 _text(
                     tr(
                         "settings.enhance_desc",
-                        "Short prompts get more detail from Gemini when you send them. "
-                        "Your own words stay in the box.",
+                        "Gemini adds detail to short prompts when you send them.",
                     ),
                     "gm-set-row-desc",
                 )
@@ -252,7 +248,7 @@ def _admin() -> None:
                     tr("settings.open", "Open"),
                     key=f"settings-open-{route}",
                     on_click=on_open_link,
-                    type="flat",
+                    type="stroked",
                 )
 
 
@@ -275,14 +271,17 @@ def settings_content() -> None:
     sections = visible_sections()
     current = state.section if state.section in {s.key for s in sections} else "general"
     with page_frame():  # pylint: disable=not-context-manager
-        header(
-            tr("settings.title", "Settings"),
-            "settings",
-            description=tr(
-                "settings.purpose", "Your preferences, brand, usage and account."
-            ),
-            centered=True,
-        )
+        # The centred page header; .gm-set-top keeps its title solid and the
+        # icon tile quiet (studio.src.css, Settings section).
+        with me.box(classes="gm-set-top"):
+            header(
+                tr("settings.title", "Settings"),
+                "settings",
+                description=tr(
+                    "settings.purpose", "Your preferences, brand, usage and account."
+                ),
+                centered=True,
+            )
         with me.box(classes="gm-settings"):
             with me.box(classes="gm-set-nav"):
                 for s in sections:

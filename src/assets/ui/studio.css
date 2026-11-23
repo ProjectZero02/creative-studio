@@ -1311,8 +1311,39 @@ html body .gm-set-row-icon {
 }
 html body .gm-set-body .gm-usage,
 html body .gm-set-body .gm-brand { width: 100%; max-width: none; }
+/* Header: a solid title and a quiet icon tile (no gradient text or glow). */
+html body .gm-set-top .gm-header-hero { margin-bottom: 20px; }
+html body .gm-set-top .gm-title-studio h1 {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--sys-on-surface);
+  font-size: clamp(26px, 1.2rem + 1vw, 34px);
+}
+html body .gm-set-top .gm-hero-icon {
+  width: 40px; height: 40px; border-radius: 12px;
+  background: var(--gm-tonal); color: var(--sys-on-surface); box-shadow: none;
+}
+html body .gm-set-top .gm-hero-icon .mat-icon {
+  width: 22px !important; height: 22px !important; font-size: 22px !important; line-height: 22px !important;
+}
+/* Keyboard focus on the section list. */
+html body .gm-set-nav-item button:focus-visible,
+html body .gm-set-nav-item button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: 2px; }
+html body .gm-set-nav-item .mat-mdc-button-persistent-ripple::before { opacity: 0 !important; }
+/* Usage: the period switch sits at the start, not centred. */
+html body .gm-set-body .gm-usage .gm-filter-row { justify-content: flex-start; margin-bottom: 0; }
+/* My brand inside Settings: the brands as a row of cards above a full-width
+   editor (the side column squeezed the editor). */
+html body .gm-set-body .gm-brand-page { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+html body .gm-set-body .gm-brand-list { flex-direction: row; flex-wrap: wrap; overflow: visible; padding-bottom: 0; }
+html body .gm-set-body .gm-brand-card { flex: 0 1 220px; min-width: 0; max-width: 260px; min-height: 56px; }
+html body .gm-set-body .gm-brand-card-logo { width: 40px; height: 40px; flex-basis: 40px; }
 @media (max-width: 760px) {
   html body .gm-settings { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  /* A switch stays on the same line as its label. */
+  html body .gm-set-row:has(.mat-mdc-slide-toggle) { flex-wrap: nowrap; }
+  html body .gm-set-body .gm-brand-card { flex: 1 1 160px; max-width: none; }
   html body .gm-set-nav {
     flex-direction: row; position: static; overflow-x: auto; scrollbar-width: none;
     gap: 6px; padding-bottom: 2px;
