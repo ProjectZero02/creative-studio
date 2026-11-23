@@ -31,7 +31,7 @@
  * When Home is not on screen, it asks Mesop to open /home?chat=<id>
  * (or ?new=1&project=<id>) through navEvent.
  */
-import { LitElement, css, html, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3.2.1/+esm';
+import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
 const OPEN_KEY = 'gm-nav-projects-open';
 const ICON = {
@@ -118,6 +118,10 @@ class GmChatNav extends LitElement {
     document.addEventListener('click', this._onDocClick);
     try { this._active = new URL(window.location.href).searchParams.get('chat') || window.gmActiveChat || ''; } catch (_) { /* ignore */ }
     this._load();
+    // The menu button opens and closes the side menu in the browser only
+    // (theme_manager.js sets <html data-sidenav>), so follow that too.
+    this._navObserver = new MutationObserver(() => this._syncOpen());
+    this._navObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-sidenav'] });
   }
 
   disconnectedCallback() {
@@ -125,6 +129,20 @@ class GmChatNav extends LitElement {
     window.removeEventListener('gm-chats-changed', this._onChanged);
     window.removeEventListener('gm-active-chat', this._onActive);
     document.removeEventListener('click', this._onDocClick);
+    this._navObserver?.disconnect();
+  }
+
+  _syncOpen() {
+    const v = document.documentElement?.dataset.sidenav;
+    if (v === 'open' || v === 'closed') this.open = v === 'open';
+  }
+
+  willUpdate(changed) {
+    // Mesop may send the server's older open value; the page's own state wins.
+    if (changed.has('open')) {
+      const v = document.documentElement?.dataset.sidenav;
+      if (v === 'open' || v === 'closed') this.open = v === 'open';
+    }
   }
 
   updated(changed) {
