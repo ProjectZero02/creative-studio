@@ -371,6 +371,11 @@ class Default:
     STORY_SETS_COLLECTION_NAME: str = os.environ.get(
         "STORY_SETS_COLLECTION_NAME", "story_sets"
     )
+    # Home chat: saved chats and their projects (folders), owner-only.
+    CHATS_COLLECTION_NAME: str = os.environ.get("CHATS_COLLECTION_NAME", "chats")
+    PROJECTS_COLLECTION_NAME: str = os.environ.get(
+        "PROJECTS_COLLECTION_NAME", "chat_projects"
+    )
     # Cost guardrails: every film is capped by these values.
     STORY_MIN_SCENES: int = 3
     STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 16))
