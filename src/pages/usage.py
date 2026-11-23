@@ -88,10 +88,11 @@ def _load(s: UsageState) -> None:
         events = usage.load(None if everyone else app.user_email, s.days)
         s.summary_json = json.dumps(usage.summarize(events, s.days))
         s.error = ""
-    except Exception as exc:
+    except Exception:  # pylint: disable=broad-except
         logger.exception("Usage: could not load events")
         s.summary_json = ""
-        s.error = f"Could not load usage: {str(exc)[:160]}"
+        # The details go to the log; people see a plain line.
+        s.error = "Usage could not be loaded. Try again later."
 
 
 def on_load(e: me.LoadEvent):  # pylint: disable=unused-argument
@@ -192,6 +193,8 @@ def usage_content(embedded: bool = False):
                 me.text(s.error, style=me.Style(color=me.theme_var("error")))
             if s.loading and not summary:
                 me.progress_spinner()
+                return
+            if s.error:
                 return
             if not summary or not summary["total"]["calls"]:
                 with me.box(classes="gm-usage-card"):

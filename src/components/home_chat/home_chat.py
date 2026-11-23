@@ -79,7 +79,7 @@ KINDS = (
 # One short line under each tile's name.
 _DESCS = {
     "image": "Photos and art",
-    "video": "Clips up to 8 seconds",
+    "video": "Clips with sound",
     "music": "Tracks and jingles",
     "voice": "Voice-overs",
     "film": "Short films",
@@ -221,6 +221,40 @@ _STRINGS = {
     "t_files": ("home.chat.t_files", "Files"),
     "about": ("home.chat.about", "about {n} s"),
     "steps_done": ("home.chat.steps_done", "Steps"),
+    # The headline once a type is picked (until the first message).
+    "title_image": ("home.title.image", "Paint a picture with words"),
+    "title_video": ("home.title.video", "Direct a scene in seconds"),
+    "title_music": ("home.title.music", "Score your moment"),
+    "title_voice": ("home.title.voice", "Give your words a voice"),
+    "title_film": ("home.title.film", "Write a short film"),
+    # The placeholder is an example prompt; Tab puts it in the box.
+    "ex_auto": ("home.ex.auto", "Make a 16:9 photo of a lighthouse at dusk, then animate it"),
+    "ex_image": ("home.ex.image", "A glass perfume bottle on wet black stone, soft studio light, 85mm close-up"),
+    "ex_video": ("home.ex.video", "Slow dolly in on a barista pouring latte art, warm café light, shallow focus"),
+    "ex_music": ("home.ex.music", "Warm lo-fi hip hop with soft piano and vinyl crackle, 80 bpm, relaxed"),
+    "ex_voice": ("home.ex.voice", "Welcome to our store. Today only, everything is twenty percent off."),
+    "ex_film": ("home.ex.film", "A 30-second ad for an electric bike in the city"),
+    # How a good prompt is built, shown beside the Tab hint.
+    "how_auto": ("home.how.auto", "Say what to make: image, video, music or voice"),
+    "how_image": ("home.how.image", "Subject · setting · light · camera"),
+    "how_video": ("home.how.video", "Shot · subject · action · mood"),
+    "how_music": ("home.how.music", "Genre · instruments · tempo · mood"),
+    "how_voice": ("home.how.voice", "The exact words to say"),
+    "how_film": ("home.how.film", "Product or story · length · mood"),
+    "tab_example": ("home.chat.tab_example", "use example"),
+    "tab_accept": ("home.chat.tab_accept", "accept"),
+    "suggestion": ("home.chat.suggestion", "Suggestion: {text}. Press Tab to accept."),
+    # The path from prompt to result, shown above the box.
+    "path": ("home.chat.path", "How this is made"),
+    "p_prompt": ("home.chat.p_prompt", "Your prompt"),
+    "p_text": ("home.chat.p_text", "Your text"),
+    "p_files": ("home.chat.p_files", "+ {n} files"),
+    "p_out_image": ("home.chat.p_out_image", "Image"),
+    "p_out_video": ("home.chat.p_out_video", "Video clip"),
+    "p_out_music": ("home.chat.p_out_music", "Music track"),
+    "p_out_voice": ("home.chat.p_out_voice", "Voice-over"),
+    "p_saved": ("home.chat.p_saved", "Saved to Library"),
+    "live": ("live.talk", "Talk to the studio"),
 }
 
 

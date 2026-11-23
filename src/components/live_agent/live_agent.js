@@ -1303,6 +1303,7 @@ class LiveCallButton extends LitElement {
     stringsJson: { type: String },
     compact: { type: Boolean, reflect: true },
     pill: { type: Boolean, reflect: true }, // Home prompt box: 44px round icon
+    filled: { type: Boolean, reflect: true }, // a filled circle, like the Send button it swaps with
   };
 
   static styles = css`
@@ -1330,6 +1331,16 @@ class LiveCallButton extends LitElement {
     button:hover .b3, button:focus-visible .b3 { animation-delay: -450ms; }
     button:hover .b4, button:focus-visible .b4 { animation-delay: -300ms; }
     button:hover .b5, button:focus-visible .b5 { animation-delay: -600ms; }
+    /* filled: Home's Live button. Same size and shape as Send, on the
+       Gemini gradient with white bars, so the two read as one slot. */
+    :host([filled]) button { width: 40px; height: 40px; color: #fff;
+      background: linear-gradient(135deg, #4f8df7 0%, #7b6cf6 55%, #c06ad8 100%);
+      box-shadow: 0 2px 10px rgba(91, 108, 246, 0.35); transition: filter 140ms ease, box-shadow 140ms ease; }
+    :host([filled]) button:hover { background: linear-gradient(135deg, #4f8df7 0%, #7b6cf6 55%, #c06ad8 100%); filter: brightness(1.08);
+      box-shadow: 0 4px 16px rgba(91, 108, 246, 0.45); }
+    :host([filled]) svg { width: 20px; height: 20px; }
+    :host([filled]) button:hover .bar, :host([filled]) button:focus-visible .bar { fill: #fff; }
+    :host([filled]) button:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: 2px; }
     @keyframes gm-wave { 0%, 100% { transform: scaleY(0.45); } 50% { transform: scaleY(1.15); } }
     @media (prefers-reduced-motion: reduce) { button:hover .bar, button:focus-visible .bar { animation: none; } }
   `;

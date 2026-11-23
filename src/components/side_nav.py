@@ -61,10 +61,10 @@ CUSTOM_ICONS = ["spark", "style", "scene"]
 ICON_SIZE = 20
 ITEM_SIZE = 40
 
-# System items pinned to the bottom of the rail, below the pages.
-SYSTEM_ITEMS = [
-    {"id": "settings", "display": "Settings", "icon": "settings", "route": "/settings", "label_key": "menu.settings"},
-]
+# System items pinned to the bottom of the rail, below the pages. Settings
+# lives in the account menu (the avatar), so the rail keeps only light/dark,
+# language and the avatar at the bottom.
+SYSTEM_ITEMS: list[dict] = []
 
 
 def _norm(value: str) -> str:

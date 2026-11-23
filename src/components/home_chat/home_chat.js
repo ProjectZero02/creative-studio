@@ -41,7 +41,7 @@
  * and Send once you type. Enter sends, Shift+Enter adds a line, Up/Down
  * recall past prompts.
  */
-import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
+import { LitElement, css, html, nothing, svg as svgPart } from '/ui/vendor/lit-3.2.1.js';
 import { detectKind } from './detect_kind.js';
 import './gm_audio.js';
 
@@ -75,11 +75,64 @@ const ICON = {
   tune: 'M3 17v2h6v-2zM3 5v2h10V5zm10 16v-2h8v-2h-8v-2h-2v6zM7 9v2H3v2h4v2h2V9zm14 4v-2H11v2zm-6-4h2V7h4V5h-4V3h-2z',
   attach: 'M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6z',
   voice: 'M9 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 8c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4zm-6 4c.2-.7 3.3-2 6-2s5.8 1.3 6 2zM16 5.1a6 6 0 0 1 0 7.8l1.4 1.4a8 8 0 0 0 0-10.6z',
+  // Enhance: three sparkles (Material "auto_awesome"), as the studios use.
+  enhance: 'M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z',
+  text: 'M5 4v3h5.5v12h3V7H19V4z',
+  library: 'M22 16V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2zm-11-4 2 2.7 3-3.7 4 5H8zM2 6v14a2 2 0 0 0 2 2h14v-2H4V6z',
+};
+// The send arrow: drawn with round strokes so it reads crisply at 20px.
+const SEND = html`<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" class="stroke"><path d="M12 19.5V5M5.5 11.25 12 4.75l6.5 6.5"></path></svg>`;
+// Media behind each type card: a still at rest, a moving sample on hover.
+const CARD_MEDIA = {
+  image: { still: '/ui/posters/gemini-image__page-cover.webp' },
+  video: { still: '/ui/posters/gemini-omni__page-cover__hero.webp', moving: '/ui/home/word-video.webp' },
+  music: { still: '/ui/posters/lyria_header.webp' },
+  voice: { still: '/ui/posters/capability__native-audio_16-9.webp' },
+  film: { still: '/ui/posters/veo__cover_s0RKXWX.webp', moving: '/ui/home/word-film.webp' },
+};
+// Words the box completes as you type (Tab accepts), per type.
+const VOCAB = {
+  any: ['cinematic', 'golden hour', 'photorealistic', 'minimalist', 'dramatic', 'soft light', 'close-up', 'wide shot',
+    'studio light', 'background', 'reflection', 'shallow depth of field', 'aerial', 'portrait', 'landscape', 'vibrant', 'moody'],
+  image: ['85mm lens', 'macro', 'flat lay', 'product shot', 'bokeh', 'film grain', 'overhead shot', 'illustration', 'watercolor', 'isometric'],
+  video: ['slow motion', 'dolly in', 'tracking shot', 'drone shot', 'handheld', 'timelapse', 'orbit', 'crane shot', 'pan left', 'pan right'],
+  music: ['instrumental', 'piano', 'strings', 'acoustic guitar', 'synthwave', 'orchestral', 'percussion', 'ambient', 'lo-fi', 'uplifting', 'melancholic'],
+  voice: [],
+};
+// What a good prompt names, in order; after a comma the box offers the next missing part.
+const NEXT_PART = {
+  image: [[/\b(light|lit|sun|glow|shadow|neon|lamp|dusk|dawn|night)\b/i, 'soft natural light'],
+    [/\b(mm|lens|close-?up|wide|macro|shot|angle|overhead)\b/i, '50mm lens, shallow depth of field'],
+    [/\b(photo|realistic|illustration|render|painting|style|cinematic)\b/i, 'photorealistic']],
+  video: [[/\b(dolly|pan|track|orbit|drone|zoom|handheld|crane|static|shot)\b/i, 'slow dolly in'],
+    [/\b(light|lit|sun|glow|neon|dusk|dawn|night|golden)\b/i, 'golden hour light'],
+    [/\b(mood|calm|tense|epic|dreamy|cinematic|energetic)\b/i, 'cinematic mood']],
+  music: [[/\b(piano|guitar|strings|synth|drums|bass|orchestra|violin|sax)\b/i, 'soft piano and warm bass'],
+    [/\b(\d+\s?bpm|tempo|slow|fast|upbeat)\b/i, '90 bpm'],
+    [/\b(calm|happy|sad|epic|relaxed|uplifting|dark|dreamy|mood)\b/i, 'relaxed and uplifting']],
+  voice: [],
 };
 // Samples shown inside the type tiles on hover (animated webp for video and film).
 // Bar heights (0-1) of the sound equaliser shown on the Music and Voice tiles.
 const EQ = [0.35, 0.6, 0.9, 0.55, 1, 0.7, 0.45, 0.8, 0.5, 0.3, 0.65, 0.4];
-const svg = (d, size = 20) => html`<svg viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true"><path d=${d}></path></svg>`;
+// The five types use the side menu's stroke icons (chat_nav.js), so a type
+// looks the same in the menu, on its card, in the mode pill and in the path.
+const KIND_STROKE = {
+  image: ['M3.75 6.5a2.75 2.75 0 0 1 2.75-2.75h11a2.75 2.75 0 0 1 2.75 2.75v11a2.75 2.75 0 0 1-2.75 2.75h-11a2.75 2.75 0 0 1-2.75-2.75z',
+    'M9 7.6a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z', 'm20.25 15-4.5-4.5L7 19.25'],
+  video: ['M3.25 8A2.75 2.75 0 0 1 6 5.25h7.5A2.75 2.75 0 0 1 16.25 8v8a2.75 2.75 0 0 1-2.75 2.75H6A2.75 2.75 0 0 1 3.25 16z',
+    'm16.25 10.25 4.5-2.75v9l-4.5-2.75'],
+  music: ['M9 17.5V5.75l11-2V15.5', 'M6.5 15a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z', 'M17.5 13a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z'],
+  voice: ['M10 4.75a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z', 'M3.75 20.25c0-3.2 2.7-5.5 6.25-5.5s6.25 2.3 6.25 5.5',
+    'M17.25 6.5a4.5 4.5 0 0 1 0 5.5', 'M19.75 4.25a8 8 0 0 1 0 10'],
+  film: ['M3.75 9.75h16.5v8a2.5 2.5 0 0 1-2.5 2.5H6.25a2.5 2.5 0 0 1-2.5-2.5z',
+    'M3.9 9.6 3.4 7.4a2.5 2.5 0 0 1 1.85-3l10.5-2.5a2.5 2.5 0 0 1 3 1.85l.5 2.2z', 'm8.3 4.3 2.7 3.6', 'm13.6 3.05 2.7 3.6'],
+};
+// A path string draws a filled glyph; an array of paths draws a stroke icon.
+const svg = (d, size = 20) => (Array.isArray(d)
+  ? html`<svg class="stroke-i" viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true">${d.map((p) => svgPart`<path d=${p}></path>`)}</svg>`
+  : html`<svg viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true"><path d=${d}></path></svg>`);
+const kindIcon = (kind) => KIND_STROKE[kind] || ICON[kind] || ICON.spark;
 
 function load(key, fallback) {
   try { return JSON.parse(sessionStorage.getItem(key) || '') ?? fallback; } catch (_) { return fallback; }
@@ -126,7 +179,11 @@ class GmHomeChat extends LitElement {
     _menu: { state: true },
     _adv: { state: true },
     _thinking: { state: true },
+    _sug: { state: true },
     panelOpen: { type: Boolean, reflect: true, attribute: 'panel' },
+    // Mirrors body.dark-theme, so the headline repaints on a theme switch
+    // (gradient text does not always repaint when only a variable changes).
+    dark: { type: Boolean, reflect: true },
   };
 
   constructor() {
@@ -189,6 +246,9 @@ class GmHomeChat extends LitElement {
       } else if (this._adv) this._adv = false;
     };
     this._onViewport = () => { if (this._menu) this._menu = null; };
+    this._sug = ''; // the ghost text after the cursor (Tab accepts)
+    this._sugOff = ''; // text the person dismissed a suggestion for (Esc)
+    this.dark = !!document.body?.classList.contains('dark-theme');
   }
 
   get _kinds() {
@@ -213,11 +273,17 @@ class GmHomeChat extends LitElement {
   }
 
   _setLock(kind) {
+    // A film has its own screen (Story Studio): open it with what is typed.
+    if (kind === 'film') {
+      const k = this._kinds.find((x) => x.kind === 'film');
+      if (k) { this._menu = null; this._openFull(k); return; }
+    }
     this._lock = kind && this._options[kind] ? kind : '';
+    this._sug = '';
     this._dismissed = '';
     this._menu = null;
     this._adv = false;
-    this.updateComplete.then(() => this._ta && this._ta.focus());
+    this.updateComplete.then(() => { if (this._ta) { this._ta.focus(); this._armed = true; } });
   }
 
   /** Clear the mode: a picked one unlocks, a detected one is dismissed. */
@@ -288,6 +354,14 @@ class GmHomeChat extends LitElement {
     window.addEventListener('pointerdown', this._onDown, true);
     window.addEventListener('keydown', this._onKeyDoc);
     window.addEventListener('resize', this._onViewport);
+    if (document.body) {
+      this._themeObs = new MutationObserver(() => { this.dark = document.body.classList.contains('dark-theme'); });
+      this._themeObs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      this.dark = document.body.classList.contains('dark-theme');
+    }
+    // Fetch the moving card samples once the page is idle, so hover is instant.
+    const warm = () => Object.values(CARD_MEDIA).forEach((m) => { if (m.moving) { const i = new Image(); i.src = m.moving; } });
+    if (window.requestIdleCallback) window.requestIdleCallback(warm, { timeout: 4000 }); else setTimeout(warm, 2500);
     let params = new URLSearchParams();
     try { params = new URL(window.location.href).searchParams; } catch (_) { /* ignore */ }
     const askedChat = params.get('chat') || '';
@@ -317,6 +391,7 @@ class GmHomeChat extends LitElement {
     window.removeEventListener('pointerdown', this._onDown, true);
     window.removeEventListener('keydown', this._onKeyDoc);
     window.removeEventListener('resize', this._onViewport);
+    this._themeObs?.disconnect();
     clearInterval(this._tick);
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._persist(); }
     clearTimeout(this._timer);
@@ -353,6 +428,7 @@ class GmHomeChat extends LitElement {
     this._hist = -1;
     if (this._ta) { this._ta.value = ''; this._fit(); }
     this._hasText = false;
+    this._sug = '';
     this._auto = null;
     this._dismissed = '';
     const said = typed || this._s.attach_default || 'What can you make from this?';
@@ -464,6 +540,7 @@ class GmHomeChat extends LitElement {
     this._hist = -1;
     if (this._ta) { this._ta.value = ''; this._fit(); }
     this._hasText = false;
+    this._sug = '';
     this._auto = null;
     this._dismissed = '';
     this._files = [];
@@ -775,8 +852,60 @@ class GmHomeChat extends LitElement {
     ta.value = text;
     this._fit();
     this._hasText = !!text.trim();
+    this._sug = '';
     ta.focus();
     ta.setSelectionRange(text.length, text.length);
+  }
+
+  // ---------------------------------------------------------------- suggestions
+
+  /** The example prompt for the current type (the placeholder; Tab uses it). */
+  _example() {
+    const S = this._s;
+    return S[`ex_${this._mode || 'auto'}`] || '';
+  }
+
+  /**
+   * Ghost text after the cursor, all local and instant: the end of a past
+   * prompt that starts the same way, the rest of a word being typed, or,
+   * after a comma, the next part a good prompt names (light, lens, mood...).
+   */
+  _suggest(text) {
+    if (!text || !text.trim() || /\n$/.test(text) || text === this._sugOff) return '';
+    const low = text.toLowerCase();
+    const past = readHistory().find((h) => h.length > text.length + 1 && h.toLowerCase().startsWith(low));
+    if (past) return past.slice(text.length);
+    if (/[؀-ۿ]/.test(text)) return '';
+    const mode = this._mode;
+    const word = (/(?:^|[\s,])([a-z][a-z-]{2,})$/i.exec(text) || [])[1];
+    if (word) {
+      const w = word.toLowerCase();
+      const pool = [...(VOCAB[mode] || []), ...VOCAB.any];
+      const hit = pool.find((v) => v.startsWith(w) && v !== w);
+      return hit ? hit.slice(w.length) : '';
+    }
+    if (/,\s?$/.test(text) && text.trim().split(/\s+/).length >= 3) {
+      const parts = NEXT_PART[mode] || NEXT_PART.image;
+      const next = parts.find(([re]) => !re.test(text));
+      if (next) return (text.endsWith(' ') ? '' : ' ') + next[1];
+    }
+    return '';
+  }
+
+  _acceptSug() {
+    const ta = this._ta;
+    if (!ta || !this._sug) return false;
+    const text = ta.value + this._sug;
+    this._prefill(text);
+    this._onInput();
+    return true;
+  }
+
+  /** Keep the ghost layer scrolled with the text. */
+  _syncGhost() {
+    const g = this.renderRoot.querySelector(".gh");
+    const ta = this._ta;
+    if (g && ta) g.scrollTop = ta.scrollTop;
   }
 
   // ---------------------------------------------------------------- menus
@@ -852,7 +981,7 @@ class GmHomeChat extends LitElement {
     const kinds = this._kinds.filter((k) => this._options[k.kind]);
     const modeItems = [
       { label: S.auto || 'Auto', hint: S.auto_tip || 'The chat picks what to make', icon: ICON.spark, checked: !mode, run: () => { this._lock = ''; this._dismissed = this._auto ? this._auto.kind : ''; } },
-      ...kinds.map((k) => ({ label: k.label, hint: k.desc, icon: ICON[k.kind], checked: mode === k.kind, run: () => this._setLock(k.kind) })),
+      ...kinds.map((k) => ({ label: k.label, hint: k.desc, icon: kindIcon(k.kind), checked: mode === k.kind, run: () => this._setLock(k.kind) })),
     ];
     const detected = mode && !this._lock;
     const fields = mode ? this._fields(mode).filter((f) => f.tier !== 'advanced' && (f.type !== 'select' || f.options.length > 1)) : [];
@@ -864,7 +993,7 @@ class GmHomeChat extends LitElement {
         <button type="button" class="pill mode ${mode ? 'set' : ''}" data-menu="mode" aria-haspopup="menu"
           @click=${(e) => this._openMenu(e, 'mode', modeItems, { title: S.kinds || 'What to make', width: 260 })}
           title=${detected ? (S.t_detected || 'You wrote “{word}”').replace('{word}', this._auto.word) : (S.kinds || 'What to make')}>
-          ${svg(mode ? ICON[mode] : ICON.spark, 16)}<b>${mode ? this._kindLabel(mode) : (S.auto || 'Auto')}</b>
+          ${svg(mode ? kindIcon(mode) : ICON.spark, 16)}<b>${mode ? this._kindLabel(mode) : (S.auto || 'Auto')}</b>
           ${detected ? html`<span class="auto-tag">${S.detected || 'auto'}</span>` : nothing}${svg(ICON.caret, 16)}
         </button>
         ${mode ? html`<button type="button" class="pill-x" @click=${() => this._clearMode()} aria-label=${S.clear_mode || 'Back to chat'} title=${S.clear_mode || 'Back to chat'}>${svg(ICON.close, 14)}</button>` : nothing}
@@ -1110,9 +1239,16 @@ class GmHomeChat extends LitElement {
 
   _onInput() {
     this._fit();
+    this._armed = true;
     const text = this._ta?.value || '';
     const has = !!text.trim();
     if (has !== this._hasText) this._hasText = has;
+    // Only offer a completion with the cursor at the end of the text.
+    const ta = this._ta;
+    const atEnd = ta && ta.selectionStart === ta.selectionEnd && ta.selectionEnd === text.length;
+    this._sug = atEnd ? this._suggest(text) : '';
+    if (this._sug) this.requestUpdate(); // the ghost copies the typed text
+    this.updateComplete.then(() => this._syncGhost());
     // Read the mode from the words as they are typed (detect_kind.js).
     clearTimeout(this._detectTimer);
     this._detectTimer = setTimeout(() => this._detect(), 120);
@@ -1144,6 +1280,27 @@ class GmHomeChat extends LitElement {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       this._send();
+      return;
+    }
+    // Tab: take the suggestion, or put the example prompt in an empty box.
+    // Shift+Tab and a box with nothing to offer keep normal focus moves.
+    if (e.key === 'Tab' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      if (this._sug) { e.preventDefault(); this._acceptSug(); return; }
+      // Only once the person is working in the box (clicked, typed or picked
+      // a type), so tabbing through the page never drops text in it.
+      if (this._armed && !ta.value.trim() && this._example()) { e.preventDefault(); this._prefill(this._example()); this._detect(); return; }
+      return;
+    }
+    if (e.key === 'ArrowRight' && this._sug && ta.selectionEnd === ta.value.length) {
+      e.preventDefault();
+      this._acceptSug();
+      return;
+    }
+    if (e.key === 'Escape' && this._sug) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._sugOff = ta.value;
+      this._sug = '';
       return;
     }
     if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -1194,39 +1351,54 @@ class GmHomeChat extends LitElement {
     const ready = this._hasText || this._files.some((f) => f.handle);
     const mode = this._mode;
     const sendLabel = mode ? `${S.send || 'Send'}: ${this._kindLabel(mode)}` : (S.send || 'Send');
-    const holder = (mode && S[`ph_${mode}`]) || S.placeholder || 'Ask me anything';
+    const example = this._example();
+    const holder = example || (mode && S[`ph_${mode}`]) || S.placeholder || 'Ask me anything';
     // One round slot: Live while empty, Send once there is something to send.
-    let slot;
-    if (this._busy) {
-      slot = html`<button class="send" type="button" disabled aria-label=${S.send || 'Send'}><span class="spin" aria-hidden="true"></span></button>`;
-    } else if (ready || !this.live) {
-      slot = html`<button class="send ${ready ? '' : 'off'}" type="button" @click=${() => this._send()} ?disabled=${!ready}
-          aria-label=${sendLabel} title=${sendLabel}>${svg(ICON.send, 22)}</button>`;
-    } else {
-      slot = html`<live-call-button pill .stringsJson=${talk}></live-call-button>`;
-    }
+    // Both stay in the page and cross-fade, so typing never makes it jump.
+    const showLive = this.live && !ready && !this._busy;
     const enhanceLabel = this._enhancing ? (S.enhancing || 'Enhancing…') : (S.enhance || 'Enhance prompt');
+    const empty = !this._hasText && !this._files.length;
+    const how = S[`how_${mode || 'auto'}`] || '';
+    // Read out the whole word being completed ("cinematic"), not only its tail.
+    const word = this._sug && !/^\s/.test(this._sug) ? ((this._ta?.value || '').match(/[^\s,]*$/) || [''])[0] : '';
+    const sugText = this._sug ? (S.suggestion || 'Suggestion: {text}. Press Tab to accept.').replace('{text}', (word + this._sug).trim()) : '';
     return html`
       <div class="box ${this._busy ? 'busy' : ''} ${this._dragOver ? 'drop' : ''}"
         @dragover=${this._onDragOver} @dragleave=${this._onDragLeave} @drop=${this._onDrop}>
         ${this._attachments()}
         <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change=${this._onFiles}>
-        <textarea rows="1" @paste=${this._onPaste} .placeholder=${holder}
-          aria-label=${S.placeholder || 'Ask me anything'}
-          @keydown=${this._onKey} @input=${this._onInput}></textarea>
+        <div class="ta-wrap">
+          <div class="gh" aria-hidden="true"><span class="g-typed">${this._ta ? this._ta.value : ''}</span><span class="g-sug">${this._sug}</span></div>
+          <textarea rows="1" @paste=${this._onPaste} .placeholder=${holder}
+            aria-label=${S.placeholder || 'Ask me anything'} aria-describedby="sug-live"
+            @keydown=${this._onKey} @input=${this._onInput} @scroll=${this._syncGhost}
+            @pointerdown=${() => { this._armed = true; }}
+            @click=${() => this._onInput()} @blur=${() => { this._sug = ''; this._armed = false; }}></textarea>
+        </div>
+        <span id="sug-live" class="sr" aria-live="polite">${sugText}</span>
         <div class="row">
           <button class="icon plus ${this._advChanged(mode) ? 'dot-on' : ''}" type="button" data-menu="plus" aria-haspopup="menu"
-            @click=${(e) => this._plusMenu(e)} aria-label=${S.more || 'Add files and more'} title=${S.more || 'Add files and more'}>${svg(ICON.plus, 24)}</button>
+            @click=${(e) => this._plusMenu(e)} aria-label=${S.more || 'Add files and more'} title=${S.more || 'Add files and more'}>${svg(ICON.plus, 22)}</button>
+          <span class="hint ${(empty && example) || this._sug ? 'shown' : ''}" aria-hidden="true">
+            <kbd>Tab</kbd><span>${this._sug ? (S.tab_accept || 'accept') : (S.tab_example || 'use example')}</span>
+            ${!this._sug && how ? html`<span class="how">${how}</span>` : nothing}
+          </span>
           <span class="grow"></span>
           <div class="tools">
-            ${this._hasText ? html`<button class="icon ${this._enhancing ? 'working' : ''}" type="button" @click=${this._enhance}
-                ?disabled=${this._enhancing} aria-label=${enhanceLabel} title=${enhanceLabel}>${svg(ICON.spark, 20)}</button>` : nothing}
+            <button class="icon enh ${this._hasText ? 'shown' : ''} ${this._enhancing ? 'working' : ''}" type="button" @click=${this._enhance}
+              ?disabled=${this._enhancing || !this._hasText} tabindex=${this._hasText ? '0' : '-1'} aria-hidden=${this._hasText ? 'false' : 'true'}
+              aria-label=${enhanceLabel} title=${enhanceLabel}>${svg(ICON.enhance, 20)}</button>
             ${Recognition ? html`<button class="icon ${this._listening ? 'on' : ''}" type="button" @click=${this._toggleMic}
                 aria-pressed=${this._listening ? 'true' : 'false'}
                 aria-label=${this._listening ? (S.dictate_stop || 'Stop dictation') : (S.dictate || 'Dictate')}
                 title=${this._listening ? (S.dictate_stop || 'Stop dictation') : (S.dictate || 'Dictate')}>
-                ${svg(this._listening ? ICON.stop : ICON.mic, 22)}</button>` : nothing}
-            ${slot}
+                ${svg(this._listening ? ICON.stop : ICON.mic, 20)}</button>` : nothing}
+            <div class="slot ${showLive ? 'live-on' : 'send-on'}">
+              <button class="send ${ready || this._busy ? '' : 'off'}" type="button" @click=${() => this._send()} ?disabled=${!ready || this._busy}
+                tabindex=${showLive ? '-1' : '0'} aria-hidden=${showLive ? 'true' : 'false'}
+                aria-label=${sendLabel} title=${sendLabel}>${this._busy ? html`<span class="spin" aria-hidden="true"></span>` : SEND}</button>
+              ${this.live ? html`<live-call-button class="live" pill filled .stringsJson=${talk} ?inert=${!showLive} aria-hidden=${showLive ? 'false' : 'true'}></live-call-button>` : nothing}
+            </div>
           </div>
         </div>
         ${this._note ? html`<div class="note" role="status">${this._note}</div>` : nothing}
@@ -1469,32 +1641,85 @@ class GmHomeChat extends LitElement {
     </div>`;
   }
 
-  /** Starter prompts on the empty page; the mode follows the words. */
-  _starters() {
-    const list = this._kinds.filter((k) => (k.samples || []).length).slice(0, 4);
+  /**
+   * The type cards on the empty page: a still behind each name that comes
+   * alive on hover (a moving clip, a picture, a sound wave). A click puts the
+   * box in that type; Film opens Story Studio. The picked card stays lit.
+   */
+  _cards() {
+    const S = this._s;
+    const mode = this._mode;
+    const list = this._kinds;
     if (!list.length) return nothing;
-    return html`<div class="starters" role="group" aria-label=${this._s.try || 'Try:'}>
-      ${list.map((k) => html`<button type="button" class="starter" @click=${() => { this._prefill(k.samples[0]); this._detect(); }}>
-        ${svg(ICON[k.kind] || ICON.spark, 16)}<span>${k.samples[0]}</span></button>`)}
+    return html`<div class="cards" role="group" aria-label=${S.kinds || 'What to make'}>
+      ${list.map((k) => {
+        const m = CARD_MEDIA[k.kind] || {};
+        const on = mode === k.kind;
+        const sound = k.kind === 'music' || k.kind === 'voice';
+        return html`<button type="button" class="card k-${k.kind} ${on ? 'on' : ''}" aria-pressed=${on ? 'true' : 'false'}
+            @click=${() => (on ? this._clearMode() : this._setLock(k.kind))}>
+          <span class="card-media" aria-hidden="true">
+            <span class="still" style="background-image:url('${m.still || ''}')"></span>
+            ${m.moving ? html`<span class="moving" style="background-image:url('${m.moving}')"></span>` : nothing}
+            ${sound ? html`<span class="eq">${EQ.map((h) => html`<i style="--h:${h}"></i>`)}</span>` : nothing}
+          </span>
+          <span class="card-text">
+            <span class="card-name">${svg(kindIcon(k.kind), 18)}${k.label}${k.kind === 'film' ? svg(ICON.open, 14) : nothing}</span>
+            <span class="card-desc">${k.desc}</span>
+          </span>
+        </button>`;
+      })}
     </div>`;
+  }
+
+  /**
+   * How the prompt becomes the result, above the box while a type is picked
+   * and nothing is sent yet: your prompt → the model with its settings → the
+   * result, saved to the Library. It follows the pills under the box.
+   */
+  _path() {
+    const mode = this._mode;
+    if (!mode || mode === 'film') return nothing;
+    const S = this._s;
+    const fields = this._fields(mode).filter((f) => f.tier !== 'advanced' && (f.type === 'select' || f.type === 'toggle'));
+    const model = fields.find((f) => f.name === 'model');
+    const rest = fields.filter((f) => f !== model && f.type === 'select').slice(0, 3).map((f) => this._show(f));
+    const files = this._files.filter((f) => f.handle).length;
+    const steps = [
+      { icon: mode === 'voice' ? ICON.text : ICON.edit, label: mode === 'voice' ? (S.p_text || 'Your text') : (S.p_prompt || 'Your prompt'),
+        detail: files ? (S.p_files || '+ {n} files').replace('{n}', files) : '' },
+      { icon: ICON.enhance, label: model ? this._show(model) : this._kindLabel(mode), detail: rest.join(' · '), main: true },
+      { icon: kindIcon(mode), label: S[`p_out_${mode}`] || this._kindLabel(mode), detail: '' },
+      { icon: ICON.library, label: S.p_saved || 'Saved to Library', detail: '' },
+    ];
+    return html`<ol class="path" aria-label=${S.path || 'How this is made'}>
+      ${steps.map((s, i) => html`${i ? html`<li class="link" aria-hidden="true"><i></i></li>` : nothing}
+        <li class="pstep ${s.main ? 'main' : ''}" style="--i:${i}">
+          <span class="pdot">${svg(s.icon, 16)}</span>
+          <span class="ptext"><b>${s.label}</b>${s.detail ? html`<small>${s.detail}</small>` : nothing}</span>
+        </li>`)}
+    </ol>`;
   }
 
   render() {
     const S = this._s;
     const chatting = this._msgs.length > 0;
+    const mode = this._mode;
+    const title = (mode && S[`title_${mode}`]) || S.title || "Google's creative AI, in one studio";
     return html`
       <div class="wrap ${chatting ? 'chat' : 'empty'}">
         ${chatting ? this._thread() : html`
           <section class="hero">
-            <h1 class="title">${S.title || "Google's creative AI, in one studio"}</h1>
+            <h1 class="title ${mode ? 'moded' : ''}">${title}</h1>
           </section>`}
         <div class="dock">
           ${chatting ? html`<div class="dock-top">${this._jobsPill('inline')}<button class="ghost newchat" type="button" @click=${() => this._newChat(this._projectId)} title=${S.new_chat_tip || 'Start over with an empty chat'}>
               ${svg(ICON.newchat, 18)}<span>${S.new_chat || 'New chat'}</span></button></div>` : nothing}
+          ${chatting ? nothing : this._path()}
           ${this._advPanel()}
           ${this._box()}
           ${this._settingsRow()}
-          ${chatting ? nothing : this._starters()}
+          ${chatting ? nothing : this._cards()}
         </div>
       </div>
       ${this._jobsPanel()}
@@ -1506,9 +1731,16 @@ class GmHomeChat extends LitElement {
     // Tell the side menu which type is on, so its row lights up.
     const mode = this._mode;
     if (mode !== this._shownMode) {
+      const first = this._shownMode === undefined;
       this._shownMode = mode;
       window.gmKind = mode;
       window.dispatchEvent(new CustomEvent('gm-kind-changed', { detail: { kind: mode } }));
+      // The headline and the path change with a short fade, not a jump.
+      if (!first && !reduceMotion()) {
+        const t = this.renderRoot.querySelector('.title');
+        t && t.animate([{ opacity: 0, transform: 'translateY(8px)', filter: 'blur(4px)' }, { opacity: 1, transform: 'none', filter: 'none' }],
+          { duration: 360, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
+      }
     }
   }
 
@@ -1526,17 +1758,23 @@ class GmHomeChat extends LitElement {
     .wrap.chat { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: flex-end; max-width: 820px; }
 
     .hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: clamp(8px, 1.6vh, 14px); }
+    /* Gradient headline. The padding keeps the first letter and the
+       descenders (g, y) inside the painted box, so nothing is cut. Light and
+       dark each name their colours, keyed on [dark], which this element sets
+       from body.dark-theme. */
     .title {
-      margin: 0; max-width: 16em; font-size: clamp(2rem, 1rem + 2.2vw, 3.25rem); line-height: 1.08;
-      font-weight: 600; letter-spacing: -0.035em; text-wrap: balance;
-      background: var(--gm-home-title-grad, linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 38%, #1a5fd8 72%, #7b3fe4 100%));
-      -webkit-background-clip: text; background-clip: text; color: transparent;
+      margin: 0; max-width: 16em; font-size: clamp(2rem, 1rem + 2.2vw, 3.25rem); line-height: 1.16;
+      padding: 0.04em 0.08em 0.1em; font-weight: 600; letter-spacing: -0.03em; text-wrap: balance;
+      background: linear-gradient(100deg, #15171c 0%, #15171c 38%, #1a5fd8 72%, #7b3fe4 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent;
     }
+    :host([dark]) .title { background-image: linear-gradient(100deg, #fff 0%, #fff 38%, #8ab4f8 72%, #c58af9 100%); }
+    .title.moded { background-image: linear-gradient(100deg, #15171c 0%, #15171c 20%, #1a5fd8 60%, #7b3fe4 100%); }
+    :host([dark]) .title.moded { background-image: linear-gradient(100deg, #fff 0%, #fff 20%, #8ab4f8 60%, #c58af9 100%); }
 
     /* The prompt box (same glass as the studios' composer). */
     .dock { width: 100%; max-width: 820px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
     .wrap.empty .dock { gap: 10px; }
-    .wrap.empty .starters { margin-top: clamp(14px, 3vh, 28px); }
     /* Results line up with the box: the card spans the column, not just the reply. */
     .bot-body > .job { margin-inline-start: -44px; width: calc(100% + 44px); }
     .wrap.chat .dock { position: sticky; bottom: 0; padding: 18px 0 12px;
@@ -1560,19 +1798,22 @@ class GmHomeChat extends LitElement {
       background: transparent; color: inherit; font: inherit; font-size: 17px; line-height: 24px; padding: 14px 14px 4px;
     }
     textarea::placeholder { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9; }
-    .tools { flex: none; display: flex; align-items: center; gap: 4px; }
+    .tools { flex: none; display: flex; align-items: center; gap: 6px; }
+    .row { padding: 0 2px 0 0; }
     button { font: inherit; }
     .icon, .send {
-      width: 44px; height: 44px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0;
       border: 0; border-radius: 50%; cursor: pointer; color: var(--sys-on-surface-variant, #4b515d); background: transparent;
+      transition: background-color 140ms ease, color 140ms ease;
     }
     .icon svg, .send svg, .act svg, .ghost svg { fill: currentColor; }
-    .icon:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14)); }
+    .icon:hover:not(:disabled) { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface, #15171c); }
     .icon.on { background: #d93025; color: #fff; }
-    .send { color: var(--sys-on-primary, #fff); background: var(--sys-primary, #1a73e8); }
+    .send { color: var(--sys-on-primary, #fff); background: var(--sys-primary, #1a73e8);
+      box-shadow: 0 2px 10px color-mix(in srgb, var(--sys-primary, #1a73e8) 35%, transparent); }
     .send:hover:not(:disabled) { filter: brightness(1.08); }
     .send:disabled { cursor: default; }
-    .send.off { background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface-variant, #6b7280); }
+    .send.off { background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface-variant, #6b7280); box-shadow: none; }
     .icon.working svg { animation: pulse 900ms ease-in-out infinite alternate; }
     @keyframes pulse { from { opacity: 0.35; } to { opacity: 1; } }
     .ghost {
@@ -1749,13 +1990,91 @@ class GmHomeChat extends LitElement {
       font-size: 10.5px; line-height: 18px; color: #fff; background: rgba(0, 0, 0, 0.62); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .file-slot:disabled { cursor: default; }
 
-    /* Starter prompts on the empty page. */
-    .starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 100%; }
-    .starter { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 11px; border: 0; border-radius: 999px; cursor: pointer;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface-variant, #5f6368); font-size: 13.5px; max-width: 100%; }
-    .starter span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .starter svg { fill: currentColor; flex: none; }
-    .starter:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); color: var(--sys-on-surface, #15171c); }
+    /* Type cards on the empty page: media behind the name, alive on hover. */
+    .cards { width: 100%; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: clamp(10px, 2.4vh, 22px); }
+    .card {
+      position: relative; isolation: isolate; overflow: hidden; height: 112px; padding: 0; border: 0; border-radius: 20px; cursor: pointer;
+      text-align: start; color: #fff; background: #15171c;
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--sys-on-surface, #e8eaed) 8%, transparent), 0 6px 20px rgba(0, 0, 0, 0.12);
+      transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 220ms ease;
+    }
+    .card-media, .card-media > span { position: absolute; inset: 0; }
+    .card-media { z-index: -1; }
+    .card-media > span { background-size: cover; background-position: center; transition: opacity 320ms ease, transform 600ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .still { opacity: 0.55; transform: scale(1.02); }
+    .moving { opacity: 0; }
+    .k-image .still { background-position: 90% 10%; background-size: 260%; }
+    /* A scrim keeps the white name readable on any picture. */
+    .card-media::after { content: ''; position: absolute; inset: 0;
+      background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 0%, rgba(0, 0, 0, 0.25) 45%, rgba(0, 0, 0, 0.72) 100%); }
+    .card:hover, .card:focus-visible { transform: translateY(-2px);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--sys-on-surface, #e8eaed) 14%, transparent), 0 14px 32px rgba(0, 0, 0, 0.24); }
+    .card:hover .still, .card:focus-visible .still, .card.on .still { opacity: 1; transform: scale(1.08); }
+    .card:hover .moving, .card:focus-visible .moving, .card.on .moving { opacity: 1; }
+    .card.on { box-shadow: 0 0 0 2px var(--sys-primary, #8ab4f8), 0 14px 32px rgba(0, 0, 0, 0.24); }
+    .card:focus-visible { outline: 2px solid var(--sys-primary, #8ab4f8); outline-offset: 3px; }
+    .eq { display: flex; align-items: center; justify-content: center; gap: 3px; padding: 0 22% 34px; opacity: 0; }
+    .eq i { flex: 1; height: calc(var(--h) * 46%); border-radius: 3px; background: rgba(255, 255, 255, 0.85); transform: scaleY(0.4); }
+    .card:hover .eq, .card:focus-visible .eq, .card.on .eq { opacity: 1; }
+    .card:hover .eq i, .card:focus-visible .eq i, .card.on .eq i { animation: sound 700ms ease-in-out infinite alternate; }
+    .eq i:nth-child(3n) { animation-delay: -250ms; } .eq i:nth-child(3n+1) { animation-delay: -500ms; }
+    .card-text { position: absolute; inset: auto 0 0 0; display: flex; flex-direction: column; gap: 1px; padding: 12px 14px; }
+    .card-name { display: inline-flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
+    .card-name svg { fill: currentColor; flex: none; }
+    .card-name svg:last-child:not(:first-child) { opacity: 0.7; margin-inline-start: auto; }
+    .card-desc { font-size: 12.5px; color: rgba(255, 255, 255, 0.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* How it is made: four steps above the box, joined by moving dots. */
+    .path { list-style: none; margin: 0 0 2px; padding: 0 6px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 0; }
+    .pstep { display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 12px 6px 6px; border-radius: 999px;
+      background: color-mix(in srgb, var(--gm-panel, #1d1f25) 72%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--sys-on-surface, #e8eaed) 7%, transparent);
+      animation: step-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--i) * 70ms); }
+    .pstep.main { background: color-mix(in srgb, var(--sys-primary, #8ab4f8) 14%, var(--gm-panel, #1d1f25)); }
+    .pdot { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 50%;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface-variant, #9aa0a6); }
+    .pstep.main .pdot { background: linear-gradient(135deg, #4f8df7, #9b6cf6); color: #fff; }
+    .pdot svg { fill: currentColor; }
+    .ptext { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+    .ptext b { font-size: 12.5px; font-weight: 500; color: var(--sys-on-surface, #15171c); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ptext small { font-size: 11.5px; color: var(--sys-on-surface-variant, #6b7280); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .link { flex: 0 1 34px; min-width: 14px; height: 2px; position: relative; overflow: hidden;
+      background: color-mix(in srgb, var(--sys-on-surface, #e8eaed) 12%, transparent); }
+    .link i { position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, var(--sys-primary, #8ab4f8), transparent);
+      animation: flow 1.6s linear infinite; }
+    :host-context([dir='rtl']) .link i { animation-direction: reverse; }
+    @keyframes flow { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+    /* Ghost text: a copy of the text behind the box, with the suggestion. */
+    .ta-wrap { position: relative; }
+    .gh, .ta-wrap textarea { font: inherit; font-size: 17px; line-height: 24px; padding: 14px 14px 4px; letter-spacing: normal; }
+    .gh { position: absolute; inset: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; color: transparent; }
+    .ta-wrap textarea { position: relative; z-index: 1; }
+    .g-typed { color: transparent; }
+    .g-sug { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.75; }
+    .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    /* "Tab use example · Subject · setting · light" beside the + button. */
+    .hint { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-inline-start: 4px; font-size: 12.5px;
+      color: var(--sys-on-surface-variant, #6b7280); opacity: 0; transform: translateY(2px); transition: opacity 180ms ease, transform 180ms ease; white-space: nowrap; overflow: hidden; }
+    .hint.shown { opacity: 1; transform: none; }
+    .hint kbd { font: inherit; font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 6px; border-radius: 6px;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface, #15171c);
+      box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--sys-on-surface, #e8eaed) 14%, transparent); }
+    .hint .how { overflow: hidden; text-overflow: ellipsis; opacity: 0.8; }
+    .hint .how::before { content: '·'; margin-inline-end: 7px; }
+
+    /* Enhance slides in once there is text; Live and Send share one slot. */
+    .enh { transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), margin 220ms ease; }
+    .enh:not(.shown) { width: 0; opacity: 0; transform: scale(0.5); margin-inline-end: -6px; pointer-events: none; overflow: hidden; }
+    .slot { position: relative; width: 40px; height: 40px; flex: none; }
+    .slot > .send, .slot > .live { position: absolute; inset: 0; transition: opacity 200ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .slot.live-on > .send { opacity: 0; transform: scale(0.6) rotate(-45deg); pointer-events: none; }
+    .slot.send-on > .live { opacity: 0; transform: scale(0.6); pointer-events: none; }
+    svg.stroke-i { fill: none !important; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    svg.stroke, svg.stroke path { fill: none !important; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+    @media (prefers-reduced-motion: reduce) {
+      .enh, .slot > .send, .slot > .live, .hint, .card, .card-media > span { transition: none !important; }
+      .link i, .eq i, .pstep { animation: none !important; }
+    }
 
     /* The chat's thinking: live steps, folded to one line when done. */
     .think { font-size: 14px; color: var(--sys-on-surface-variant, #6b7280); }
@@ -1894,7 +2213,18 @@ class GmHomeChat extends LitElement {
     @media (max-width: 600px) {
       .wrap.empty { gap: 18px; padding-bottom: 0; }
       .box { padding: 6px; border-radius: 26px; }
-      textarea { font-size: 16px; padding: 10px 4px; }
+      .gh, .ta-wrap textarea { font-size: 16px; padding: 10px 8px 4px; }
+      .hint .how { display: none; }
+      .cards { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; padding: 2px 2px 6px; margin-inline: -2px; }
+      .cards::-webkit-scrollbar { display: none; }
+      /* No soft shadow in the scrolling row: it gets clipped into a grey band. */
+      .card, .card:hover, .card:focus-visible { flex: 0 0 42%; height: 96px; scroll-snap-align: start;
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--sys-on-surface, #e8eaed) 10%, transparent); transform: none; }
+      .card.on { box-shadow: 0 0 0 2px var(--sys-primary, #8ab4f8); }
+      /* The path fits a phone: the model step keeps its words, the rest are icons. */
+      .pstep:not(.main) { padding: 4px; }
+      .pstep:not(.main) .ptext { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      .link { flex-basis: 18px; }
       .bubble { max-width: 88%; }
     }
   `;

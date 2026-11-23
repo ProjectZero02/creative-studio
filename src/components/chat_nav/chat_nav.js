@@ -33,22 +33,31 @@
  * (or ?new=1&project=<id>) through navEvent. A project's name opens its page
  * (/project?id=<id>); the caret beside it shows or hides its chats.
  */
-import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
+import { LitElement, css, html, nothing, svg as svgPart } from '/ui/vendor/lit-3.2.1.js';
 
 const OPEN_KEY = 'gm-nav-projects-open';
 // The five things Home makes. A row sets Home's mode (window event
 // gm-pick-kind {kind}); on another page it opens /home?mode=<kind>.
 const KINDS = ['image', 'video', 'music', 'voice', 'film'];
+// The menu's own icons: one set, drawn with 1.8px round strokes on the 24px
+// grid (an array of paths = a stroke icon). They replace a mix of filled
+// Material glyphs of different weights.
 const KIND_ICON = {
-  image: 'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V5h14zm-5.1-6.7-2.7 3.5-1.9-2.3L6.5 17h11z',
-  video: 'M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11zM15 16H5V8h10z',
-  music: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3z',
-  voice: 'M9 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 8c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4zm-6 4c.2-.7 3.3-2 6-2s5.8 1.3 6 2zM16 5.1a6 6 0 0 1 0 7.8l1.4 1.4a8 8 0 0 0 0-10.6z',
-  film: 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4zm2 14H4V10h16z',
+  image: ['M3.75 6.5a2.75 2.75 0 0 1 2.75-2.75h11a2.75 2.75 0 0 1 2.75 2.75v11a2.75 2.75 0 0 1-2.75 2.75h-11a2.75 2.75 0 0 1-2.75-2.75z',
+    'M9 7.6a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z', 'm20.25 15-4.5-4.5L7 19.25'],
+  video: ['M3.25 8A2.75 2.75 0 0 1 6 5.25h7.5A2.75 2.75 0 0 1 16.25 8v8a2.75 2.75 0 0 1-2.75 2.75H6A2.75 2.75 0 0 1 3.25 16z',
+    'm16.25 10.25 4.5-2.75v9l-4.5-2.75'],
+  music: ['M9 17.5V5.75l11-2V15.5', 'M6.5 15a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z', 'M17.5 13a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z'],
+  voice: ['M10 4.75a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z', 'M3.75 20.25c0-3.2 2.7-5.5 6.25-5.5s6.25 2.3 6.25 5.5',
+    'M17.25 6.5a4.5 4.5 0 0 1 0 5.5', 'M19.75 4.25a8 8 0 0 1 0 10'],
+  film: ['M3.75 9.75h16.5v8a2.5 2.5 0 0 1-2.5 2.5H6.25a2.5 2.5 0 0 1-2.5-2.5z',
+    'M3.9 9.6 3.4 7.4a2.5 2.5 0 0 1 1.85-3l10.5-2.5a2.5 2.5 0 0 1 3 1.85l.5 2.2z', 'm8.3 4.3 2.7 3.6', 'm13.6 3.05 2.7 3.6'],
 };
 const ICON = {
-  newchat: 'M3 17.2V21h3.8l11-11-3.8-3.8zM20.7 7a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0l-1.8 1.8 3.8 3.8z',
-  library: 'M22 16V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2zm-11-4 2 2.7 3-3.7 4 5H8zM2 6v14a2 2 0 0 0 2 2h14v-2H4V6z',
+  newchat: ['M11.5 4.25H6.75a2.5 2.5 0 0 0-2.5 2.5v10.5a2.5 2.5 0 0 0 2.5 2.5h10.5a2.5 2.5 0 0 0 2.5-2.5V12.5',
+    'M17.4 3.85a1.9 1.9 0 0 1 2.7 2.7l-7.6 7.6-3.5.8.8-3.5z'],
+  library: ['M7.25 3.75h10a3 3 0 0 1 3 3v10', 'M3.75 9.25a2.5 2.5 0 0 1 2.5-2.5h8.5a2.5 2.5 0 0 1 2.5 2.5v8.5a2.5 2.5 0 0 1-2.5 2.5h-8.5a2.5 2.5 0 0 1-2.5-2.5z',
+    'm3.9 17 3.6-3.6 3 3 2-2 4.6 4.6'],
   search: 'M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 14 15.5l.3.3v.8l5 5 1.5-1.5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z',
   folder: 'M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z',
   folderOpen: 'M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 12H4V8h16z',
@@ -57,7 +66,9 @@ const ICON = {
   caret: 'M10 6 8.6 7.4l4.6 4.6-4.6 4.6L10 18l6-6z',
   pin: 'M16 9V4h1V2H7v2h1v5l-2 2v2h5.2v7h1.6v-7H18v-2z',
 };
-const svg = (d, size = 20) => html`<svg viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true"><path d=${d}></path></svg>`;
+const svg = (d, size = 20) => (Array.isArray(d)
+  ? html`<svg class="stroke" viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true">${d.map((p) => svgPart`<path d=${p}></path>`)}</svg>`
+  : html`<svg viewBox="0 0 24 24" width=${size} height=${size} aria-hidden="true"><path d=${d}></path></svg>`);
 
 /** "today" | "yesterday" | "week" | "older" for an ISO time. */
 export function dateGroup(iso, now = new Date()) {
@@ -309,7 +320,7 @@ class GmChatNav extends LitElement {
 
   _row({ icon, label, active, onClick, title }) {
     return html`<button type="button" class="row ${active ? 'active' : ''}" @click=${onClick} title=${this.open ? '' : (title || label)} aria-label=${label}>
-      ${svg(icon, 22)}<span class="lbl">${label}</span></button>`;
+      ${svg(icon, 20)}<span class="lbl">${label}</span></button>`;
   }
 
   _editor(kind, id, value) {
@@ -429,12 +440,19 @@ class GmChatNav extends LitElement {
     nav { display: flex; flex-direction: column; gap: 2px; }
     .kinds { display: flex; flex-direction: column; gap: 2px; margin: 8px 0 4px; }
     /* Rows match the rail's Mesop items: 40px, icon at 10px, pill shape. */
-    .row { display: flex; align-items: center; gap: 14px; width: 100%; height: 40px; padding: 0 9px; border: 0; border-radius: 20px;
-      background: transparent; cursor: pointer; text-align: start; font-size: 14px; color: var(--sys-on-surface, #e8eaed); overflow: hidden; }
-    .row svg { color: var(--sys-on-surface-variant, #9aa0a6); }
+    /* Rows match the rail's other items: 40px, a 20px icon 10px in, so every
+       icon sits on one centre line, open or closed. */
+    .row { display: flex; align-items: center; gap: 14px; width: 100%; height: 40px; padding: 0 10px; border: 0; border-radius: 20px;
+      background: transparent; cursor: pointer; text-align: start; font-size: 14px; color: var(--sys-on-surface, #e8eaed); overflow: hidden;
+      transition: background-color 140ms ease, color 140ms ease; }
+    .row svg { color: var(--sys-on-surface-variant, #9aa0a6); transition: color 140ms ease; }
+    svg.stroke { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .row:hover { background: var(--gm-hover, rgba(127, 127, 127, 0.12)); }
+    .row:hover svg { color: var(--sys-on-surface, #e8eaed); }
+    /* The open item: a primary tint and a primary icon, not just grey. */
     .row.active { background: var(--gm-active-nav, rgba(127, 127, 127, 0.18)); font-weight: 600; }
-    .row.active svg { color: var(--sys-on-surface, #e8eaed); }
+    .row.active svg { color: var(--sys-primary, #8ab4f8); }
+    .row:focus-visible, .chat-open:focus-visible, .more:focus-visible, .caret-btn:focus-visible, .head-btn:focus-visible { outline: 2px solid var(--sys-primary, #8ab4f8); outline-offset: -2px; }
     .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 1; transition: opacity 160ms ease 70ms; }
     :host(:not([open])) .lbl { opacity: 0; transition: opacity 70ms ease; }
     .lists { display: flex; flex-direction: column; gap: 1px; margin-top: 8px; animation: fade 220ms ease both; }

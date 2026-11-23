@@ -205,10 +205,11 @@ html body ::-webkit-scrollbar-thumb {
 html body ::-webkit-scrollbar-thumb:hover { background-color: var(--sys-outline); }
 
 /* ---------- Focus: always visible for keyboard users ---------- */
+/* The outline follows each control's own corners (no forced radius, which
+   squared off round and pill buttons while focused). */
 html body :focus-visible {
   outline: 2px solid var(--gm-focus);
   outline-offset: 2px;
-  border-radius: 6px;
 }
 
 /* ---------- Controls: calm, flat, consistent ---------- */
@@ -316,7 +317,8 @@ html body .gm-nav .mat-mdc-button-persistent-ripple::before,
 html body .gm-nav .mat-mdc-button-ripple { opacity: 0 !important; }
 html body .gm-nav .mat-mdc-button-base:hover { background-color: var(--gm-hover); }
 /* Only real keyboard focus gets the ring (the drawer focuses its first button on load). */
-html body .gm-nav button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: 1px; }
+/* Inside the button, so the rail's overflow never clips the ring. */
+html body .gm-nav button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: -2px; }
 html body .gm-nav button:focus-visible:not(.cdk-keyboard-focused) { outline: none; }
 /* Instant client-side rail toggle (theme_manager.js sets html[data-sidenav]). */
 html[data-sidenav="open"] body mat-sidenav.mat-drawer {
@@ -1267,8 +1269,39 @@ html body .gm-set-row-icon {
 }
 html body .gm-set-body .gm-usage,
 html body .gm-set-body .gm-brand { width: 100%; max-width: none; }
+/* Header: a solid title and a quiet icon tile (no gradient text or glow). */
+html body .gm-set-top .gm-header-hero { margin-bottom: 20px; }
+html body .gm-set-top .gm-title-studio h1 {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--sys-on-surface);
+  font-size: clamp(26px, 1.2rem + 1vw, 34px);
+}
+html body .gm-set-top .gm-hero-icon {
+  width: 40px; height: 40px; border-radius: 12px;
+  background: var(--gm-tonal); color: var(--sys-on-surface); box-shadow: none;
+}
+html body .gm-set-top .gm-hero-icon .mat-icon {
+  width: 22px !important; height: 22px !important; font-size: 22px !important; line-height: 22px !important;
+}
+/* Keyboard focus on the section list. */
+html body .gm-set-nav-item button:focus-visible,
+html body .gm-set-nav-item button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: 2px; }
+html body .gm-set-nav-item .mat-mdc-button-persistent-ripple::before { opacity: 0 !important; }
+/* Usage: the period switch sits at the start, not centred. */
+html body .gm-set-body .gm-usage .gm-filter-row { justify-content: flex-start; margin-bottom: 0; }
+/* My brand inside Settings: the brands as a row of cards above a full-width
+   editor (the side column squeezed the editor). */
+html body .gm-set-body .gm-brand-page { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+html body .gm-set-body .gm-brand-list { flex-direction: row; flex-wrap: wrap; overflow: visible; padding-bottom: 0; }
+html body .gm-set-body .gm-brand-card { flex: 0 1 220px; min-width: 0; max-width: 260px; min-height: 56px; }
+html body .gm-set-body .gm-brand-card-logo { width: 40px; height: 40px; flex-basis: 40px; }
 @media (max-width: 760px) {
   html body .gm-settings { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  /* A switch stays on the same line as its label. */
+  html body .gm-set-row:has(.mat-mdc-slide-toggle) { flex-wrap: nowrap; }
+  html body .gm-set-body .gm-brand-card { flex: 1 1 160px; max-width: none; }
   html body .gm-set-nav {
     flex-direction: row; position: static; overflow-x: auto; scrollbar-width: none;
     gap: 6px; padding-bottom: 2px;
@@ -1278,13 +1311,7 @@ html body .gm-set-body .gm-brand { width: 100%; max-width: none; }
 }
 
 /* ---------- Home chat (components/home_chat) ---------- */
-/* The headline gradient, read inside the chat's shadow DOM. */
-html body {
-  --gm-home-title-grad: linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 38%, #1a5fd8 72%, #7b3fe4 100%);
-}
-html body.dark-theme {
-  --gm-home-title-grad: linear-gradient(100deg, #fff 0%, #fff 38%, #8ab4f8 72%, #c58af9 100%);
-}
+/* The headline gradient lives in home_chat.js, keyed on its [dark] attribute. */
 /* The chat sizes itself to the screen, so the frame adds no bottom gap. */
 html body .gm-home-chat { gap: 0; }
 /* Home fits the window with no scroll bar: drop the page's bottom padding and
