@@ -19,6 +19,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
+from typing import Any
 
 import mesop as me
 from google.cloud import logging as cloud_logging
@@ -66,6 +67,27 @@ def get_logger(name: str):
 
 # Central analytics logger
 analytics_logger = get_logger("genmedia.analytics")
+
+
+def extract_usage_metadata(response: Any) -> dict[str, int]:
+    """Extract billable token counts from a Gemini response."""
+    usage_metadata = getattr(response, "usage_metadata", None)
+    if not usage_metadata:
+        return {}
+
+    fields = {
+        "cached_content_token_count": "cached_prompt_tokens",
+        "prompt_token_count": "prompt_tokens",
+        "candidates_token_count": "candidates_tokens",
+        "thoughts_token_count": "thoughts_tokens",
+        "tool_use_prompt_token_count": "tool_use_prompt_tokens",
+        "total_token_count": "total_tokens",
+    }
+    return {
+        destination: value
+        for source, destination in fields.items()
+        if (value := getattr(usage_metadata, source, None)) is not None
+    }
 
 
 def log_page_view(page_name: str, session_id: str = None):

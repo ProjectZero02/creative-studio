@@ -14,7 +14,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from common.analytics import track_model_call
+from common.analytics import extract_usage_metadata, track_model_call
 from common.error_handling import ErrorCategory, GenerationError, classify_error
 
 
@@ -162,9 +162,6 @@ def test_track_model_call_upstream_failure(mock_logger):
     assert extra["billing_units"] == {"video_seconds_generated": 8}
 
 
-from models.gemini import _extract_usage_metadata
-
-
 def test_extract_usage_metadata():
     class DummyUsageMetadata:
         cached_content_token_count = 12
@@ -177,7 +174,7 @@ def test_extract_usage_metadata():
     class DummyResponse:
         usage_metadata = DummyUsageMetadata()
 
-    metadata = _extract_usage_metadata(DummyResponse())
+    metadata = extract_usage_metadata(DummyResponse())
     assert metadata == {
         "cached_prompt_tokens": 12,
         "prompt_tokens": 120,

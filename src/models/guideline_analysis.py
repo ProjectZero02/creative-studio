@@ -13,7 +13,8 @@
 # limitations under the License.
 """Model logic for guideline analysis."""
 
-from models.gemini import generate_critique_questions, client, types
+from common.analytics import extract_usage_metadata, track_model_call
+from models.gemini import client, generate_critique_questions, types
 from pydantic import BaseModel, Field
 from config.default import Default
 
@@ -178,9 +179,11 @@ def _generate_questions_from_prompt(prompt_template: str, image_uri: str | None 
     if image_uri:
         contents.append(types.Part.from_uri(file_uri=image_uri, mime_type="image/png"))
 
-    response = client.models.generate_content(
-        model=model_name, contents=contents, config=config
-    )
+    with track_model_call(model_name=model_name, task="guideline_questions") as ctx:
+        response = client.models.generate_content(
+            model=model_name, contents=contents, config=config
+        )
+        ctx["billing_units"].update(extract_usage_metadata(response))
     try:
         qa_list = QAList.model_validate_json(response.text)
         return [qa.question for qa in qa_list.qas]

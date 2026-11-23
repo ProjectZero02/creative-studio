@@ -23,7 +23,11 @@ from tenacity import (
     wait_exponential,
 )
 
-from common.analytics import analytics_logger, track_model_call
+from common.analytics import (
+    analytics_logger,
+    extract_usage_metadata,
+    track_model_call,
+)
 from common.error_handling import GenerationError
 from config.default import Default
 from config.rewriters import VTO_PLACEMENT_CRITIQUE_PROMPT
@@ -91,12 +95,13 @@ def evaluate_vto_placement(
         temperature=cfg.TEMP_BEST_IMAGE_SELECTION,
     )
 
-    with track_model_call(model_name=model_name, task="vto_placement_critique"):
+    with track_model_call(model_name=model_name, task="vto_placement_critique") as ctx:
         response = critique_client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=gen_config,
         )
+        ctx["billing_units"].update(extract_usage_metadata(response))
 
     return VTOPlacementCritique.model_validate_json(response.text)
 

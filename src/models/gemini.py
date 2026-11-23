@@ -29,7 +29,11 @@ from tenacity import (
     wait_exponential,
 )
 
-from common.analytics import analytics_logger, track_model_call
+from common.analytics import (
+    analytics_logger,
+    extract_usage_metadata as _extract_usage_metadata,
+    track_model_call,
+)
 from common.error_handling import GenerationError
 from common.storage import store_to_gcs
 from config.default import Default  # Import Default for cfg
@@ -85,26 +89,6 @@ class RoomList(BaseModel):
         ...,
         description="A list of rooms identified in the floor plan.",
     )
-
-
-def _extract_usage_metadata(response: Any) -> dict[str, int]:
-    """Extract billable token counts from a Gemini response."""
-    units = {}
-    if hasattr(response, "usage_metadata") and response.usage_metadata:
-        um = response.usage_metadata
-        fields = {
-            "cached_content_token_count": "cached_prompt_tokens",
-            "prompt_token_count": "prompt_tokens",
-            "candidates_token_count": "candidates_tokens",
-            "thoughts_token_count": "thoughts_tokens",
-            "tool_use_prompt_token_count": "tool_use_prompt_tokens",
-            "total_token_count": "total_tokens",
-        }
-        for source, destination in fields.items():
-            value = getattr(um, source, None)
-            if value is not None:
-                units[destination] = value
-    return units
 
 
 # Initialize client and default model ID for rewriter

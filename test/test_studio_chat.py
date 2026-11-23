@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 from google.genai import types
 
+from common import usage
 from services import studio_chat
 from services.live_jobs import DONE, LiveJobs, RunResult
 
@@ -37,6 +38,7 @@ def instant():
 def fresh(monkeypatch):
     jobs = LiveJobs(instant())
     monkeypatch.setattr(studio_chat, "get_live_jobs", lambda: jobs)
+    monkeypatch.setattr(usage, "record", lambda *args, **kwargs: None)
     studio_chat.reset(OWNER)
     yield jobs
     studio_chat.reset(OWNER)

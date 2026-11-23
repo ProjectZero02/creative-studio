@@ -35,6 +35,7 @@ from typing import Any
 
 from google.genai import types
 
+from common.analytics import extract_usage_metadata, track_model_call
 from services.live_agent import (
     ACT,
     Deferred,
@@ -335,7 +336,11 @@ def _model_reply(s: ChatSession, message: str, client: Any, model: str) -> tuple
     started: list[LiveJob] = []
     text = ""
     for _ in range(MAX_TOOL_ROUNDS):
-        response = client.models.generate_content(model=model, contents=contents, config=config)
+        with track_model_call(model_name=model, task="studio_chat") as ctx:
+            response = client.models.generate_content(
+                model=model, contents=contents, config=config
+            )
+            ctx["billing_units"].update(extract_usage_metadata(response))
         candidate = (response.candidates or [None])[0]
         content = candidate.content if candidate and candidate.content else None
         if content is None:
