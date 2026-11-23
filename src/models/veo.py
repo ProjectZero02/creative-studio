@@ -62,7 +62,9 @@ PERSON_GENERATION_MAP = {
 }
 
 
-def generate_video(request: VideoGenerationRequest) -> tuple[str, str]:
+def generate_video(
+    request: VideoGenerationRequest, feature: str | None = None
+) -> tuple[str, str]:
     """Generate a video based on a request object using the genai SDK.
     This function handles text-to-video, image-to-video, and interpolation.
     """
@@ -81,7 +83,9 @@ def generate_video(request: VideoGenerationRequest) -> tuple[str, str]:
         "generate_audio": getattr(request, "generate_audio", False),
     }
 
-    with track_model_call(model_config.model_name, billing_units=billing_units) as ctx:
+    with track_model_call(
+        model_config.model_name, billing_units=billing_units, feature=feature
+    ) as ctx:
         client = get_veo_client(model_config.model_name)
 
         # Prepare Generation Configuration

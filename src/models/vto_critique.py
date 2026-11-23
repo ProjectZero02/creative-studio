@@ -72,6 +72,7 @@ def _infer_image_mime_type(uri: str) -> str:
 def evaluate_vto_placement(
     apparel_image_gcs: str,
     result_image_gcs: str,
+    feature: str | None = None,
 ) -> VTOPlacementCritique:
     """Evaluate garment placement quality in a VTO result image using Gemini."""
     model_name = cfg.GEMINI_CRITIQUE_MODEL_ID
@@ -95,7 +96,11 @@ def evaluate_vto_placement(
         temperature=cfg.TEMP_BEST_IMAGE_SELECTION,
     )
 
-    with track_model_call(model_name=model_name, task="vto_placement_critique") as ctx:
+    with track_model_call(
+        model_name=model_name,
+        task="vto_placement_critique",
+        feature=feature,
+    ) as ctx:
         response = critique_client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
@@ -109,12 +114,14 @@ def evaluate_vto_placement(
 def run_vto_critique_workflow(
     apparel_image_gcs: str,
     result_image_gcs: str,
+    feature: str | None = None,
 ) -> dict[str, str | bool]:
     """Run the VTO critique workflow (Stage 1: placement analysis)."""
     try:
         critique = evaluate_vto_placement(
             apparel_image_gcs=apparel_image_gcs,
             result_image_gcs=result_image_gcs,
+            feature=feature,
         )
     except Exception as exc:
         analytics_logger.error(f"Error during VTO placement analysis: {exc}")

@@ -128,6 +128,19 @@ def test_media_estimate_uses_dynamic_unit_rate(monkeypatch):
     ) == pytest.approx(1.2)
 
 
+def test_image_estimate_prefers_actual_outputs_over_requested_count(monkeypatch):
+    monkeypatch.setattr(
+        pricing,
+        "get_unit_rate",
+        lambda model, kind: pricing.UnitRate(0.02, "image", "2026-11-23T00:00:00Z"),
+    )
+
+    assert pricing.estimate(
+        "gemini-3-pro-image",
+        {"sample_count": 4, "images_generated": 2},
+    ) == pytest.approx(0.04)
+
+
 def test_dynamic_media_rate_is_stored_with_the_usage_event(monkeypatch):
     monkeypatch.setattr(
         pricing,

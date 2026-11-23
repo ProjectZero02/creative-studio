@@ -31,9 +31,10 @@ from tenacity import (
 
 from common.analytics import (
     analytics_logger,
-    extract_usage_metadata as _extract_usage_metadata,
+    extract_generated_image_count,
     track_model_call,
 )
+from common.analytics import extract_usage_metadata as _extract_usage_metadata
 from common.error_handling import GenerationError
 from common.storage import store_to_gcs
 from config.default import Default  # Import Default for cfg
@@ -44,7 +45,6 @@ from models.character_consistency_models import (
     FacialCompositeProfile,
     GeneratedPrompts,
 )
-from models.thinking import dynamic_thinking
 from models.model_setup import (
     GeminiModelSetup,
 )
@@ -54,6 +54,7 @@ from models.shop_the_look_models import (
     CatalogRecord,
     GeneratedImageAccuracyWrapper,
 )
+from models.thinking import dynamic_thinking
 
 
 class Transformation(BaseModel):
@@ -111,6 +112,7 @@ def generate_image_from_prompt_and_images(
     thinking_level: str | None = None,
     include_thoughts: bool = False,
     model_name: str | None = None,
+    feature: str | None = None,
 ) -> tuple[list[str], float, list[str], dict[str, Any] | None, list[str]]:
     """Generates images from a prompt and a list of images."""
     start_time = time.time()
@@ -200,6 +202,7 @@ def generate_image_from_prompt_and_images(
         billing_units=billing_units,
         aspect_ratio=aspect_ratio,
         num_images=len(images),
+        feature=feature,
     ) as ctx:
         response = client.models.generate_content(
             model=model_name,
@@ -213,6 +216,10 @@ def generate_image_from_prompt_and_images(
             ),
         )
         ctx["billing_units"].update(_extract_usage_metadata(response))
+        generated_image_count = extract_generated_image_count(response)
+        ctx["billing_units"]["sample_count"] = generated_image_count
+        ctx["billing_units"]["images_generated"] = generated_image_count
+        ctx["details"]["num_images"] = generated_image_count
 
     end_time = time.time()
     execution_time = end_time - start_time
@@ -289,7 +296,9 @@ def generate_image_from_prompt_and_images(
     retry=retry_if_exception_type(Exception),
     reraise=True,
 )
-def extract_room_names_from_image(image_uri: str) -> list[str]:
+def extract_room_names_from_image(
+    image_uri: str, feature: str | None = None
+) -> list[str]:
     """Analyzes a floor plan image and extracts the names of the rooms."""
     model_name = cfg.MODEL_ID  # Use a fast model for this analysis task
 
@@ -306,7 +315,9 @@ def extract_room_names_from_image(image_uri: str) -> list[str]:
         types.Part.from_uri(file_uri=image_uri, mime_type="image/png"),
     ]
 
-    with track_model_call(model_name=model_name, task="extract_room_names") as ctx:
+    with track_model_call(
+        model_name=model_name, task="extract_room_names", feature=feature
+    ) as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,

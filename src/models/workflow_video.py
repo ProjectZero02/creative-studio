@@ -152,6 +152,7 @@ def generate_workflow_image_to_video(
     image_gcs_uri: str,
     prompt: str,
     duration_seconds: int,
+    feature: str | None = None,
 ) -> str | None:
     """Animate one image into a 16:9 720p clip with Omni or Veo.
 
@@ -185,6 +186,7 @@ def generate_workflow_image_to_video(
                 reference_image_gcs=image_gcs_uri,
                 reference_image_mime_type="image/png",
             ),
+            feature=feature,
         )
         return gcs_uri or None
 
@@ -202,6 +204,7 @@ def generate_workflow_image_to_video(
             resolution=WORKFLOW_RESOLUTION,
             person_generation="Allow (Adults only)",
         ),
+        feature=feature,
     )
     return video_uris[0] if video_uris else None
 
@@ -210,6 +213,7 @@ def generate_workflow_reference_video(
     model_name: str,
     reference_gcs_uris: list[str],
     prompt: str,
+    feature: str | None = None,
 ) -> str | None:
     """Generate a 16:9 720p clip conditioned on reference images.
 
@@ -246,6 +250,7 @@ def generate_workflow_reference_video(
                 model_version_id=omni_version,
                 r2v_references=references,
             ),
+            feature=feature,
         )
         return gcs_uri or None
 
@@ -267,5 +272,6 @@ def generate_workflow_reference_video(
             person_generation="dont_allow",
             r2v_references=references,
         ),
+        feature=feature,
     )
     return video_uris[0] if video_uris else None

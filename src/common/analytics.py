@@ -90,6 +90,19 @@ def extract_usage_metadata(response: Any) -> dict[str, int]:
     }
 
 
+def extract_generated_image_count(response: Any) -> int:
+    """Count final image parts returned by a generative response."""
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return 0
+    content = getattr(candidates[0], "content", None)
+    return sum(
+        bool(getattr(part, "inline_data", None))
+        and not getattr(part, "thought", False)
+        for part in getattr(content, "parts", None) or []
+    )
+
+
 def log_page_view(page_name: str, session_id: str = None):
     """Logs a page view event."""
     try:
@@ -166,6 +179,9 @@ def log_model_call(
         extra_data["billing_units"] = billing_units
     if pipeline_id:
         extra_data["pipeline_id"] = pipeline_id
+    feature = str((details or {}).get("feature") or "")
+    if feature:
+        extra_data["feature"] = feature
     if error:
         extra_data["error"] = error
 
@@ -182,7 +198,7 @@ def log_model_call(
             billing_units,
             page_name if page_name != "unknown" else "",
             str((details or {}).get("task") or ""),
-            feature=str((details or {}).get("feature") or ""),
+            feature=feature,
         )
     except Exception:  # usage is best effort
         pass

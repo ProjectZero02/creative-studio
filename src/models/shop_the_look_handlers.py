@@ -340,6 +340,7 @@ def on_click_vto_look(e: me.ClickEvent):  # pylint: disable=unused-argument
                     person_gcs_uri=state.reference_image_gcs_model,
                     product_gcs_uri=row.clothing_image,
                     sample_count=int(state.vto_sample_count),
+                    feature="shop_the_look",
                 )
 
                 temp_progressions = [

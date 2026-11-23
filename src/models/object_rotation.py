@@ -70,6 +70,7 @@ async def _generate_single_view(prompt: str, image_uri: str, image_model: str) -
         aspect_ratio="1:1", # Assuming a square aspect ratio for product views
         gcs_folder="object_rotation_views",
         model_name=image_model,
+        feature="product_360",
     )
     if not gcs_uris:
         raise Exception(f"Failed to generate view for prompt: {prompt}")
@@ -129,6 +130,7 @@ def generate_rotation_video(product_views: dict[str, str], video_model: str) -> 
             product_views["left"],
         ],
         prompt=prompt,
+        feature="product_360",
     )
 
     if not video_uri:

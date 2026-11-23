@@ -499,7 +499,7 @@ def on_try_on(e: me.ClickEvent):
     vs.error_dialog_open = False
     yield
     try:
-        for _ in vto.on_generate(e):
+        for _ in vto.on_generate(e, feature="fashion"):
             if vs.error_dialog_open:
                 progress_fail(state, friendly_error(vs.error_message))
                 vs.error_dialog_open = False

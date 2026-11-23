@@ -43,6 +43,13 @@ KIND_LABELS = {
     "speech": "Speech",
     "text": "Gemini text",
 }
+FEATURE_LABELS = {
+    "product_360": "Product 360",
+    "fashion": "Fashion",
+    "interior_design": "Interior Design",
+    "shop_the_look": "Shop the Look",
+    "virtual_try_on": "Virtual Try-On",
+}
 
 
 def _label(text: str, cls: str) -> None:
@@ -207,7 +214,12 @@ def usage_content(embedded: bool = False):
                         for col in ("Product", "Calls", "Failed", "Est. cost"):
                             _label(col, "gm-usage-th")
                         for row in summary["features"]:
-                            _label(row["feature"], "gm-usage-model")
+                            _label(
+                                FEATURE_LABELS.get(
+                                    row["feature"], row["feature"].replace("_", " ").title()
+                                ),
+                                "gm-usage-model",
+                            )
                             me.text(f"{row['calls']:,}")
                             me.text(f"{row['failed']:,}")
                             me.text(money(row["cost"]))

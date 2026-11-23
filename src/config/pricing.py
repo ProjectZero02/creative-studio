@@ -345,10 +345,14 @@ def estimate_details(
         }
     quantity = {
         "video": units.get("video_seconds_generated"),
-        "image": units.get("sample_count") or units.get("num_images"),
+        "image": units.get("images_generated"),
         "music": units.get("sample_count"),
         "speech": units.get("characters_synthesized"),
     }[kind]
+    if kind == "image" and quantity is None:
+        quantity = units.get("sample_count")
+    if kind == "image" and quantity is None:
+        quantity = units.get("num_images")
     cost = float(quantity or 0) * rate.price_per_unit
     return cost, {
         "pricing_status": "dynamic",

@@ -199,7 +199,7 @@ def show_snackbar(state: PageState, message: str):
 
 
 @track_click(element_id="vto_generate_button")
-def on_generate(e: me.ClickEvent):
+def on_generate(e: me.ClickEvent, feature: str = "virtual_try_on"):
     """Generate VTO handler."""
     app_state = me.state(AppState)
     state = me.state(PageState)
@@ -217,6 +217,7 @@ def on_generate(e: me.ClickEvent):
             state.vto_base_steps,
             person_generation=state.person_generation,
             safety_filter_level=state.safety_filter_level,
+            feature=feature,
         )
         end_time = time.time()
         generation_time = end_time - start_time
@@ -249,6 +250,7 @@ def on_generate(e: me.ClickEvent):
                 critique_data = run_vto_critique_workflow(
                     apparel_image_gcs=state.product_image_gcs,
                     result_image_gcs=uri,
+                    feature=feature,
                 )
                 critique_map[uri] = critique_data
                 state.critique_results_json = json.dumps(
