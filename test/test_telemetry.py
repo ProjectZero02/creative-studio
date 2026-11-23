@@ -167,8 +167,11 @@ from models.gemini import _extract_usage_metadata
 
 def test_extract_usage_metadata():
     class DummyUsageMetadata:
+        cached_content_token_count = 12
         prompt_token_count = 120
         candidates_token_count = 45
+        thoughts_token_count = 8
+        tool_use_prompt_token_count = 6
         total_token_count = 165
 
     class DummyResponse:
@@ -176,8 +179,11 @@ def test_extract_usage_metadata():
 
     metadata = _extract_usage_metadata(DummyResponse())
     assert metadata == {
+        "cached_prompt_tokens": 12,
         "prompt_tokens": 120,
         "candidates_tokens": 45,
+        "thoughts_tokens": 8,
+        "tool_use_prompt_tokens": 6,
         "total_tokens": 165,
     }
 

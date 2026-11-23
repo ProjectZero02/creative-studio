@@ -29,9 +29,32 @@ def test_estimates_follow_the_billing_units():
     assert pricing.estimate("chirp-3-hd", {"characters_synthesized": 1_000_000}) == pytest.approx(30)
     text = pricing.estimate("gemini-3.5-flash", {"prompt_tokens": 1_000_000, "candidates_tokens": 1_000_000})
     assert text == pytest.approx(2.8)
+    text_with_reasoning = pricing.estimate(
+        "gemini-3.5-flash",
+        {
+            "prompt_tokens": 1_000_000,
+            "tool_use_prompt_tokens": 500_000,
+            "candidates_tokens": 1_000_000,
+            "thoughts_tokens": 500_000,
+        },
+    )
+    assert text_with_reasoning == pytest.approx(4.2)
     neon = pricing.estimate("gemini-4-neon", {"prompt_tokens": 1_000_000, "candidates_tokens": 1_000_000})
     assert neon == pytest.approx(18.0)
     assert pricing.estimate("veo-3.1", {"video_seconds_generated": 8}, "failure") == 0
+
+
+def test_event_keeps_billing_units_for_auditability():
+    units = {
+        "prompt_tokens": 120,
+        "candidates_tokens": 45,
+        "total_tokens": 165,
+    }
+
+    recorded = usage.event("a@x", "gemini-3.5-flash", "success", units, at=1_800_000_000)
+
+    assert recorded["billing_units"] == units
+    assert recorded["billing_units"] is not units
 
 
 def test_kinds():

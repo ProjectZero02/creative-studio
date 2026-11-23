@@ -95,5 +95,7 @@ def estimate(model: str, units: dict | None, status: str = "success") -> float:
         return chars / 1e6 * (_match(model, SPEECH_PER_MILLION_CHARS) or 10.0)
     price_in, price_out = _match(model, TOKENS_PER_MILLION) or (0.30, 2.50)
     tokens_in = float(units.get("prompt_tokens") or 0)
+    tokens_in += float(units.get("tool_use_prompt_tokens") or 0)
     tokens_out = float(units.get("candidates_tokens") or 0)
+    tokens_out += float(units.get("thoughts_tokens") or 0)
     return tokens_in / 1e6 * price_in + tokens_out / 1e6 * price_out

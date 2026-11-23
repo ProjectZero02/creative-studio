@@ -75,6 +75,7 @@ def event(
         "owner": owner or "unknown",
         "model": model or "unknown",
         "kind": pricing.kind_of(model, units),
+        "billing_units": dict(units),
         "status": status,
         "page": page or "",
         "task": task or "",
