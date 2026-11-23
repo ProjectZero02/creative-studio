@@ -49,6 +49,9 @@ from services.story_models import (
     build_stitch_plan,
     cast_from_scenario,
     default_music_prompt,
+    frame_for,
+    frame_scenes,
+    frames_ready,
     parse_brief,
     parse_scenario,
     parse_scene_links,
@@ -60,6 +63,7 @@ from services.story_models import (
     parse_voice,
     relink_scene,
     set_text_from_cast,
+    take_groups,
 )
 from services.story_service import get_backend, is_mock_mode, resolve_video_engine
 from services.story_store import StoryAccessError, get_store
@@ -362,6 +366,8 @@ def job_snapshot(job_id: str, owner: str) -> dict | None:
         "targets": dict(job.params.get("task_targets") or {}),
         # Subtitle jobs: which download is being made.
         "params": {"variant": job.params.get("variant", "")},
+        # A job this one started when it finished (Setup: breakdown, then frames).
+        "next_job": job.params.get("next_job", ""),
     }
 
 
@@ -370,8 +376,11 @@ def job_snapshot(job_id: str, owner: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def start_scenario(story_id: str, owner: str) -> Job:
-    job = _new_job(owner, story_id, "scenario")
+def start_scenario(story_id: str, owner: str, then_frames: bool = False) -> Job:
+    """Write the breakdown. `then_frames`: when it is written, paint the
+    start frame of every take right away (Setup's guided flow); the new job's
+    id is in the snapshot as "next_job"."""
+    job = _new_job(owner, story_id, "scenario", {"then_frames": then_frames})
     task = _add_task(job, "Writing the scenario with Gemini", "scenario")
 
     def work(job: Job) -> None:
@@ -441,7 +450,15 @@ def start_scenario(story_id: str, owner: str) -> Job:
             mutate_story(story_id, owner, apply)
             return ""
 
-        _run_task(task, write)
+        if (
+            _run_task(task, write, job.cancel_event)
+            and then_frames
+            and not job.cancel_event.is_set()
+        ):
+            try:
+                job.params["next_job"] = start_storyboard(story_id, owner).id
+            except Exception:
+                logger.exception("Story %s: could not start the frames", story_id)
 
     return _spawn(job, work)
 
@@ -492,23 +509,32 @@ def start_scene_rewrite(story_id: str, owner: str, index: int) -> Job:
 
 
 def start_storyboard(
-    story_id: str, owner: str, indices: list[int] | None = None
+    story_id: str,
+    owner: str,
+    indices: list[int] | None = None,
+    note: str = "",
 ) -> Job:
-    """Paint one still per scene. Scene 1 goes first and anchors the look.
+    """Paint the start frame of each take. Scene 1 goes first and anchors
+    the look. Scenes that continue a take need no frame of their own: the
+    take carries on from its clip (see frame_scenes).
 
-    `indices` limits the run to those scenes (regenerate); otherwise every
-    scene without a frame is painted.
+    `indices` limits the run to those scenes (redo); a scene inside a take
+    repaints its take's start frame. Otherwise every take start without a
+    frame is painted. `note`: the director's "Redo with note" text.
     """
     story = get_store().get(story_id, owner)
     if story is None:
         raise StoryAccessError("Story not found.")
+    starts = frame_scenes(story)
     if indices is None:
-        targets = [i for i, s in enumerate(story.scenes) if not s.frame_uri]
+        targets = [i for i in starts if not story.scenes[i].frame_uri]
     else:
-        targets = sorted({i for i in indices if 0 <= i < len(story.scenes)})
+        targets = sorted(
+            {story.take_start(i) for i in indices if 0 <= i < len(story.scenes)}
+        )
     job = _new_job(owner, story_id, "storyboard", {"indices": targets})
     tasks = {
-        i: _add_task(job, f"Scene {i + 1} · storyboard frame", "frame", i)
+        i: _add_task(job, f"Take {starts.index(i) + 1 if i in starts else i + 1} · start frame", "frame", i)
         for i in targets
     }
     cfg = Default()
@@ -520,13 +546,19 @@ def start_storyboard(
             current = get_store().get(story_id, owner)
             if current is None or i >= len(current.scenes):
                 raise StoryAccessError("Story not found.")
-            uri = backend.generate_frame(current, i, reference)
-            scene_id = current.scenes[i].id
+            uri = (
+                backend.generate_frame(current, i, reference, note=note)
+                if note
+                else backend.generate_frame(current, i, reference)
+            )
+            take = [current.scenes[j].id for g in take_groups(current) if i in g for j in g]
 
             def apply(s: Story) -> None:
                 for sc in s.scenes:
-                    if sc.id == scene_id:
+                    if sc.id == take[0]:
                         sc.frame_uri = uri
+                    if sc.id in take:
+                        # The take starts from this frame: its clips change.
                         sc.clear_clip()
                 s.clear_films()
 
@@ -546,34 +578,15 @@ def start_storyboard(
             and 0 not in targets
         ):
             reference = story.scenes[0].frame_uri
-        # A scene later in a continuous take is painted from the frame that
-        # opens its take, after it, so the set stays the same through the take.
-        later = [i for i in rest if story.continues_take(i)]
-
-        def take_reference(i: int) -> str:
-            current = get_store().get(story_id, owner) or story
-            return current.scenes[current.take_start(i)].frame_uri or reference
-
         workers = max(1, cfg.STORY_MAX_PARALLEL)
         with _Pool(max_workers=workers) as pool:
             for i in rest:
                 if job.cancel_event.is_set():
                     break
-                if i not in later:
-                    pool.submit(
-                        _run_task,
-                        tasks[i],
-                        lambda i=i: paint(i, reference),
-                        job.cancel_event,
-                    )
-        with _Pool(max_workers=workers) as pool:
-            for i in later:
-                if job.cancel_event.is_set():
-                    break
                 pool.submit(
                     _run_task,
                     tasks[i],
-                    lambda i=i: paint(i, take_reference(i)),
+                    lambda i=i: paint(i, reference),
                     job.cancel_event,
                 )
 
@@ -614,13 +627,12 @@ def start_scene_clips(story_id: str, owner: str, indices: list[int]) -> Job:
             if current is None or i >= len(current.scenes):
                 raise StoryAccessError("Story not found.")
             sc = current.scenes[i]
+            start = frame_for(current, i)
             end_frame = _bridge_end_frame(current, i)
             uri = (
-                backend.generate_clip(
-                    current, i, sc.frame_uri, end_frame_uri=end_frame
-                )
+                backend.generate_clip(current, i, start, end_frame_uri=end_frame)
                 if end_frame
-                else backend.generate_clip(current, i, sc.frame_uri)
+                else backend.generate_clip(current, i, start)
             )
             thread = _interaction_of(backend, uri)
             scene_id = sc.id
@@ -739,8 +751,8 @@ def start_video(story_id: str, owner: str) -> Job:
     story = get_store().get(story_id, owner)
     if story is None:
         raise StoryAccessError("Story not found.")
-    if not story.scenes or not all(s.frame_uri for s in story.scenes):
-        raise GenerationError("Every scene needs a storyboard frame first.")
+    if not frames_ready(story):
+        raise GenerationError("Every take needs its start frame first.")
 
     def prepare(s: Story) -> None:
         # One seed for every clip of the film.
@@ -896,7 +908,7 @@ def start_video(story_id: str, owner: str) -> Job:
                     start = backend.last_frame(current, prev_clip, i)
                 except Exception:
                     logger.exception("Could not take the last frame of %s", prev_clip)
-                    return animate(i, current.scenes[i].frame_uri)
+                    return animate(i, frame_for(current, i))
                 return animate(i, start, prev_clip)
             thread = _interaction_of(backend, uri)
             scene_obj = current.scenes[i]
@@ -942,7 +954,7 @@ def start_video(story_id: str, owner: str) -> Job:
                     )
                     prev_clip = clip_tasks[i].result_uri if ok else ""
                     continue
-                start, from_clip = sc.frame_uri, ""
+                start, from_clip = frame_for(current, i), ""
                 if i in bridge_tasks:
                     if prev_clip and _run_task(
                         bridge_tasks[i],
@@ -964,7 +976,7 @@ def start_video(story_id: str, owner: str) -> Job:
                 pool.submit(
                     _run_task,
                     clip_tasks[i],
-                    lambda i=i: animate(i, story.scenes[i].frame_uri),
+                    lambda i=i: animate(i, frame_for(story, i)),
                     job.cancel_event,
                 )
                 for i in clip_tasks
@@ -1076,7 +1088,9 @@ def start_video(story_id: str, owner: str) -> Job:
                 prev = second.scenes[i - 1]
                 start_from = prev.clip_uri or sc.continues_from
             start = (
-                backend.last_frame(current, start_from, i) if start_from else sc.frame_uri
+                backend.last_frame(current, start_from, i)
+                if start_from
+                else frame_for(current, i)
             )
             uri = backend.generate_clip(second, i, start)
             scene_id, key = sc.id, sc.alt_clip_key()
