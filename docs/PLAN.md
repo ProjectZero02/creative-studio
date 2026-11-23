@@ -74,6 +74,20 @@ Phase 2 needs a GCP project to test against real Vertex AI. The code can be buil
    - Video Studio (Omni 1.2 Flash): "a fox in the snow, 12 seconds, 9:16" gives a 9:16, 10 s clip with "goes up to 10 s" in the notice. The Sound chip reads "always on".
    - Music: "warm lofi beat, instrumental, 2 tracks" gives instrumental tracks with the Lyrics chip off.
 
+## Home polish 2 (2026-11-23)
+
+Research: Gemini puts a removable type chip in the box and example prompts per tool ([9to5Google](https://9to5google.com/2025/09/09/gemini-app-homepage-web-tools-redesign/)); Krea fills the box from a clicked example ([gallery](https://www.krea.ai/models/runway/prompt-gallery)); Tab accepts and Esc dismisses ghost text in Copilot ([VS Code](https://code.visualstudio.com/docs/copilot/ai-powered-suggestions)), and suggestions are read aloud for screen readers ([GitHub a11y](https://accessibility.github.com/documentation/guide/github-copilot-vsc)); Ideogram's Magic Prompt shows prompt rewriting as a visible control ([docs](https://docs.ideogram.ai/using-ideogram/generation-settings/magic-prompt)). No product shows the prompt-to-result path, so the path strip is our own.
+
+- **Type cards** replace the sample prompts: a still behind each name, a moving clip or sound wave on hover. A card puts the box in that type; Film opens Story Studio.
+- **Per-type headline** until the first message, and a **path** above the box: your prompt → model with its settings → result → Library.
+- **Placeholder = example prompt**; Tab puts it in the box (only once you are working in the box). A hint names the parts of a good prompt.
+- **Ghost-text completion**, all local: the end of a past prompt, the rest of a word, or after a comma the next missing part (light, lens, mood...). Tab or → accepts, Esc dismisses, a polite live region reads it.
+- **Box buttons:** Enhance (three sparkles) slides in with text; Live and Send cross-fade in one 40px slot, both filled; one 6px gap.
+- **Rail:** one stroke icon set, every icon on one centre line, EN/AR chip instead of the globe, redrawn sun and moon, Settings only in the avatar menu. The headline repaints on a theme switch.
+- **Focus:** no forced 6px radius on focused controls; rail rings sit inside the button so they are never clipped.
+- **Settings:** solid header, short copy, grey secondary buttons, My brand laid out as a row of brands over a full-width editor, Usage shows a plain error, My brand no longer hangs on a deep link.
+- Not done: a Gemini-backed completion (it would call the model on every pause in typing; the local one is instant and free).
+
 ## Follow-ups
 
 - Self-host Lit instead of loading it from jsdelivr: the chip menus paint late on a cold phone load (Video Studio lab LCP 4.2–4.6 s at 390 px; 1 s on desktop).
