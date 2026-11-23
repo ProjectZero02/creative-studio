@@ -74,10 +74,9 @@ second language but had no captions at all.
   not available; they now set the owner in a context variable so their calls
   are counted for the right person.
 - `config/pricing.py`: dynamic Cloud Billing Catalog list prices for Gemini
-  token usage, cached for 12 hours, plus unit estimates for image/video/music
-  calls where token usage is not exposed. The page always says "estimate" and
-  reports calls whose dynamic token price was unavailable instead of silently
-  using a stale token rate.
+  tokens and media billing units, cached for 12 hours. The page always says
+  "estimate" and reports calls whose dynamic price was unavailable instead of
+  silently using a stale rate.
 - `/usage` page: the last 7 or 30 days, totals per model and per day, with a
   simple bar chart. Admins can switch to "Everyone" and see a per-user table.
 

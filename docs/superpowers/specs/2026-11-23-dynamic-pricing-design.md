@@ -26,17 +26,15 @@ when Google changes a model price.
 - The application uses Application Default Credentials/OAuth, never a service
   account key or API key.
 - A pricing provider discovers the relevant public Vertex AI service and its
-  SKUs, parses current input/output token rates, and caches the result for 12
-  hours per process.
+  SKUs, parses current token and media-unit rates, and caches the result for
+  12 hours per process.
 - Usage events continue storing the exact response token counts. They also
   store the applied input/output rates, pricing source, and effective time so
   historical estimates remain auditable.
-- There is no static-rate fallback. If no fresh dynamic price is available,
-  the event is recorded as unpriced and generation continues; the usage page
-  excludes unavailable costs from dollar totals and reports the unavailable
-  count separately.
-- Existing non-token billing units remain intact while token-priced Gemini
-  events use the dynamic provider.
+- There is no static-rate fallback. If no fresh dynamic price is available for
+  any billing unit, the event is recorded as unpriced and generation
+  continues; the usage page excludes unavailable costs from dollar totals and
+  reports the unavailable count separately.
 
 ## Non-goals
 
@@ -48,7 +46,7 @@ when Google changes a model price.
 
 ## Verification
 
-- Unit tests cover OAuth request construction, SKU parsing, twelve-hour cache
-  expiry, unavailable pricing, and event persistence.
+- Unit tests cover OAuth request construction, token and media SKU parsing,
+  twelve-hour cache expiry, unavailable pricing, and event persistence.
 - Terraform formatting and validation run without applying infrastructure.
 - Existing telemetry, usage, and app-import tests remain green.

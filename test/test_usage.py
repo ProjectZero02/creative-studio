@@ -31,6 +31,18 @@ def test_estimates_follow_the_billing_units(monkeypatch):
         "get_token_rates",
         lambda model: rates.get(model),
     )
+    unit_rates = {
+        ("veo-3.1-generate", "video"): pricing.UnitRate(0.40, "s", "2026-11-23T00:00:00Z"),
+        ("veo-3.1-fast-generate", "video"): pricing.UnitRate(0.15, "s", "2026-11-23T00:00:00Z"),
+        ("gemini-3-pro-image", "image"): pricing.UnitRate(0.039, "image", "2026-11-23T00:00:00Z"),
+        ("lyria-002", "music"): pricing.UnitRate(0.06, "track", "2026-11-23T00:00:00Z"),
+        ("chirp-3-hd", "speech"): pricing.UnitRate(30 / 1e6, "character", "2026-11-23T00:00:00Z"),
+    }
+    monkeypatch.setattr(
+        pricing,
+        "get_unit_rate",
+        lambda model, kind: unit_rates.get((model, kind)),
+    )
     assert pricing.estimate("veo-3.1-generate", {"video_seconds_generated": 8}) == pytest.approx(3.2)
     assert pricing.estimate("veo-3.1-fast-generate", {"video_seconds_generated": 8}) == pytest.approx(1.2)
     assert pricing.estimate("gemini-3-pro-image", {"sample_count": 2}) == pytest.approx(0.078)
@@ -79,7 +91,16 @@ def test_kinds():
     assert pricing.kind_of("gemini-3.5-flash", {}) == "text"
 
 
-def test_summary_fills_every_day_and_sorts_by_cost():
+def test_summary_fills_every_day_and_sorts_by_cost(monkeypatch):
+    monkeypatch.setattr(
+        pricing,
+        "get_unit_rate",
+        lambda model, kind: pricing.UnitRate(
+            0.40 if kind == "video" else 0.06,
+            "s" if kind == "video" else "track",
+            "2026-11-23T00:00:00Z",
+        ),
+    )
     now = 1_800_000_000.0  # fixed clock
     events = [
         usage.event("a@x", "veo-3.1", "success", {"video_seconds_generated": 8}, at=now),
@@ -104,6 +125,11 @@ def test_background_calls_are_counted_for_the_job_owner(monkeypatch):
         done.set()
 
     monkeypatch.setattr(usage, "_write", fake_write)
+    monkeypatch.setattr(
+        pricing,
+        "get_unit_rate",
+        lambda model, kind: pricing.UnitRate(0.40, "s", "2026-11-23T00:00:00Z"),
+    )
     with usage.acting_for("owner@x"):
         usage.record("", "veo-3.1", "success", {"video_seconds_generated": 4}, task="story")
     assert done.wait(2)

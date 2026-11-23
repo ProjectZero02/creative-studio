@@ -13,10 +13,9 @@
 # limitations under the License.
 """Cost estimates per model call, for the usage page.
 
-Token prices are loaded from the Cloud Billing Catalog API. The non-token
-rates below remain list-price ballparks for units where the model response
-does not expose token usage. Estimates are not a bill: discounts, committed
-use, credits, and taxes are not included.
+Token and media-unit prices are loaded from the Cloud Billing Catalog API.
+Estimates are not a bill: discounts, committed use, credits, and taxes are not
+included.
 
 A call is priced from the billing units the model wrappers already log
 (see ``common.analytics.track_model_call``): seconds of video, images,
@@ -52,6 +51,15 @@ class TokenRates:
     effective_time: str
 
 
+@dataclass(frozen=True)
+class UnitRate:
+    """Current list price in USD per billing unit."""
+
+    price_per_unit: float
+    unit: str
+    effective_time: str
+
+
 def _monotonic() -> float:
     return time.monotonic()
 
@@ -60,6 +68,7 @@ def clear_price_cache() -> None:
     """Clear cached catalog prices, primarily for tests and controlled refreshes."""
     global _catalog_cache
     _price_cache.clear()
+    _unit_price_cache.clear()
     _catalog_cache = None
 
 
@@ -80,8 +89,34 @@ def get_token_rates(model: str) -> TokenRates | None:
     return rates
 
 
+_unit_price_cache: dict[tuple[str, str], tuple[float, UnitRate]] = {}
+
+
+def get_unit_rate(model: str, kind: str) -> UnitRate | None:
+    """Return a dynamic media-unit price, refreshing it every twelve hours."""
+    key = ((model or "").lower(), kind)
+    cached = _unit_price_cache.get(key)
+    now = _monotonic()
+    if cached and now - cached[0] < PRICE_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        rate = _fetch_unit_rate(model, kind)
+    except Exception:
+        logger.warning(
+            "Could not load dynamic %s price for %s", kind, model, exc_info=True
+        )
+        return None
+    if rate is not None:
+        _unit_price_cache[key] = (now, rate)
+    return rate
+
+
 def _fetch_token_rates(model: str) -> TokenRates | None:
     return parse_token_rates(model, _get_catalog_skus())
+
+
+def _fetch_unit_rate(model: str, kind: str) -> UnitRate | None:
+    return parse_unit_rate(model, kind, _get_catalog_skus())
 
 
 def _get_catalog_skus() -> list[dict]:
@@ -140,9 +175,7 @@ def parse_token_rates(model: str, skus: list[dict]) -> TokenRates | None:
     matches: dict[str, tuple[float, str]] = {}
     for sku in skus:
         description = _normalise(sku.get("description", ""))
-        if not model_words or not all(
-            word in description.split() for word in model_words
-        ):
+        if not _model_matches(model_words, description):
             continue
         direction = _token_direction(description)
         if direction:
@@ -160,8 +193,64 @@ def parse_token_rates(model: str, skus: list[dict]) -> TokenRates | None:
     )
 
 
+def parse_unit_rate(model: str, kind: str, skus: list[dict]) -> UnitRate | None:
+    """Extract a model's current price for a non-token billing unit."""
+    model_words = _normalise(model).split()
+    for sku in skus:
+        description = _normalise(sku.get("description", ""))
+        if not _model_matches(model_words, description):
+            continue
+        if not _unit_matches(kind, sku, description):
+            continue
+        price, unit = _sku_price_per_unit(sku)
+        if price is None:
+            continue
+        pricing_info = sku.get("pricingInfo") or []
+        effective_time = str(pricing_info[-1].get("effectiveTime", ""))
+        return UnitRate(price, unit, effective_time)
+    return None
+
+
 def _normalise(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _model_matches(model_words: list[str], description: str) -> bool:
+    description_words = set(description.split())
+    ignored = {"001", "002", "003", "generate", "model", "preview"}
+    for word in model_words:
+        if word in ignored:
+            continue
+        if word not in description_words:
+            return False
+    return bool(model_words)
+
+
+def _unit_matches(kind: str, sku: dict, description: str) -> bool:
+    if "token" in description or "tokens" in description:
+        return False
+    base_unit = _normalise(
+        (sku.get("pricingInfo") or [{}])[-1]
+        .get("pricingExpression", {})
+        .get("baseUnit", "")
+    )
+    compatible_units = {
+        "video": {"s", "sec", "second", "seconds"},
+        "image": {"image", "images"},
+        "music": {"track", "tracks", "sample", "samples"},
+        "speech": {"character", "characters", "char", "chars", "1k", "1m"},
+    }
+    if base_unit and base_unit not in compatible_units.get(kind, set()):
+        return False
+    terms = {
+        "video": {"video", "second", "seconds", "veo", "s"},
+        "image": {"image", "images", "imagen"},
+        "music": {"music", "track", "tracks", "lyria"},
+        "speech": {"speech", "character", "characters", "tts", "chirp"},
+    }
+    return kind in terms and bool(
+        (set(description.split()) | set(base_unit.split())) & terms[kind]
+    )
 
 
 def _token_direction(description: str) -> str | None:
@@ -188,33 +277,19 @@ def _sku_price_per_million(sku: dict) -> float | None:
     return amount * 1_000_000 / conversion
 
 
-# (substring of the model name, price) pairs; the first match wins.
-VIDEO_PER_SECOND = (
-    ("lite", 0.10),
-    ("fast", 0.15),
-    ("omni", 0.40),
-    ("veo", 0.40),
-)
-IMAGE_PER_IMAGE = (
-    ("imagen-4.0-fast", 0.02),
-    ("imagen", 0.04),
-    ("image", 0.039),  # Gemini image models (Nano Banana)
-    ("vto", 0.06),
-    ("virtual-try-on", 0.06),
-)
-MUSIC_PER_TRACK = 0.06
-SPEECH_PER_MILLION_CHARS = (
-    ("chirp", 30.0),
-    ("tts", 10.0),
-)
-
-
-def _match(model: str, table):
-    name = (model or "").lower()
-    for key, price in table:
-        if key in name:
-            return price
-    return None
+def _sku_price_per_unit(sku: dict) -> tuple[float | None, str]:
+    pricing_info = sku.get("pricingInfo") or []
+    if not pricing_info:
+        return None, ""
+    expression = pricing_info[-1].get("pricingExpression") or {}
+    rates = expression.get("tieredRates") or []
+    tier = next((rate for rate in rates if rate.get("startUsageAmount", 0) == 0), None)
+    if not tier:
+        return None, ""
+    unit_price = tier.get("unitPrice") or {}
+    amount = float(unit_price.get("units", 0)) + float(unit_price.get("nanos", 0)) / 1e9
+    conversion = float(expression.get("baseUnitConversionFactor") or 1)
+    return amount / conversion, str(expression.get("baseUnit") or "")
 
 
 def kind_of(model: str, units: dict) -> str:
@@ -239,49 +314,48 @@ def estimate_details(
         return 0.0, {"pricing_status": "not_applicable"}
     units = units or {}
     kind = kind_of(model, units)
-    if kind == "video":
-        secs = float(units.get("video_seconds_generated") or 0)
-        return secs * (_match(model, VIDEO_PER_SECOND) or 0.40), {
-            "pricing_status": "static",
-            "pricing_source": "config_rate_card",
+    if kind == "text":
+        rates = get_token_rates(model)
+        if rates is None:
+            return None, {
+                "pricing_status": "unavailable",
+                "pricing_source": "cloud_billing_catalog",
+            }
+        tokens_in = float(units.get("prompt_tokens") or 0)
+        tokens_in += float(units.get("tool_use_prompt_tokens") or 0)
+        tokens_out = float(units.get("candidates_tokens") or 0)
+        tokens_out += float(units.get("thoughts_tokens") or 0)
+        cost = (
+            tokens_in / 1e6 * rates.input_per_million
+            + tokens_out / 1e6 * rates.output_per_million
+        )
+        return cost, {
+            "pricing_status": "dynamic",
+            "pricing_source": "cloud_billing_catalog",
+            "pricing_effective_time": rates.effective_time,
+            "input_price_per_million": rates.input_per_million,
+            "output_price_per_million": rates.output_per_million,
         }
-    if kind == "image":
-        count = int(units.get("sample_count") or units.get("num_images") or 1)
-        return count * (_match(model, IMAGE_PER_IMAGE) or 0.04), {
-            "pricing_status": "static",
-            "pricing_source": "config_rate_card",
-        }
-    if kind == "music":
-        return int(units.get("sample_count") or 1) * MUSIC_PER_TRACK, {
-            "pricing_status": "static",
-            "pricing_source": "config_rate_card",
-        }
-    if kind == "speech":
-        chars = float(units.get("characters_synthesized") or 0)
-        return chars / 1e6 * (_match(model, SPEECH_PER_MILLION_CHARS) or 10.0), {
-            "pricing_status": "static",
-            "pricing_source": "config_rate_card",
-        }
-    rates = get_token_rates(model)
-    if rates is None:
+
+    rate = get_unit_rate(model, kind)
+    if rate is None:
         return None, {
             "pricing_status": "unavailable",
             "pricing_source": "cloud_billing_catalog",
         }
-    tokens_in = float(units.get("prompt_tokens") or 0)
-    tokens_in += float(units.get("tool_use_prompt_tokens") or 0)
-    tokens_out = float(units.get("candidates_tokens") or 0)
-    tokens_out += float(units.get("thoughts_tokens") or 0)
-    cost = (
-        tokens_in / 1e6 * rates.input_per_million
-        + tokens_out / 1e6 * rates.output_per_million
-    )
+    quantity = {
+        "video": units.get("video_seconds_generated"),
+        "image": units.get("sample_count") or units.get("num_images"),
+        "music": units.get("sample_count"),
+        "speech": units.get("characters_synthesized"),
+    }[kind]
+    cost = float(quantity or 0) * rate.price_per_unit
     return cost, {
         "pricing_status": "dynamic",
         "pricing_source": "cloud_billing_catalog",
-        "pricing_effective_time": rates.effective_time,
-        "input_price_per_million": rates.input_per_million,
-        "output_price_per_million": rates.output_per_million,
+        "pricing_effective_time": rate.effective_time,
+        "pricing_unit": rate.unit,
+        "price_per_unit": rate.price_per_unit,
     }
 
 
