@@ -554,27 +554,28 @@ class Story:
 
     def continues_take(self, index: int) -> bool:
         """Scene `index` continues the previous clip (a continuous take):
-        continuous takes are on, the scene wants to (see `_wants_take`), and
-        the take fits the video model: it is still within
-        STORY_TAKE_CONTEXT_SECONDS before this scene (the model reads only
-        that much of it) and within STORY_TAKE_MAX_SECONDS after it."""
+        continuous takes are on and the scene wants to (see `_wants_take`).
+        While the take is at most STORY_TAKE_CONTEXT_SECONDS long and stays
+        within STORY_TAKE_MAX_SECONDS, the model returns the whole take in
+        one file. Past that the take rolls on (each extension returns the
+        last STORY_TAKE_CONTEXT_SECONDS plus the new seconds, and the film
+        joins the files inside that overlap) up to
+        STORY_TAKE_ROLLING_MAX_SECONDS, for scenes short enough to fit the
+        new seconds of one extension."""
         if not self.continuous_takes or not self._wants_take(index):
             return False
         cfg = Default()
         cap = cfg.STORY_TAKE_MAX_SECONDS
         context = getattr(cfg, "STORY_TAKE_CONTEXT_SECONDS", cap)
+        rolling_max = getattr(cfg, "STORY_TAKE_ROLLING_MAX_SECONDS", cap)
         single = single_clip_max()
         take = 0.0
         for i in range(index + 1):
             d = float(self.scenes[i].duration)
+            whole = take <= context and take + d <= cap
+            rolls = take + d <= rolling_max and d <= cap - context
             # A scene longer than one clip is extended in its own thread.
-            joins = (
-                i > 0
-                and self._wants_take(i)
-                and take <= context
-                and take + d <= cap
-                and d <= single
-            )
+            joins = i > 0 and self._wants_take(i) and d <= single and (whole or rolls)
             take = take + d if joins else d
             if i == index:
                 return joins
@@ -2393,10 +2394,40 @@ def _one_file_per_take(segments: list[Segment]) -> None:
         if not segments[k].same_take:
             k -= 1
             continue
-        last = segments[k].clip_uri
         j = k
         while j > 0 and segments[j].same_take:
             j -= 1
-        for m in range(j, k):
-            segments[m].clip_uri = last
+        _cut_take(segments[j : k + 1])
         k = j - 1
+
+
+def _cut_take(take: list[Segment], tol: float = 0.05) -> None:
+    """Cut one take's scenes from its files. File m starts (its own 0 s) at
+    film time ``start - trim_head`` of its scene. Each scene uses the newest
+    file that still holds its start: for a take of at most the model's
+    context that is the last file for every scene. In a longer (rolling)
+    take older seconds drop out of newer files, so the scene at a change of
+    file starts STORY_ROLL_CROSSFADE early and fades over the previous one,
+    inside the overlap where both files show the same moment."""
+    origins = [s.start - s.trim_head for s in take]
+    # Each file ends where its own scene ends.
+    ends = [s.start + s.duration for s in take]
+    uris = [s.clip_uri for s in take]
+    xf = float(getattr(Default(), "STORY_ROLL_CROSSFADE", 0.0) or 0.0)
+    prev_file = -1
+    for m, seg in enumerate(take):
+        end = seg.start + seg.duration
+        if prev_file >= 0 and origins[prev_file] <= seg.start + tol and ends[prev_file] >= end - tol:
+            # The file in use still holds this scene: no change of file.
+            f = prev_file
+        else:
+            f = max(j for j in range(m, len(take)) if j == m or origins[j] <= seg.start + tol)
+        seg.clip_uri = uris[f]
+        seg.trim_head = round(seg.start - origins[f], 4)
+        if m > 0 and f != prev_file and xf > 0 and seg.trim_head >= xf:
+            # A change of file inside the take: a short crossfade.
+            seg.start = round(seg.start - xf, 3)
+            seg.trim_head = round(seg.trim_head - xf, 4)
+            seg.duration = round(seg.duration + xf, 4)
+            seg.fade_in = xf
+        prev_file = f
