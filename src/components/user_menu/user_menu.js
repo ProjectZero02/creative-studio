@@ -34,10 +34,13 @@
  */
 import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
-const GLOBE = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4a14 14 0 0 1 1.9 4h-3.8A14 14 0 0 1 12 4zM4.3 14a8.2 8.2 0 0 1 0-4h3.4a16.5 16.5 0 0 0 0 4zm.8 2h2.9a15.7 15.7 0 0 0 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6A15.7 15.7 0 0 0 8 8zm4 12a14 14 0 0 1-1.9-4h3.8A14 14 0 0 1 12 20zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6a15.7 15.7 0 0 0 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.7-5.6a16.5 16.5 0 0 0 0-4h3.4a8.2 8.2 0 0 1 0 4z"/></svg>`;
 
-const MOON = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>`;
-const SUN = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM2 13h2a1 1 0 0 0 0-2H2a1 1 0 0 0 0 2zm18 0h2a1 1 0 0 0 0-2h-2a1 1 0 0 0 0 2zM11 2v2a1 1 0 0 0 2 0V2a1 1 0 0 0-2 0zm0 18v2a1 1 0 0 0 2 0v-2a1 1 0 0 0-2 0zM5.99 4.58a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41L5.99 4.58zm12.37 12.37a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41l-1.06-1.06zm1.06-10.96a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06zM7.05 18.36a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06z"/></svg>`;
+// Light/dark icons drawn with even round strokes on the 24px grid, so the
+// sun's eight rays are the same length and centred (the filled glyph was not).
+const MOON = html`<svg class="stroke" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>`;
+const SUN = html`<svg class="stroke" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.75v1.5M12 19.75v1.5M2.75 12h1.5M19.75 12h1.5M5.46 5.46l1.06 1.06M17.48 17.48l1.06 1.06M5.46 18.54l1.06-1.06M17.48 6.52l1.06-1.06"/></svg>`;
+// The language switch shows the current language as a two-letter chip.
+const langChip = (lang) => html`<span class="lang-chip" aria-hidden="true">${lang === 'ar' ? 'AR' : 'EN'}</span>`;
 
 class UserMenu extends LitElement {
   static properties = {
@@ -274,9 +277,22 @@ class UserMenu extends LitElement {
       border: 0; border-radius: 20px; background: transparent; color: var(--sys-on-surface, #15171c);
       font: inherit; font-size: 14px; text-align: start; cursor: pointer; white-space: nowrap; overflow: hidden; box-sizing: border-box;
     }
+    .rail-item { transition: background-color 140ms ease, color 140ms ease; }
     .rail-item:hover { background: var(--gm-hover, rgba(127, 127, 127, 0.1)); }
+    .rail-item:hover svg { stroke: var(--sys-on-surface, #15171c); }
     .rail-item[aria-expanded="true"] { background: var(--gm-active-nav, rgba(127, 127, 127, 0.16)); }
     .rail-item svg { width: 20px; height: 20px; flex: none; fill: var(--sys-on-surface-variant, #4b515d); }
+    /* Stroke icons (sun, moon): no fill, even 1.8px lines. */
+    svg.stroke { fill: none !important; stroke: var(--sys-on-surface-variant, #4b515d); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .item svg.stroke, .theme-btn svg.stroke { stroke: currentColor; }
+    /* EN / AR: a small chip the same width as the icons beside it. */
+    .lang-chip { width: 22px; height: 18px; flex: none; margin: 0 -1px; display: inline-grid; place-items: center; border-radius: 5px;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.04em; line-height: 1; font-family: var(--gm-font, 'Google Sans', system-ui, sans-serif);
+      color: var(--sys-on-surface-variant, #4b515d); box-shadow: inset 0 0 0 1.6px currentColor; }
+    .rail-item:hover .lang-chip { color: var(--sys-on-surface, #15171c); }
+    .lang-btn .lang-chip { color: inherit; }
+    /* The focus ring sits inside the row, so the rail's clipping never cuts it. */
+    .rail-item:focus-visible { outline: 2px solid var(--sys-primary, #1a5fd8); outline-offset: -2px; }
     .rail-item .avatar { width: 26px; height: 26px; font-size: 11px; margin: 0 -3px; }
     .rail-item .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: 1; transition: opacity 160ms ease 60ms; }
     :host([rail]:not([expanded])) .rail-item .lbl { opacity: 0; transition: opacity 80ms ease; }
@@ -418,7 +434,7 @@ class UserMenu extends LitElement {
             ${this.dark ? SUN : MOON}<span class="lbl">${themeName}</span>
           </button>` : nothing}
         <button class="rail-item opt" type="button" @click=${this._lang} aria-label=${switchLabel} title=${this.expanded ? '' : switchLabel}>
-          ${GLOBE}<span class="lbl" lang=${other}>${otherName}</span>
+          ${langChip(this.lang)}<span class="lbl" lang=${other}>${otherName}</span>
         </button>
         <button class="rail-item account" type="button" aria-haspopup="true"
           aria-expanded=${this._open ? 'true' : 'false'} aria-label=${accountLabel}
@@ -436,7 +452,7 @@ class UserMenu extends LitElement {
       ${html`
         <button class="lang-btn" type="button" @click=${this._lang}
           aria-label=${switchLabel} title=${switchLabel}>
-          ${GLOBE}<span lang=${other}>${otherName}</span>
+          ${langChip(this.lang)}<span lang=${other}>${otherName}</span>
         </button>`}
       <button class="trigger" type="button" aria-haspopup="true"
         aria-expanded=${this._open ? 'true' : 'false'}
@@ -465,7 +481,7 @@ class UserMenu extends LitElement {
               <span class="grow">${this.dark ? (L.light_mode || 'Light mode') : (L.dark_mode || 'Dark mode')}</span>
             </button>
             <button class="item short-only" type="button" @click=${this._lang}>
-              ${GLOBE}<span class="grow" lang=${this.lang === 'ar' ? 'en' : 'ar'}>${L[`name.${this.lang === 'ar' ? 'en' : 'ar'}`] || (this.lang === 'ar' ? 'English' : 'العربية')}</span>
+              ${langChip(this.lang)}<span class="grow" lang=${this.lang === 'ar' ? 'en' : 'ar'}>${L[`name.${this.lang === 'ar' ? 'en' : 'ar'}`] || (this.lang === 'ar' ? 'English' : 'العربية')}</span>
             </button>` : nothing}
           ${this._canNotify ? html`
             <button class="item" type="button" role="switch"

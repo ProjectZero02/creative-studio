@@ -205,10 +205,11 @@ html body ::-webkit-scrollbar-thumb {
 html body ::-webkit-scrollbar-thumb:hover { background-color: var(--sys-outline); }
 
 /* ---------- Focus: always visible for keyboard users ---------- */
+/* The outline follows each control's own corners (no forced radius, which
+   squared off round and pill buttons while focused). */
 html body :focus-visible {
   outline: 2px solid var(--gm-focus);
   outline-offset: 2px;
-  border-radius: 6px;
 }
 
 /* ---------- Controls: calm, flat, consistent ---------- */
@@ -316,7 +317,8 @@ html body .gm-nav .mat-mdc-button-persistent-ripple::before,
 html body .gm-nav .mat-mdc-button-ripple { opacity: 0 !important; }
 html body .gm-nav .mat-mdc-button-base:hover { background-color: var(--gm-hover); }
 /* Only real keyboard focus gets the ring (the drawer focuses its first button on load). */
-html body .gm-nav button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: 1px; }
+/* Inside the button, so the rail's overflow never clips the ring. */
+html body .gm-nav button.cdk-keyboard-focused { outline: 2px solid var(--sys-primary); outline-offset: -2px; }
 html body .gm-nav button:focus-visible:not(.cdk-keyboard-focused) { outline: none; }
 /* Instant client-side rail toggle (theme_manager.js sets html[data-sidenav]). */
 html[data-sidenav="open"] body mat-sidenav.mat-drawer {
@@ -1278,13 +1280,7 @@ html body .gm-set-body .gm-brand { width: 100%; max-width: none; }
 }
 
 /* ---------- Home chat (components/home_chat) ---------- */
-/* The headline gradient, read inside the chat's shadow DOM. */
-html body {
-  --gm-home-title-grad: linear-gradient(100deg, var(--sys-on-surface) 0%, var(--sys-on-surface) 38%, #1a5fd8 72%, #7b3fe4 100%);
-}
-html body.dark-theme {
-  --gm-home-title-grad: linear-gradient(100deg, #fff 0%, #fff 38%, #8ab4f8 72%, #c58af9 100%);
-}
+/* The headline gradient lives in home_chat.js, keyed on its [dark] attribute. */
 /* The chat sizes itself to the screen, so the frame adds no bottom gap. */
 html body .gm-home-chat { gap: 0; }
 /* Home fits the window with no scroll bar: drop the page's bottom padding and
