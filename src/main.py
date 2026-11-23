@@ -157,6 +157,7 @@ from pages import admin_users as admin_users_page
 from routers import (
     auth_router,
     chat_router,
+    chats_router,
     live_router,
     prompt_router,
     story_router,
@@ -734,6 +735,8 @@ app.include_router(story_router.router)
 app.include_router(prompt_router.router)
 # The Home chat (one prompt box that does everything; owner-scoped).
 app.include_router(chat_router.router)
+# Saved Home chats and projects (owner-scoped).
+app.include_router(chats_router.router)
 
 
 # Old speech pages now live on /voice. Full page loads (bookmarks, shared links)
