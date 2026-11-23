@@ -466,7 +466,8 @@ def on_generate_3d_view_click(e: me.ClickEvent):
             images=[state.storyboard["original_floor_plan_uri"]],
             aspect_ratio="16:9",
             gcs_folder="interior_design_generations",
-        model_name=cfg.INTERIOR_DESIGN_IMAGE_MODEL,
+            model_name=cfg.INTERIOR_DESIGN_IMAGE_MODEL,
+            feature="interior_design",
         )
 
         if gcs_uris:
@@ -477,7 +478,8 @@ def on_generate_3d_view_click(e: me.ClickEvent):
 
             try:
                 room_names = extract_room_names_from_image(
-                    state.storyboard["original_floor_plan_uri"]
+                    state.storyboard["original_floor_plan_uri"],
+                    feature="interior_design",
                 )
                 if not room_names:
                     yield from show_snackbar(
@@ -540,7 +542,8 @@ def on_room_button_click(e: me.ClickEvent):
             images=[state.storyboard["generated_3d_view_uri"]],
             aspect_ratio="16:9",
             gcs_folder="interior_design_zoomed_views",
-        model_name=cfg.INTERIOR_DESIGN_IMAGE_MODEL,
+            model_name=cfg.INTERIOR_DESIGN_IMAGE_MODEL,
+            feature="interior_design",
         )
 
         if gcs_uris:
@@ -634,7 +637,8 @@ def on_design_click(e: me.ClickEvent):
             images=images,
             aspect_ratio="16:9",
             gcs_folder="interior_design_iterations",
-        model_name=cfg.INTERIOR_DESIGN_IMAGE_MODEL,
+            model_name=cfg.INTERIOR_DESIGN_IMAGE_MODEL,
+            feature="interior_design",
         )
 
         if gcs_uris:
@@ -697,6 +701,7 @@ def on_generate_video_click(e: me.ClickEvent):
                     image_gcs_uri=item["styled_image_uri"],
                     prompt="A slow, gentle panning shot of the room.",
                     duration_seconds=cfg.INTERIOR_DESIGN_VIDEO_DURATION,
+                    feature="interior_design",
                 )
                 if video_uri:
                     item["generated_video_uri"] = video_uri

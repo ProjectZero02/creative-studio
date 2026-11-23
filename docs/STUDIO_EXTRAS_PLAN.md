@@ -73,8 +73,10 @@ second language but had no captions at all.
 - Background jobs (Story Studio, Live) run in threads where the page state is
   not available; they now set the owner in a context variable so their calls
   are counted for the right person.
-- `config/pricing.py`: an estimate per model (per image, per second of
-  video, per track...). The page always says "estimate".
+- `config/pricing.py`: dynamic Cloud Billing Catalog list prices for Gemini
+  tokens and media billing units, cached for 12 hours. The page always says
+  "estimate" and reports calls whose dynamic price was unavailable instead of
+  silently using a stale rate.
 - `/usage` page: the last 7 or 30 days, totals per model and per day, with a
   simple bar chart. Admins can switch to "Everyone" and see a per-user table.
 

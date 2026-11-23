@@ -14,7 +14,11 @@
 
 from unittest.mock import MagicMock, patch
 
-from common.analytics import track_model_call
+from common.analytics import (
+    extract_generated_image_count,
+    extract_usage_metadata,
+    track_model_call,
+)
 from common.error_handling import ErrorCategory, GenerationError, classify_error
 
 
@@ -109,7 +113,9 @@ def test_store_to_gcs_bucket_normalization(mock_get_client):
 
 @patch("common.analytics.analytics_logger")
 def test_track_model_call_success(mock_logger):
-    with track_model_call("test-model", pipeline_id="pipe-123") as ctx:
+    with track_model_call(
+        "test-model", pipeline_id="pipe-123", feature="fashion"
+    ) as ctx:
         ctx["billing_units"]["prompt_tokens"] = 100
         ctx["billing_units"]["candidates_tokens"] = 50
 
@@ -121,6 +127,8 @@ def test_track_model_call_success(mock_logger):
     assert extra["model_name"] == "test-model"
     assert extra["status"] == "success"
     assert extra["pipeline_id"] == "pipe-123"
+    assert extra["feature"] == "fashion"
+    assert extra["details"]["feature"] == "fashion"
     assert extra["billing_units"] == {"prompt_tokens": 100, "candidates_tokens": 50}
 
 
@@ -162,24 +170,44 @@ def test_track_model_call_upstream_failure(mock_logger):
     assert extra["billing_units"] == {"video_seconds_generated": 8}
 
 
-from models.gemini import _extract_usage_metadata
-
-
 def test_extract_usage_metadata():
     class DummyUsageMetadata:
+        cached_content_token_count = 12
         prompt_token_count = 120
         candidates_token_count = 45
+        thoughts_token_count = 8
+        tool_use_prompt_token_count = 6
         total_token_count = 165
 
     class DummyResponse:
         usage_metadata = DummyUsageMetadata()
 
-    metadata = _extract_usage_metadata(DummyResponse())
+    metadata = extract_usage_metadata(DummyResponse())
     assert metadata == {
+        "cached_prompt_tokens": 12,
         "prompt_tokens": 120,
         "candidates_tokens": 45,
+        "thoughts_tokens": 8,
+        "tool_use_prompt_tokens": 6,
         "total_tokens": 165,
     }
+
+
+def test_extract_generated_image_count_ignores_thought_images():
+    from types import SimpleNamespace
+
+    final_image = SimpleNamespace(inline_data=object(), thought=False)
+    thought_image = SimpleNamespace(inline_data=object(), thought=True)
+    text_part = SimpleNamespace(inline_data=None, thought=False)
+    response = SimpleNamespace(
+        candidates=[
+            SimpleNamespace(
+                content=SimpleNamespace(parts=[thought_image, final_image, text_part])
+            )
+        ]
+    )
+
+    assert extract_generated_image_count(response) == 1
 
 
 @patch("common.analytics.analytics_logger")

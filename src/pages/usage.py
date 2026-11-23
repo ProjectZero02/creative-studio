@@ -14,9 +14,9 @@
 """Usage and cost page (/usage).
 
 What the signed-in person generated in the last 7 or 30 days and what it
-cost, as an estimate from config/pricing.py: totals, spend per day, and a
-table per model. Admins can switch to everyone and see a table per person.
-Data comes from common/usage.py.
+cost, as an estimate from dynamic pricing and recorded billing units: totals,
+spend per day, and a table per model. Admins can switch to everyone and see a
+table per person. Data comes from common/usage.py.
 """
 
 from __future__ import annotations
@@ -24,9 +24,8 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-from dataclasses import field
-
 from contextlib import nullcontext
+from dataclasses import field
 
 import mesop as me
 
@@ -43,6 +42,13 @@ KIND_LABELS = {
     "music": "Music",
     "speech": "Speech",
     "text": "Gemini text",
+}
+FEATURE_LABELS = {
+    "product_360": "Product 360",
+    "fashion": "Fashion",
+    "interior_design": "Interior Design",
+    "shop_the_look": "Shop the Look",
+    "virtual_try_on": "Virtual Try-On",
 }
 
 
@@ -66,7 +72,9 @@ def _is_admin() -> bool:
     return me.state(AppState).user_role == "admin"
 
 
-def money(value: float) -> str:
+def money(value: float | None) -> str:
+    if value is None:
+        return "Unavailable"
     if value and value < 0.01:
         return "< $0.01"
     return f"${value:,.2f}"
@@ -194,9 +202,27 @@ def usage_content(embedded: bool = False):
                 _stat("Estimated cost", money(total["cost"]))
                 _stat("Generations", f"{total['calls']:,}")
                 _stat("Failed", f"{total['failed']:,}")
+                if total.get("unpriced"):
+                    _stat("Unpriced", f"{total['unpriced']:,}")
             with me.box(classes="gm-usage-card"):
                 _label("Estimated cost per day", "gm-usage-title")
                 _chart(summary["days"])
+            if summary["features"]:
+                with me.box(classes="gm-usage-card"):
+                    _label("Per product", "gm-usage-title")
+                    with me.box(classes="gm-usage-table gm-usage-table-3"):
+                        for col in ("Product", "Calls", "Failed", "Est. cost"):
+                            _label(col, "gm-usage-th")
+                        for row in summary["features"]:
+                            _label(
+                                FEATURE_LABELS.get(
+                                    row["feature"], row["feature"].replace("_", " ").title()
+                                ),
+                                "gm-usage-model",
+                            )
+                            me.text(f"{row['calls']:,}")
+                            me.text(f"{row['failed']:,}")
+                            me.text(money(row["cost"]))
             with me.box(classes="gm-usage-card"):
                 _label("Per model", "gm-usage-title")
                 with me.box(classes="gm-usage-table"):
@@ -221,6 +247,7 @@ def usage_content(embedded: bool = False):
             me.text(
                 "Costs are list-price estimates from the billing units of each call "
                 "(seconds of video, images, tracks, characters, tokens), not a bill. "
-                "Failed calls count as free.",
+                "Token prices are refreshed dynamically; unavailable prices are not "
+                "silently replaced. Failed calls count as free.",
                 style=me.Style(font_size=12, color=me.theme_var("on-surface-variant")),
             )

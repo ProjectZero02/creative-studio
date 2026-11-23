@@ -45,6 +45,7 @@ def generate_vto_image(
     output_mime_type: str = "image/jpeg",
     person_generation: str = "allow_all",
     safety_filter_level: str = "block_low_and_above",
+    feature: str | None = None,
 ) -> list[str]:
     """Generates Virtual Try-On images using the Google GenAI SDK.
 
@@ -72,7 +73,9 @@ def generate_vto_image(
         "safety_filter_level": safety_filter_level,
     }
 
-    with track_model_call(model_id, billing_units=billing_units) as ctx:
+    with track_model_call(
+        model_id, billing_units=billing_units, feature=feature
+    ) as ctx:
         logger.info(f"Calling VTO (GenAI SDK) with model: {model_id}")
 
         # Define the output GCS folder prefix

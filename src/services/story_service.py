@@ -40,7 +40,7 @@ from typing import Protocol
 
 import numpy as np
 
-from common.analytics import get_logger
+from common.analytics import extract_usage_metadata, get_logger, track_model_call
 from common.error_handling import GenerationError
 from common.identity import LOCAL_APP_ENVS
 from config.default import Default
@@ -1807,7 +1807,6 @@ class VertexStoryBackend:
         for its reasoning models."""
         from google.genai import types
 
-        from common.analytics import track_model_call
         from models.gemini import client
         from models.thinking import dynamic_thinking
 
@@ -1824,12 +1823,13 @@ class VertexStoryBackend:
             system_instruction=system or None,
             thinking_config=dynamic_thinking(model) if thinking else None,
         )
-        with track_model_call(model_name=model, task=task):
+        with track_model_call(model_name=model, task=task) as ctx:
             response = client.models.generate_content(
                 model=model,
                 contents=[*parts, prompt],
                 config=config,
             )
+            ctx["billing_units"].update(extract_usage_metadata(response))
         if not response.text:
             raise GenerationError("Gemini returned an empty scenario.")
         return response.text

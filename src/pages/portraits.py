@@ -29,7 +29,12 @@ from tenacity import (
     wait_exponential,
 )
 
-from common.analytics import log_ui_click, track_click
+from common.analytics import (
+    extract_usage_metadata,
+    log_ui_click,
+    track_click,
+    track_model_call,
+)
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.storage import store_to_gcs
 from common.utils import create_display_url
@@ -933,11 +938,15 @@ def generate_scene_direction(
                 types.Part.from_text(text=prompt),
             ],
         )
-        response = client.models.generate_content(
-            model=config.MODEL_ID,
-            contents=contents,
-            config=GenerateContentConfig(),
-        )
+        with track_model_call(
+            model_name=config.MODEL_ID, task="portrait_scene_direction"
+        ) as ctx:
+            response = client.models.generate_content(
+                model=config.MODEL_ID,
+                contents=contents,
+                config=GenerateContentConfig(),
+            )
+            ctx["billing_units"].update(extract_usage_metadata(response))
 
         if hasattr(response, "text") and response.text:
             print(

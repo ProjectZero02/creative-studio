@@ -37,7 +37,7 @@ def _image(data, thought=None):
 
 @contextlib.contextmanager
 def _fake_track(**_kwargs):
-    yield {"billing_units": {}}
+    yield {"billing_units": {}, "details": {}}
 
 
 def _run(response):

@@ -224,14 +224,40 @@ def parse_duration_text(text: str) -> int | None:
     return min(cap, round(total))
 
 
+# List prices (USD) for the Setup blueprint when the Cloud Billing Catalog
+# price is not cached yet. The blueprint must answer instantly, so it never
+# waits on the catalog; the Usage page prices real calls from the catalog.
+_FALLBACK_VIDEO_PER_SECOND = (("lite", 0.10), ("fast", 0.15), ("omni", 0.40), ("veo", 0.40))
+_FALLBACK_IMAGE = 0.039
+_FALLBACK_TTS_PER_MILLION_CHARS = 10.0
+_FALLBACK_MUSIC_PER_TRACK = 0.06
+
+
+def _catalog_rate(model: str, kind: str) -> float | None:
+    try:
+        from config import pricing
+
+        rate = pricing.cached_unit_rate(model, kind)
+    except Exception:  # pricing must never break Setup
+        return None
+    return rate.price_per_unit if rate else None
+
+
 def _video_price(video_model: str) -> float:
-    from config import pricing
+    from services.story_models import _video_model_spec
 
     mid = (video_model or "").strip() or Default().STORY_VIDEO_MODEL
-    name = {"hybrid": "gemini-omni", "3.1": "veo-3.1", "3.1-fast": "veo-3.1-fast"}.get(
-        mid, mid
-    )
-    return pricing._match(name, pricing.VIDEO_PER_SECOND) or 0.40
+    spec, _ = _video_model_spec(mid)
+    name = getattr(spec, "model_name", "") or {
+        "hybrid": "gemini-omni",
+        "3.1": "veo-3.1",
+        "3.1-fast": "veo-3.1-fast",
+    }.get(mid, mid)
+    live = _catalog_rate(name, "video")
+    if live:
+        return live
+    lowered = name.lower()
+    return next((p for key, p in _FALLBACK_VIDEO_PER_SECOND if key in lowered), 0.40)
 
 
 def _pack_takes(shots: int, shot_seconds: int, take_max: int) -> list[int]:
@@ -256,14 +282,13 @@ def setup_blueprint(
     music_on: bool = True,
 ) -> dict:
     """What Setup's live blueprint shows for a film of about `seconds`:
-    shots, takes and cuts, resolution, an estimated cost (from
-    config/pricing.py) and an estimated time. Gemini makes the real cut list;
+    shots, takes and cuts, resolution, an estimated cost (catalog
+    prices when cached, else list prices) and an estimated time. Gemini makes the real cut list;
     these are honest estimates for the request.
 
     Video is priced per generated second: an extension bills only its new
     seconds, so a take costs its own length once.
     """
-    from config import pricing
     from services.story_models import _video_model_spec, apply_caps, single_clip_max
 
     cfg = Default()
@@ -277,18 +302,16 @@ def setup_blueprint(
     take_count = len(takes)
 
     video_rate = _video_price(video_model)
-    image_rate = pricing._match("gemini-image", pricing.IMAGE_PER_IMAGE) or 0.039
+    image_rate = _FALLBACK_IMAGE
     words = length * WORDS_PER_SECOND
     voice_cost = (
-        words * 6 / 1e6 * (pricing._match("tts", pricing.SPEECH_PER_MILLION_CHARS) or 10.0)
-        if voice_on
-        else 0.0
+        words * 6 / 1e6 * _FALLBACK_TTS_PER_MILLION_CHARS if voice_on else 0.0
     )
     cost = {
         "video": round(length * video_rate, 2),
         "frames": round(take_count * image_rate, 2),
         "voice": round(voice_cost, 4),
-        "music": pricing.MUSIC_PER_TRACK if music_on else 0.0,
+        "music": _FALLBACK_MUSIC_PER_TRACK if music_on else 0.0,
     }
     cost["total"] = round(sum(cost.values()), 2)
 

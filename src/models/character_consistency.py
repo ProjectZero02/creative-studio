@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 from google import genai
 from PIL import Image as PIL_Image
 
+from common.analytics import extract_usage_metadata, track_model_call
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.storage import download_from_gcs, store_to_gcs
 from config.default import Default
@@ -346,13 +347,18 @@ def _write_video_prompt(image_bytes: bytes, provided_prompt: str | None = None) 
             1, f"the user has provided this prompt as a starter {provided_prompt}"
         )
 
-    video_prompt_response = gemini_client.models.generate_content(
-        model=cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL,
-        contents=gemini_contents,
-        config=genai.types.GenerateContentConfig(
-            thinking_config=dynamic_thinking(cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL)
-        ),
-    )
+    with track_model_call(
+        model_name=cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL,
+        task="character_consistency_video_prompt",
+    ) as ctx:
+        video_prompt_response = gemini_client.models.generate_content(
+            model=cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL,
+            contents=gemini_contents,
+            config=genai.types.GenerateContentConfig(
+                thinking_config=dynamic_thinking(cfg.CHARACTER_CONSISTENCY_GEMINI_MODEL)
+            ),
+        )
+        ctx["billing_units"].update(extract_usage_metadata(video_prompt_response))
     return video_prompt_response.text.strip()
 
 

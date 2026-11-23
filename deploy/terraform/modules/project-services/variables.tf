@@ -50,6 +50,7 @@ variable "activate_apis" {
     "containerscanning.googleapis.com",
     "storage.googleapis.com",
     "aiplatform.googleapis.com",
+    "cloudbilling.googleapis.com",
     "firestore.googleapis.com",
     "cloudtasks.googleapis.com",
     "serviceusage.googleapis.com",

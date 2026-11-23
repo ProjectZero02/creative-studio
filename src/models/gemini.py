@@ -29,7 +29,12 @@ from tenacity import (
     wait_exponential,
 )
 
-from common.analytics import analytics_logger, track_model_call
+from common.analytics import (
+    analytics_logger,
+    extract_generated_image_count,
+    track_model_call,
+)
+from common.analytics import extract_usage_metadata as _extract_usage_metadata
 from common.error_handling import GenerationError
 from common.storage import store_to_gcs
 from config.default import Default  # Import Default for cfg
@@ -40,7 +45,6 @@ from models.character_consistency_models import (
     FacialCompositeProfile,
     GeneratedPrompts,
 )
-from models.thinking import dynamic_thinking
 from models.model_setup import (
     GeminiModelSetup,
 )
@@ -50,6 +54,7 @@ from models.shop_the_look_models import (
     CatalogRecord,
     GeneratedImageAccuracyWrapper,
 )
+from models.thinking import dynamic_thinking
 
 
 class Transformation(BaseModel):
@@ -87,23 +92,6 @@ class RoomList(BaseModel):
     )
 
 
-def _extract_usage_metadata(response: Any) -> dict[str, int]:
-    """Extracts prompt, candidate, and total token counts from a response."""
-    units = {}
-    if hasattr(response, "usage_metadata") and response.usage_metadata:
-        um = response.usage_metadata
-        if hasattr(um, "prompt_token_count") and um.prompt_token_count is not None:
-            units["prompt_tokens"] = um.prompt_token_count
-        if (
-            hasattr(um, "candidates_token_count")
-            and um.candidates_token_count is not None
-        ):
-            units["candidates_tokens"] = um.candidates_token_count
-        if hasattr(um, "total_token_count") and um.total_token_count is not None:
-            units["total_tokens"] = um.total_token_count
-    return units
-
-
 # Initialize client and default model ID for rewriter
 client = GeminiModelSetup.init()
 cfg = Default()  # Instantiate config
@@ -124,6 +112,7 @@ def generate_image_from_prompt_and_images(
     thinking_level: str | None = None,
     include_thoughts: bool = False,
     model_name: str | None = None,
+    feature: str | None = None,
 ) -> tuple[list[str], float, list[str], dict[str, Any] | None, list[str]]:
     """Generates images from a prompt and a list of images."""
     start_time = time.time()
@@ -213,6 +202,7 @@ def generate_image_from_prompt_and_images(
         billing_units=billing_units,
         aspect_ratio=aspect_ratio,
         num_images=len(images),
+        feature=feature,
     ) as ctx:
         response = client.models.generate_content(
             model=model_name,
@@ -226,6 +216,10 @@ def generate_image_from_prompt_and_images(
             ),
         )
         ctx["billing_units"].update(_extract_usage_metadata(response))
+        generated_image_count = extract_generated_image_count(response)
+        ctx["billing_units"]["sample_count"] = generated_image_count
+        ctx["billing_units"]["images_generated"] = generated_image_count
+        ctx["details"]["num_images"] = generated_image_count
 
     end_time = time.time()
     execution_time = end_time - start_time
@@ -302,7 +296,9 @@ def generate_image_from_prompt_and_images(
     retry=retry_if_exception_type(Exception),
     reraise=True,
 )
-def extract_room_names_from_image(image_uri: str) -> list[str]:
+def extract_room_names_from_image(
+    image_uri: str, feature: str | None = None
+) -> list[str]:
     """Analyzes a floor plan image and extracts the names of the rooms."""
     model_name = cfg.MODEL_ID  # Use a fast model for this analysis task
 
@@ -319,12 +315,15 @@ def extract_room_names_from_image(image_uri: str) -> list[str]:
         types.Part.from_uri(file_uri=image_uri, mime_type="image/png"),
     ]
 
-    with track_model_call(model_name=model_name, task="extract_room_names"):
+    with track_model_call(
+        model_name=model_name, task="extract_room_names", feature=feature
+    ) as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     room_list_obj = RoomList.model_validate_json(response.text)
 
@@ -542,12 +541,13 @@ Output this as JSON.
     try:
         analytics_logger.info(f"Sending request to Gemini model: {analysis_model_id}")
 
-        with track_model_call(model_name=analysis_model_id, task="analyze_audio"):
+        with track_model_call(model_name=analysis_model_id, task="analyze_audio") as ctx:
             response = client.models.generate_content(  # Or client.generate_content if client is a model instance
                 model=analysis_model_id,
                 contents=contents_for_api,
                 config=generation_config_params,
             )
+            ctx["billing_units"].update(_extract_usage_metadata(response))
 
         analytics_logger.info("Received response from Gemini.")
         analytics_logger.debug(f"{response}")
@@ -776,12 +776,13 @@ def get_facial_composite_profile(image_bytes: bytes) -> FacialCompositeProfile:
         "You are a forensic analyst. Analyze the following image and extract a detailed, structured facial profile.",
         types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
     ]
-    with track_model_call(model_name=model_name, task="get_facial_composite_profile"):
+    with track_model_call(model_name=model_name, task="get_facial_composite_profile") as ctx:
         response = cc_client.models.generate_content(
             model=model_name,
             contents=profile_prompt_parts,
             config=profile_config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return FacialCompositeProfile.model_validate_json(response.text)
 
 
@@ -807,12 +808,13 @@ def get_natural_language_description(profile: FacialCompositeProfile) -> str:
     with track_model_call(
         model_name=model_name,
         task="get_natural_language_description",
-    ):
+    ) as ctx:
         response = cc_client.models.generate_content(
             model=model_name,
             contents=[description_prompt],
             config=description_config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return response.text.strip()
 
 
@@ -852,12 +854,13 @@ def generate_final_scene_prompt(
     3.  Ensure the final prompt clearly describes the person performing the action or being in the scene requested by the user.
     4.  Generate a standard negative prompt to avoid common artistic flaws.
     """
-    with track_model_call(model_name=model_name, task="generate_final_scene_prompt"):
+    with track_model_call(model_name=model_name, task="generate_final_scene_prompt") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=[meta_prompt],
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return GeneratedPrompts.model_validate_json(response.text)
 
 
@@ -903,12 +906,13 @@ def select_best_image(
             types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
         )
 
-    with track_model_call(model_name=model, task="select_best_image"):
+    with track_model_call(model_name=model, task="select_best_image") as ctx:
         response = client.models.generate_content(
             model=model,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return BestImage.model_validate_json(response.text)
 
 
@@ -950,12 +954,13 @@ def select_best_image_with_description(
             types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
         )
 
-    with track_model_call(model_name=model, task="select_best_image_with_description"):
+    with track_model_call(model_name=model, task="select_best_image_with_description") as ctx:
         response = client.models.generate_content(
             model=model,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return BestImageAccuracy.model_validate_json(response.text)
 
 
@@ -995,12 +1000,13 @@ def final_image_critic(
             types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
         )
 
-    with track_model_call(model_name=model, task="final_image_critic"):
+    with track_model_call(model_name=model, task="final_image_critic") as ctx:
         response = client.models.generate_content(
             model=model,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return GeneratedImageAccuracyWrapper.model_validate_json(response.text)
 
 
@@ -1033,12 +1039,13 @@ def describe_images_and_look(
             types.Part.from_uri(file_uri=a.clothing_image, mime_type="image/png"),
         )
 
-    with track_model_call(model_name=model, task="describe_images_and_look"):
+    with track_model_call(model_name=model, task="describe_images_and_look") as ctx:
         response = client.models.generate_content(
             model=model,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     return ArticleDescriptionWrapper.model_validate_json(response.text)
 
@@ -1080,12 +1087,13 @@ def generate_transformation_prompts(image_uris: list[str]) -> list[Transformatio
     with track_model_call(
         model_name=model_name,
         task="generate_transformation_prompts",
-    ):
+    ) as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     prompts = TransformationPrompts.model_validate_json(response.text)
     return prompts.transformations
@@ -1119,12 +1127,13 @@ def describe_image(image_uri: str) -> str:
         "Describe this media file in two sentences.",
         types.Part.from_uri(file_uri=image_uri, mime_type=mime_type),
     ]
-    with track_model_call(model_name=model_name, task="describe_image"):
+    with track_model_call(model_name=model_name, task="describe_image") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return response.text.strip()
 
 
@@ -1142,12 +1151,13 @@ def describe_video(video_uri: str) -> str:
         "Describe this video in two sentences, focusing on the main subject, action, and overall visual style.",
         types.Part.from_uri(file_uri=video_uri, mime_type="video/mp4"),
     ]
-    with track_model_call(model_name=model_name, task="describe_video"):
+    with track_model_call(model_name=model_name, task="describe_video") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
     return response.text.strip()
 
 
@@ -1188,12 +1198,13 @@ def evaluate_media_with_questions(
         types.Part.from_uri(file_uri=media_uri, mime_type=mime_type),
     ]
 
-    with track_model_call(model_name=model_name, task="evaluate_media_with_questions"):
+    with track_model_call(model_name=model_name, task="evaluate_media_with_questions") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     return EvaluationResult.model_validate_json(response.text)
 
@@ -1225,12 +1236,13 @@ def evaluate_image_with_questions(
         types.Part.from_uri(file_uri=image_uri, mime_type="image/png"),
     ]
 
-    with track_model_call(model_name=model_name, task="evaluate_image_with_questions"):
+    with track_model_call(model_name=model_name, task="evaluate_image_with_questions") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     return EvaluationResult.model_validate_json(response.text)
 
@@ -1271,12 +1283,13 @@ def generate_critique_questions(
         meta_prompt = "Using the following prompt, come up with 5 yes/no questions that we could ask of a generated image to identify whether it meets the intent of the user:\n\n"
         meta_prompt += f"Prompt: {prompt}\n\n"
 
-    with track_model_call(model_name=model_name, task="generate_critique_questions"):
+    with track_model_call(model_name=model_name, task="generate_critique_questions") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=[meta_prompt],
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     question_list = CritiqueQuestionList.model_validate_json(response.text)
     return [q.question for q in question_list.questions]
@@ -1401,12 +1414,13 @@ def evaluate_tts_audio(
         types.Part.from_uri(file_uri=audio_uri, mime_type="audio/wav"),
     ]
 
-    with track_model_call(model_name=model_name, task="evaluate_tts_audio"):
+    with track_model_call(model_name=model_name, task="evaluate_tts_audio") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt_parts,
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     return TTSEvaluation.model_validate_json(response.text)
 
@@ -1474,12 +1488,13 @@ def generate_storyboard_narrative(
     3. Ensure the overall narrative is seamless, logical, and highly compelling from scene 1 to 4.
     """
 
-    with track_model_call(model_name=model_name, task="generate_storyboard_narrative"):
+    with track_model_call(model_name=model_name, task="generate_storyboard_narrative") as ctx:
         response = client.models.generate_content(
             model=model_name,
             contents=[prompt],
             config=config,
         )
+        ctx["billing_units"].update(_extract_usage_metadata(response))
 
     return StoryboardNarrative.model_validate_json(response.text)
 
@@ -1519,12 +1534,13 @@ def get_best_video_frame_timestamp(video_uri: str) -> float:
     )
 
     try:
-        with track_model_call(model_name=model_name, task="get_best_video_frame"):
+        with track_model_call(model_name=model_name, task="get_best_video_frame") as ctx:
             response = client.models.generate_content(
                 model=model_name,
                 contents=[prompt_text, video_part],
                 config=frame_config,
             )
+            ctx["billing_units"].update(_extract_usage_metadata(response))
 
         result = BestFrameTimestamp.model_validate_json(response.text)
         analytics_logger.info(

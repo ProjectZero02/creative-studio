@@ -120,7 +120,9 @@ def get_omni_client(location: str) -> genai.Client:
     return _clients[location]
 
 
-def generate_omni_video(request: OmniVideoGenerationRequest) -> tuple[str, str]:
+def generate_omni_video(
+    request: OmniVideoGenerationRequest, feature: str | None = None
+) -> tuple[str, str]:
     """Generate or edit a video using the EAP Gemini Omni Flash Interactions API.
 
     Args:
@@ -158,7 +160,9 @@ def generate_omni_video(request: OmniVideoGenerationRequest) -> tuple[str, str]:
         "is_multiturn": bool(request.previous_interaction_id),
     }
 
-    with track_model_call(model_config.model_name, billing_units=billing_units) as ctx:
+    with track_model_call(
+        model_config.model_name, billing_units=billing_units, feature=feature
+    ) as ctx:
         # 1. Resolve client
         client = get_omni_client(config.OMNI_LOCATION)
 
