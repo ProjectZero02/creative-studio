@@ -111,6 +111,21 @@ def get_unit_rate(model: str, kind: str) -> UnitRate | None:
     return rate
 
 
+def cached_unit_rate(model: str, kind: str) -> UnitRate | None:
+    """A media-unit price from what is already cached, never fetching.
+
+    For live UI estimates (Story Studio's blueprint) that must not wait on
+    the Cloud Billing Catalog: returns None until a fetch has warmed the cache.
+    """
+    now = _monotonic()
+    cached = _unit_price_cache.get(((model or "").lower(), kind))
+    if cached and now - cached[0] < PRICE_CACHE_TTL_SECONDS:
+        return cached[1]
+    if _catalog_cache and now - _catalog_cache[0] < PRICE_CACHE_TTL_SECONDS:
+        return parse_unit_rate(model, kind, _catalog_cache[1])
+    return None
+
+
 def _fetch_token_rates(model: str) -> TokenRates | None:
     return parse_token_rates(model, _get_catalog_skus())
 
