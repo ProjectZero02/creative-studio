@@ -113,6 +113,16 @@ resource "google_project_iam_member" "creative_studio_vertex_access" {
   member  = google_service_account.creative_studio.member
 }
 
+# The runtime uses ADC/OAuth to read public Cloud Billing Catalog prices. This
+# consumer role lets the service account call enabled Google APIs without a
+# service-account key or an API key. It does not grant access to billing-account
+# costs or contract pricing.
+resource "google_project_iam_member" "creative_studio_billing_api_consumer" {
+  project = var.project_id
+  role    = "roles/serviceusage.serviceUsageConsumer"
+  member  = google_service_account.creative_studio.member
+}
+
 /********************************************
 *  Build service account
 *********************************************/

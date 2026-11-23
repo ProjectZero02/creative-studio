@@ -21,7 +21,16 @@ from common import usage
 from config import pricing
 
 
-def test_estimates_follow_the_billing_units():
+def test_estimates_follow_the_billing_units(monkeypatch):
+    rates = {
+        "gemini-3.5-flash": pricing.TokenRates(0.30, 2.50, "2026-11-23T00:00:00Z"),
+        "gemini-4-neon": pricing.TokenRates(3.00, 15.00, "2026-11-23T00:00:00Z"),
+    }
+    monkeypatch.setattr(
+        pricing,
+        "get_token_rates",
+        lambda model: rates.get(model),
+    )
     assert pricing.estimate("veo-3.1-generate", {"video_seconds_generated": 8}) == pytest.approx(3.2)
     assert pricing.estimate("veo-3.1-fast-generate", {"video_seconds_generated": 8}) == pytest.approx(1.2)
     assert pricing.estimate("gemini-3-pro-image", {"sample_count": 2}) == pytest.approx(0.078)
@@ -44,7 +53,12 @@ def test_estimates_follow_the_billing_units():
     assert pricing.estimate("veo-3.1", {"video_seconds_generated": 8}, "failure") == 0
 
 
-def test_event_keeps_billing_units_for_auditability():
+def test_event_keeps_billing_units_for_auditability(monkeypatch):
+    monkeypatch.setattr(
+        pricing,
+        "get_token_rates",
+        lambda model: pricing.TokenRates(0.30, 2.50, "2026-11-23T00:00:00Z"),
+    )
     units = {
         "prompt_tokens": 120,
         "candidates_tokens": 45,
@@ -84,8 +98,8 @@ def test_background_calls_are_counted_for_the_job_owner(monkeypatch):
     stored = []
     done = threading.Event()
 
-    def fake_write(doc):
-        stored.append(doc)
+    def fake_write(owner, model, status, units, page, task):
+        stored.append(usage.event(owner, model, status, units, page, task))
         usage._pending.release()
         done.set()
 
