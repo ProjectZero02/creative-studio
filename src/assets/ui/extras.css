@@ -112,3 +112,12 @@
 /* Text inside the classed boxes above (me.text renders its own block). */
 .gm-usage-model > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gm-history-item > * { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+/* Page not found (pages/not_found.py) */
+html body .gm-not-found { max-width: 520px; margin: 12vh auto 0; padding: 48px 32px; gap: 8px; }
+html body .gm-not-found-title { font-size: 24px; font-weight: 600; color: var(--sys-on-surface); }
+html body .gm-not-found-text { font-size: 15px; color: var(--sys-on-surface-variant); }
+html body .gm-not-found-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
+html body .gm-not-found-actions .mdc-button { height: 40px; min-width: 112px; border-radius: 999px; }
+html body .gm-not-found-actions .mat-mdc-button:not(.mat-mdc-unelevated-button) { background: var(--gm-tonal, var(--sys-surface-container-high)); }
+@media (max-width: 600px) { html body .gm-not-found { margin-top: 6vh; padding: 36px 20px; } }

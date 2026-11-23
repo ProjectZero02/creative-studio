@@ -118,6 +118,10 @@ import pages.brand
 import pages.settings
 import pages.project
 import pages.storyboarder
+import pages.not_found
+from common import not_found as _not_found
+
+_not_found.install()
 from app_factory import app
 from common.identity import (
     ANONYMOUS_USER_EMAIL,
@@ -744,6 +748,12 @@ def get_media_proxy(request: Request, bucket_name: str, object_path: str):
 @app.get("/")
 def home() -> RedirectResponse:
     return RedirectResponse(url="/home")
+
+
+@app.get("/story-studio", include_in_schema=False)
+def story_studio_redirect() -> RedirectResponse:
+    """The page is /story; people type its name."""
+    return RedirectResponse(url="/story")
 
 
 @app.get("/gemini-omni", include_in_schema=False)
