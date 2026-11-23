@@ -162,6 +162,63 @@ def summary(chat: dict) -> dict:
     return row
 
 
+MEDIA_LIMIT = 300  # most media one project page shows
+
+
+def _safe_url(url: Any) -> bool:
+    """A link the page may show: http(s), a path on this site, or inline
+    media (demo mode's placeholder pictures are data: URLs)."""
+    if not isinstance(url, str) or not url:
+        return False
+    low = url.lower()
+    if low.startswith(
+        ("https://", "http://", "data:image/", "data:video/", "data:audio/")
+    ):
+        return True
+    return url.startswith("/") and not url.startswith("//")
+
+
+def chat_media(chats: list[dict], limit: int = MEDIA_LIMIT) -> list[dict]:
+    """Finished jobs with a ``display_url`` across ``chats``, newest first.
+
+    ``chats`` are full chats (with messages), newest first. A job saved in
+    several messages counts once, with its latest snapshot.
+    """
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for chat in chats:
+        for message in reversed(chat.get("messages") or []):
+            for job in reversed(message.get("jobs") or []):
+                if not isinstance(job, dict):
+                    continue
+                job_id = str(job.get("id") or "")
+                url = job.get("display_url")
+                if not job_id or job_id in seen:
+                    continue
+                seen.add(job_id)
+                if job.get("status") != "done" or not _safe_url(url):
+                    continue
+                params = (
+                    job.get("params") if isinstance(job.get("params"), dict) else {}
+                )
+                rows.append(
+                    {
+                        "id": job_id,
+                        "kind": _text(job.get("kind"), 32),
+                        "handle": _text(job.get("handle"), 120),
+                        "prompt": _text(job.get("prompt"), 2000),
+                        "display_url": url,
+                        "mime_type": _text(job.get("mime_type"), 120),
+                        "has_film": bool(params.get("has_film")),
+                        "chat_id": chat.get("id", ""),
+                        "chat_title": chat.get("title", ""),
+                    }
+                )
+                if len(rows) >= limit:
+                    return rows
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Titles
 # ---------------------------------------------------------------------------

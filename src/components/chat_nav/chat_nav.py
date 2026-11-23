@@ -35,6 +35,7 @@ _STRINGS = {
         "Group chats for one client or campaign.",
     ),
     "new_in_project": ("chatnav.new_in_project", "New chat here"),
+    "show_chats": ("chatnav.show_chats", "Show chats"),
     "recents": ("chatnav.recents", "Recents"),
     "recents_empty": ("chatnav.recents_empty", "Your chats show up here."),
     "no_match": ("chatnav.no_match", "No chats match."),
@@ -61,10 +62,11 @@ def strings() -> dict:
 
 
 def on_chat_nav(e: me.WebEvent):
-    """Open a page the side menu asked for (/home?chat=..., /library_v2)."""
+    """Open a page the side menu or project page asked for (/home?chat=...,
+    /project?id=..., /library_v2)."""
     value = e.value or {}
     url = str(value.get("url") or "/home")
-    if not url.startswith("/"):
+    if not url.startswith("/") or url.startswith("//"):
         url = "/home"
     params = {str(k): str(v) for k, v in (value.get("params") or {}).items() if v}
     me.state(AppState).current_page = url

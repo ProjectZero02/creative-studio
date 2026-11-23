@@ -28,8 +28,10 @@
  *   gm-new-chat {project_id}   start an empty chat (optionally in a project)
  *   gm-chats-changed           the list changed: reload it
  *   gm-active-chat {id}        the Home chat now shows this chat
+ *   gm-active-project {id}     the project page (<gm-project-view>) shows this project
  * When Home is not on screen, it asks Mesop to open /home?chat=<id>
- * (or ?new=1&project=<id>) through navEvent.
+ * (or ?new=1&project=<id>) through navEvent. A project's name opens its page
+ * (/project?id=<id>); the caret beside it shows or hides its chats.
  */
 import { LitElement, css, html, nothing } from '/ui/vendor/lit-3.2.1.js';
 
@@ -85,6 +87,7 @@ class GmChatNav extends LitElement {
     _adding: { state: true }, // typing a new project name
     _confirm: { state: true }, // id waiting for a second Delete click
     _active: { state: true },
+    _activeProject: { state: true },
   };
 
   constructor() {
@@ -101,6 +104,11 @@ class GmChatNav extends LitElement {
     this._adding = false;
     this._confirm = '';
     this._active = '';
+    this._activeProject = '';
+    this._onActiveProject = (e) => {
+      this._activeProject = (e.detail && e.detail.id) || '';
+      if (this._activeProject) this._active = ''; // the project page shows no chat
+    };
     try { this._openProjects = new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]')); } catch (_) { this._openProjects = new Set(); }
     this._onChanged = () => this._load();
     this._onActive = (e) => { this._active = (e.detail && e.detail.id) || ''; };
@@ -115,8 +123,13 @@ class GmChatNav extends LitElement {
     super.connectedCallback();
     window.addEventListener('gm-chats-changed', this._onChanged);
     window.addEventListener('gm-active-chat', this._onActive);
+    window.addEventListener('gm-active-project', this._onActiveProject);
     document.addEventListener('click', this._onDocClick);
-    try { this._active = new URL(window.location.href).searchParams.get('chat') || window.gmActiveChat || ''; } catch (_) { /* ignore */ }
+    try {
+      const url = new URL(window.location.href);
+      this._activeProject = url.pathname === '/project' ? (url.searchParams.get('id') || window.gmActiveProject || '') : '';
+      this._active = this._activeProject ? '' : (url.searchParams.get('chat') || window.gmActiveChat || '');
+    } catch (_) { /* ignore */ }
     this._load();
     // The menu button opens and closes the side menu in the browser only
     // (theme_manager.js sets <html data-sidenav>), so follow that too.
@@ -128,6 +141,7 @@ class GmChatNav extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('gm-chats-changed', this._onChanged);
     window.removeEventListener('gm-active-chat', this._onActive);
+    window.removeEventListener('gm-active-project', this._onActiveProject);
     document.removeEventListener('click', this._onDocClick);
     this._navObserver?.disconnect();
   }
@@ -193,6 +207,13 @@ class GmChatNav extends LitElement {
     else this._go('/home', { chat: id });
   }
 
+  _openProject(id) {
+    this._menu = null;
+    this._activeProject = id;
+    this._active = '';
+    this._go('/project', { id });
+  }
+
   // ------------------------------------------------------------- edits
 
   async _rename(kind, id, name) {
@@ -215,6 +236,7 @@ class GmChatNav extends LitElement {
     try {
       await api('DELETE', kind === 'chat' ? `/api/chats/${id}` : `/api/projects/${id}`);
       if (kind === 'chat' && id === this._active) this._newChat();
+      if (kind === 'project' && id === this._activeProject) { this._activeProject = ''; this._go('/home'); }
       this._changed();
     } catch (_) { this._load(); }
   }
@@ -344,9 +366,11 @@ class GmChatNav extends LitElement {
           return html`<div class="project" @dragover=${(e) => { e.preventDefault(); e.currentTarget.classList.add('over'); }}
               @dragleave=${(e) => e.currentTarget.classList.remove('over')} @drop=${(e) => this._drop(e, p.id)}>
             ${this._renaming && this._renaming.id === p.id ? html`<div class="chat">${this._editor('project', p.id, p.name)}</div>` : html`
-            <div class="chat proj ${this._menu && this._menu.id === p.id ? 'menuing' : ''}">
-              <button type="button" class="chat-open" @click=${() => this._toggleProject(p.id)} aria-expanded=${open ? 'true' : 'false'}>
-                <span class="caret ${open ? 'down' : ''}">${svg(ICON.caret, 16)}</span>${svg(open ? ICON.folderOpen : ICON.folder, 18)}<span class="t">${p.name}</span></button>
+            <div class="chat proj ${p.id === this._activeProject ? 'active' : ''} ${this._menu && this._menu.id === p.id ? 'menuing' : ''}">
+              <button type="button" class="caret-btn" @click=${() => this._toggleProject(p.id)} aria-expanded=${open ? 'true' : 'false'}
+                aria-label=${(S.show_chats || 'Show chats') + ': ' + p.name}><span class="caret ${open ? 'down' : ''}">${svg(ICON.caret, 16)}</span></button>
+              <button type="button" class="chat-open" @click=${() => this._openProject(p.id)} title=${p.name}
+                aria-current=${p.id === this._activeProject ? 'page' : 'false'}>${svg(open ? ICON.folderOpen : ICON.folder, 18)}<span class="t">${p.name}</span></button>
               <button type="button" class="more" @click=${(e) => this._openMenu(e, 'project', p.id)} aria-label=${(S.options || 'Options') + ': ' + p.name}>${svg(ICON.more, 18)}</button>
             </div>`}
             ${open ? html`${inside.map((c) => this._chatRow(c, true))}
@@ -411,10 +435,16 @@ class GmChatNav extends LitElement {
     .chat.in .chat-open { padding-left: 10px; }
     .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .pin { display: inline-flex; color: var(--sys-on-surface-variant, #9aa0a6); }
-    .proj .chat-open { padding-left: 6px; gap: 6px; }
+    .proj .chat-open { padding-inline: 2px 4px; gap: 6px; }
     .proj svg { color: var(--sys-on-surface-variant, #9aa0a6); }
+    .proj.active .chat-open { font-weight: 600; }
+    .proj.active .chat-open svg { color: var(--sys-on-surface, #e8eaed); }
+    .caret-btn { width: 26px; height: 26px; margin-inline-start: 4px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer;
+      display: grid; place-items: center; flex: none; }
+    .caret-btn:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
     .caret { display: inline-flex; transition: transform 160ms ease; }
     .caret.down { transform: rotate(90deg); }
+    :host(:dir(rtl)) .caret:not(.down) { transform: scaleX(-1); }
     .more { width: 30px; height: 30px; margin-right: 2px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center;
       color: var(--sys-on-surface-variant, #9aa0a6); opacity: 0; }
     .chat:hover .more, .chat.menuing .more, .more:focus-visible { opacity: 1; }

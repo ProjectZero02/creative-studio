@@ -29,6 +29,9 @@ Projects:
 - ``GET /api/projects``, ``POST /api/projects`` (``{"name"}``),
   ``PATCH /api/projects/{id}`` (``{"name"}``), ``DELETE /api/projects/{id}``
   (its chats move back to no project).
+- ``GET /api/projects/{id}`` returns what the project page shows:
+  ``{"project", "chats" (no messages), "media"}``, where media is every
+  finished job with a picture, video or sound across its chats.
 
 Everything is per caller (signed-in email); another owner's id is 404.
 Writes must come from this site and send JSON (same guards as /api/chat).
@@ -179,6 +182,21 @@ async def create_project(request: Request) -> dict:
     body = await _body(request)
     project = {"id": chat_store.new_id(), "name": body.get("name")}
     return {"project": await run_in_threadpool(_save_project, project, owner)}
+
+
+@router.get("/projects/{project_id}")
+def get_project(project_id: str, request: Request) -> dict:
+    owner = _caller(request)
+    store = chat_store.get_store()
+    project = store.get_project(project_id, owner)
+    if not project:
+        raise HTTPException(status_code=404, detail="Not found")
+    chats = store.list_chats(owner, project_id)
+    return {
+        "project": project,
+        "chats": [chat_store.summary(c) for c in chats],
+        "media": chat_store.chat_media(chats),
+    }
 
 
 @router.patch("/projects/{project_id}")
