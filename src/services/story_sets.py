@@ -30,7 +30,7 @@ from typing import Protocol
 
 from common.analytics import get_logger
 from config.default import Default
-from services.story_models import NOT_FAMOUS, STYLE_BY_ID, VOICES, _now_iso, new_id
+from services.story_models import EVERYDAY_PERSON, STYLE_BY_ID, VOICES, _now_iso, new_id
 from services.story_store import LOCAL_DIR, StoryAccessError, owns
 
 logger = get_logger(__name__)
@@ -636,7 +636,7 @@ def image_prompt(story_set: StorySet, asset: Asset, view: str) -> str:
             shot += f" The character: {look}."
         return (
             f"{shot} Plain light-grey studio background, even soft light. "
-            f"One person only, {NOT_FAMOUS}. Style: {style}.{notes} {_NO_TEXT}"
+            f"One person only, {EVERYDAY_PERSON}. Style: {style}.{notes} {_NO_TEXT}"
         )
     if isinstance(asset, Location):
         if view == "plate":
