@@ -420,17 +420,35 @@ html body .gm-segmented.ss-audio-type { justify-content: flex-start; margin: 4px
 .ss-edit-name > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-edit-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ss-edit-tools .mat-mdc-button-base { min-width: 112px; padding: 0 12px; border-radius: var(--gm-radius-md, 12px); }
-html body .ss-edit-dl component-renderer, html body .ss-edit-dl mesop-link { display: block; height: var(--gm-control-h, 40px); }
-html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
-  display: flex !important; align-items: center; justify-content: center; min-width: 112px; padding: 0 14px;
-  height: var(--gm-control-h, 40px); border-radius: var(--gm-radius-md, 12px);
+/* Download links look like buttons: tonal, or primary for the main one. */
+html body .ss-dl-btn component-renderer, html body .ss-dl-btn mesop-link { display: block; height: var(--gm-control-h, 40px); }
+html body .ss-dl-btn a {
+  display: flex !important; align-items: center; justify-content: center; min-width: 112px; padding: 0 16px;
+  height: var(--gm-control-h, 40px); border-radius: var(--gm-radius-md, 12px); box-sizing: border-box;
   background: var(--gm-tonal); color: var(--sys-on-surface); font-size: 14px; font-weight: 500; text-decoration: none;
   transition: background-color var(--gm-fast, 150ms) var(--gm-ease, ease);
 }
-.ss-edit-dl a:hover { background: var(--gm-tonal-hover); }
-.ss-edit-dl a:active { background: var(--gm-tonal-press); }
-.ss-edit-dl a:focus-visible { outline: 2px solid var(--gm-focus, var(--sys-primary)); outline-offset: 2px; }
-.ss-edit-dl.is-off > * { opacity: 0.45; cursor: default; }
+html body .ss-dl-btn a:hover { background: var(--gm-tonal-hover); }
+html body .ss-dl-btn a:active { background: var(--gm-tonal-press); }
+html body .ss-dl-btn a:focus-visible { outline: 2px solid var(--gm-focus, var(--sys-primary)); outline-offset: 2px; }
+html body .ss-dl-btn.is-primary a { background: var(--sys-primary); color: var(--sys-on-primary); }
+html body .ss-dl-btn.is-primary a:hover { background: color-mix(in srgb, var(--sys-primary) 88%, #fff); }
+/* Slots above and below the editor (the editor itself never moves). */
+.ss-slot { display: flex; flex-direction: column; gap: 16px; }
+.ss-slot:empty { display: none; }
+/* Export menu */
+.ss-export { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.ss-export-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.ss-export-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ss-export .mat-mdc-form-field { width: 100%; }
+.ss-export .mat-mdc-form-field-subscript-wrapper { display: none; }
+.ss-export .mat-mdc-text-field-wrapper { height: var(--gm-control-h, 40px); background: var(--gm-field-bg); }
+.ss-export .mat-mdc-form-field-infix { min-height: var(--gm-control-h, 40px); padding-top: 8px !important; padding-bottom: 8px !important; }
+.ss-export .mdc-notched-outline > * { border-color: var(--gm-field-line) !important; }
+.ss-export-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; min-height: var(--gm-control-h, 40px); }
+.ss-export-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.ss-export-what { flex: 1 1 200px; min-width: 0; }
+.ss-export-actions .mat-mdc-button-base { min-width: 112px; height: var(--gm-control-h, 40px); border-radius: var(--gm-radius-md, 12px); }
 .ss-edit-music { display: grid; flex-direction: row; grid-template-columns: minmax(0, 1fr) 132px 132px; gap: 8px; align-items: center; padding: 12px 16px; }
 .ss-edit-music .mat-mdc-button-base { width: 100%; border-radius: var(--gm-radius-md, 12px); }
 .ss-edit-music .mat-mdc-form-field-subscript-wrapper { display: none; }
@@ -545,7 +563,12 @@ html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * {
   .ss-edit-head, .ss-edit-music, .ss-edit-main { padding: 12px; }
   .ss-edit-name { width: 100%; }
   .ss-edit-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
-  .ss-edit-tools .mat-mdc-button-base, html body .ss-edit-dl a, html body .ss-edit-dl.is-off > * { width: 100%; min-width: 0; }
+  .ss-edit-tools > :only-child, .ss-edit-tools > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .ss-edit-tools .mat-mdc-button-base { width: 100%; min-width: 0; }
+  .ss-export { padding: 12px; }
+  .ss-export-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ss-export-actions > * { flex: 1 1 140px; }
+  html body .ss-export-actions .ss-dl-btn a, .ss-export-actions .mat-mdc-button-base { width: 100%; min-width: 0; }
   .ss-edit-music { grid-template-columns: 1fr 1fr; }
   .ss-edit-music-input { grid-column: 1 / -1; }
   .ss-set-tools, .ss-set-empty .ss-set-tools { grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }

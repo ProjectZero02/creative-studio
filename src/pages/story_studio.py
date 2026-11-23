@@ -52,6 +52,7 @@ from components.story_studio.widgets import (
 from services import (
     story_autoset,
     story_director,
+    story_export,
     story_fix,
     story_jobs,
     story_subtitles,
@@ -95,6 +96,7 @@ from services.story_sets import (
 from services.story_sets import duplicate as set_duplicate
 from services.story_store import StoryAccessError, get_store
 from state.state import AppState
+from state.story_export_state import StoryExportState
 from state.story_state import StoryState
 
 logger = get_logger(__name__)
@@ -2481,6 +2483,14 @@ def _timeline_handlers() -> timeline_view.TimelineHandlers:
             on_back_editor=on_back_editor,
             on_toggle_edit_music=on_toggle_edit_music,
             on_export=on_export,
+            on_export_menu=on_export_menu,
+            on_export_size=on_export_size,
+            on_export_format=on_export_format,
+            on_export_subs=on_export_subs,
+            on_export_lang=on_export_lang,
+            on_export_branding=on_export_branding,
+            on_subtitle_style=on_subtitle_style,
+            on_proxy_tick=on_proxy_tick,
             on_cancel_job=on_cancel_job,
             on_music_prompt=on_music_prompt,
             on_make_music=on_make_music,
@@ -2490,7 +2500,6 @@ def _timeline_handlers() -> timeline_view.TimelineHandlers:
             render_fix_panel=fix_panel,
             render_alt_film=_alt_film,
             render_versions_panel=versions_panel,
-            render_downloads_panel=downloads_panel,
             render_progress_panel=progress_panel,
             media_map=_media_map,
             job_active_for=_job_active_for,
@@ -2502,10 +2511,9 @@ def _timeline_handlers() -> timeline_view.TimelineHandlers:
 
 
 def _media_map(story: Story) -> dict[str, str]:
-    """Browser URL for every file the timeline plays, plus scene thumbnails."""
-    tl = timeline_mod.normalize(story.timeline_json)
-    srcs = {c["src"] for t in tl["tracks"] for c in t["clips"] if c.get("src")}
-    media = {src: display_url(src) for src in srcs}
+    """Scene thumbnails for the editor's strip (the player plays one
+    rendered file, so clip URLs are not needed)."""
+    media: dict[str, str] = {}
     for i, sc in enumerate(story.scenes):
         if sc.frame_uri:
             media[f"thumb:{i}"] = display_url(sc.frame_uri)
@@ -2568,10 +2576,10 @@ def versions_panel(story: Story, busy: bool) -> None:
                         ),
                     )
                 with me.box(classes="ss-dl-actions"):
-                    me.link(
-                        text="Download",
-                        url=display_url(row["uri"]),
-                        open_in_new_tab=True,
+                    timeline_view.download_link(
+                        "Download",
+                        timeline_view.download_url(story, f"version-{n}"),
+                        f"ss-vdl-{n}",
                     )
                     if not current:
                         me.button(
@@ -2629,98 +2637,8 @@ def on_use_version(e: me.ClickEvent):
 
 
 # ---------------------------------------------------------------------------
-# Edit step: downloads (without subtitles, English, Arabic, both)
+# Edit step: Export menu
 # ---------------------------------------------------------------------------
-
-
-def downloads_panel(story: Story, busy: bool) -> None:
-    if not story.final_uri:
-        return
-    making = _job_active_for("subtitles")
-    making_variant = (
-        ((_job() or {}).get("params") or {}).get("variant") if making else ""
-    )
-    with me.box(classes="ss-card ss-dl"):
-        with me.box(classes="ss-dl-head"):
-            with me.box(classes="ss-dl-title"):
-                me.text("Downloads", style=me.Style(font_size=16, font_weight=600))
-                me.text(
-                    "The film with or without subtitles. A subtitled version is made "
-                    "from your current edit; change the edit or the style and it is "
-                    "made again.",
-                    style=me.Style(
-                        font_size=13, color=me.theme_var("on-surface-variant")
-                    ),
-                )
-            me.button_toggle(
-                value=story.subtitle_style
-                if story.subtitle_style in story_subtitles.STYLES
-                else "clean",
-                buttons=[
-                    me.ButtonToggleButton(label=story_subtitles.STYLE_LABELS[k], value=k)
-                    for k in story_subtitles.STYLES
-                ],
-                disabled=busy,
-                on_change=on_subtitle_style,
-                key="ss-dl-style",
-            )
-        for variant in story_subtitles.VARIANTS:
-            ready = story_subtitles.ready_variant(story, variant)
-            stale = (
-                not ready
-                and variant != "none"
-                and variant in story_subtitles.variants(story)
-            )
-            with me.box(classes="ss-dl-row"):
-                with me.box(classes="ss-dl-name"):
-                    me.text(story_subtitles.VARIANT_LABELS[variant])
-                    if stale:
-                        me.text(
-                            "Out of date: the edit or style changed",
-                            style=me.Style(font_size=12, color=me.theme_var("primary")),
-                        )
-                with me.box(classes="ss-dl-actions"):
-                    if variant != "none" and _subtitle_file_ready(story, variant):
-                        me.link(
-                            text=".srt",
-                            url=f"/api/story/{story.id}/subtitles/{variant}.srt",
-                            open_in_new_tab=True,
-                        )
-                    if ready and not (story.film_edited and variant == "none"):
-                        me.link(
-                            text="Download",
-                            url=display_url(ready),
-                            open_in_new_tab=True,
-                        )
-                    elif variant == "none":
-                        me.text(
-                            "Export your edit first",
-                            style=me.Style(
-                                font_size=13, color=me.theme_var("on-surface-variant")
-                            ),
-                        )
-                    else:
-                        me.button(
-                            "Making…"
-                            if making_variant == variant
-                            else ("Make again" if stale else "Make"),
-                            type="stroked",
-                            disabled=busy or story.film_edited,
-                            on_click=on_make_subtitled,
-                            key=f"ss-dl-{variant}",
-                        )
-        if story.film_edited:
-            me.text(
-                "Export your edit first, so every download matches it.",
-                style=me.Style(font_size=13, color=me.theme_var("primary")),
-            )
-
-
-def _subtitle_file_ready(story: Story, variant: str) -> bool:
-    return all(
-        story_subtitles.lines_for(story, c) is not None
-        for c in story_subtitles.variant_langs(variant)
-    )
 
 
 def on_subtitle_style(e: me.ButtonToggleChangeEvent):
@@ -2728,16 +2646,47 @@ def on_subtitle_style(e: me.ButtonToggleChangeEvent):
         _set_story_field("subtitle_style", e.value)
 
 
-def on_make_subtitled(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.error = ""
-    variant = (e.key or "").removeprefix("ss-dl-")
+def on_export_menu(e: me.ClickEvent):
+    ex = me.state(StoryExportState)
+    ex.open = not ex.open
+
+
+def on_export_size(e: me.SelectSelectionChangeEvent):
     try:
-        job = story_jobs.start_subtitled(s.story_id, _owner(), variant)
-    except Exception as exc:
-        s.error = story_jobs.friendly_error(exc)
+        me.state(StoryExportState).short = int(e.value)
+    except (TypeError, ValueError):
+        pass
+
+
+def on_export_format(e: me.SelectSelectionChangeEvent):
+    if e.value in timeline_mod.EXPORT_FORMATS:
+        me.state(StoryExportState).fmt = e.value
+
+
+def on_export_subs(e: me.SelectSelectionChangeEvent):
+    if e.value in story_export.SUB_MODES:
+        me.state(StoryExportState).subs = e.value
+
+
+def on_export_lang(e: me.SelectSelectionChangeEvent):
+    if e.value in story_subtitles.VARIANTS and e.value != "none":
+        me.state(StoryExportState).lang = e.value
+
+
+def on_export_branding(e: me.SlideToggleChangeEvent):
+    ex = me.state(StoryExportState)
+    ex.branding = not ex.branding
+
+
+def on_proxy_tick(e: me.WebEvent):
+    """While the preview is being rendered: pick it up when it is ready
+    (and start it again if nothing is rendering it, e.g. after a restart)."""
+    s = me.state(StoryState)
+    if not s.story_id:
         return
-    _watch(job.id)
+    story = _reload_story()
+    if story is not None:
+        story_jobs.ensure_proxy(story, _owner())
 
 
 # ---------------------------------------------------------------------------
@@ -3065,7 +3014,9 @@ def on_export(e: me.ClickEvent):
     s = me.state(StoryState)
     s.error = ""
     try:
-        job = story_jobs.start_export(s.story_id, _owner())
+        job = story_jobs.start_export(
+            s.story_id, _owner(), me.state(StoryExportState).options()
+        )
     except Exception as exc:
         s.error = story_jobs.friendly_error(exc)
         return
@@ -3130,7 +3081,9 @@ def _alt_film(story: Story) -> None:
                 story.title_alt or story.title or "Your film",
                 style=me.Style(font_size=16, font_weight=600),
             )
-        me.markdown(f"[Download MP4]({display_url(story.final_alt_uri)})")
+        timeline_view.download_link(
+            "Download", timeline_view.download_url(story, "alt"), "ss-dl-alt"
+        )
 
 
 def on_back_editor(e: me.ClickEvent):
