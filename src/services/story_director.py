@@ -30,8 +30,6 @@ from services.story_models import (
     SHOT_SIZE_IDS,
     SHOT_SIZES,
     SPEAKER_FACING,
-    STYLE_BY_ID,
-    STYLES,
     VOICES,
     WORDS_PER_SECOND,
     Story,
@@ -47,6 +45,7 @@ from services.story_models import (
     cast_schema,
     nearest_duration,
     normalize_camera,
+    style_of,
     supported_durations,
 )
 
@@ -164,6 +163,172 @@ def plan_film_blueprint(
         "estimated_seconds": scene_count * duration,
         "shots_per_sequence": shots_per_sequence,
     }
+
+
+# ---------------------------------------------------------------------------
+# Setup: duration text and the live blueprint
+# ---------------------------------------------------------------------------
+
+# Used when the duration box is blank and the idea names no length.
+DEFAULT_FILM_SECONDS = 30
+
+_UNIT_SECONDS = {
+    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+    "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+    "h": 3600, "hr": 3600, "hour": 3600, "hours": 3600,
+}
+_WORD_NUMBERS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "fifteen": 15,
+    "twenty": 20, "thirty": 30, "forty": 40, "forty-five": 45, "sixty": 60,
+    "ninety": 90, "half": 0.5,
+}
+_DURATION_PART = re.compile(
+    r"(\d+(?:[.,]\d+)?|[a-z-]+)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])"
+)
+
+
+def parse_duration_text(text: str) -> int | None:
+    """Seconds asked for in the Setup duration box.
+
+    "30s", "30 sec", "2 min", "1m30s", "1:30", "90", "half a minute",
+    "2.5 minutes" all work. Blank gives 0 (Gemini decides); text that is not
+    a length gives None. The result is capped at STORY_MAX_FILM_SECONDS.
+    """
+    t = " ".join(str(text or "").lower().replace("and", " ").split())
+    if not t:
+        return 0
+    cap = max(1, int(Default().STORY_MAX_FILM_SECONDS))
+    m = re.fullmatch(r"(\d{1,3}):([0-5]\d)", t)
+    if m:
+        secs = int(m.group(1)) * 60 + int(m.group(2))
+        return min(cap, secs) if secs > 0 else None
+    m = re.fullmatch(r"\d+(?:[.,]\d+)?", t)
+    if m:
+        secs = round(float(t.replace(",", ".")))
+        return min(cap, secs) if secs > 0 else None
+    t = t.replace("half a minute", "30 s").replace("half an hour", "30 min")
+    total = 0.0
+    found = False
+    for num, unit in _DURATION_PART.findall(t):
+        if num[0].isdigit():
+            value = float(num.replace(",", "."))
+        elif num in _WORD_NUMBERS:
+            value = float(_WORD_NUMBERS[num])
+        else:
+            continue
+        total += value * _UNIT_SECONDS[unit]
+        found = True
+    if not found or total <= 0:
+        return None
+    return min(cap, round(total))
+
+
+def _video_price(video_model: str) -> float:
+    from config import pricing
+
+    mid = (video_model or "").strip() or Default().STORY_VIDEO_MODEL
+    name = {"hybrid": "gemini-omni", "3.1": "veo-3.1", "3.1-fast": "veo-3.1-fast"}.get(
+        mid, mid
+    )
+    return pricing._match(name, pricing.VIDEO_PER_SECOND) or 0.40
+
+
+def _pack_takes(shots: int, shot_seconds: int, take_max: int) -> list[int]:
+    """Shots per take when every shot carries on the one before until a
+    take is full (the director cuts only when it must)."""
+    per_take = max(1, int(take_max) // max(1, int(shot_seconds)))
+    takes = []
+    left = int(shots)
+    while left > 0:
+        takes.append(min(per_take, left))
+        left -= per_take
+    return takes
+
+
+def setup_blueprint(
+    seconds: int,
+    *,
+    pacing: str = "cinematic",
+    video_model: str = "",
+    resolution: str = "",
+    voice_on: bool = True,
+    music_on: bool = True,
+) -> dict:
+    """What Setup's live blueprint shows for a film of about `seconds`:
+    shots, takes and cuts, resolution, an estimated cost (from
+    config/pricing.py) and an estimated time. Gemini makes the real cut list;
+    these are honest estimates for the request.
+
+    Video is priced per generated second: an extension bills only its new
+    seconds, so a take costs its own length once.
+    """
+    from config import pricing
+    from services.story_models import _video_model_spec, apply_caps, single_clip_max
+
+    cfg = Default()
+    asked = int(seconds or 0) or DEFAULT_FILM_SECONDS
+    plan = plan_film_blueprint(asked, pacing=pacing, video_model=video_model)
+    shots, shot_secs = int(plan["scene_count"]), int(plan["duration"])
+    length = shots * shot_secs
+    caps = apply_caps(shots, shot_secs, resolution=resolution, model_id=video_model)
+    take_max = int(getattr(cfg, "STORY_TAKE_MAX_SECONDS", 40) or 40)
+    takes = _pack_takes(shots, shot_secs, take_max)
+    take_count = len(takes)
+
+    video_rate = _video_price(video_model)
+    image_rate = pricing._match("gemini-image", pricing.IMAGE_PER_IMAGE) or 0.039
+    words = length * WORDS_PER_SECOND
+    voice_cost = (
+        words * 6 / 1e6 * (pricing._match("tts", pricing.SPEECH_PER_MILLION_CHARS) or 10.0)
+        if voice_on
+        else 0.0
+    )
+    cost = {
+        "video": round(length * video_rate, 2),
+        "frames": round(take_count * image_rate, 2),
+        "voice": round(voice_cost, 4),
+        "music": pricing.MUSIC_PER_TRACK if music_on else 0.0,
+    }
+    cost["total"] = round(sum(cost.values()), 2)
+
+    model, _ = _video_model_spec(video_model)
+    per_call = int(getattr(model, "typical_generation_seconds", 90) or 90)
+    single = max(1, single_clip_max(video_model))
+    parallel = max(1, int(getattr(cfg, "STORY_MAX_PARALLEL", 3) or 3))
+    # A take is one clip plus extension turns, made one after another;
+    # separate takes run side by side.
+    turns = [max(1, -(-(n * shot_secs - single) // 10) + 1) if n * shot_secs > single else 1
+             for n in takes]
+    waves = -(-take_count // parallel)
+    clip_time = waves * max(turns) * per_call
+    est_time = 30 + 20 * -(-take_count // parallel) + clip_time + 30
+    return {
+        "asked_seconds": int(seconds or 0),
+        "seconds": length,
+        "shots": shots,
+        "shot_seconds": shot_secs,
+        "takes": take_count,
+        "cuts": max(0, take_count - 1),
+        "shots_per_take": takes,
+        "resolution": caps.resolution,
+        "cost": cost,
+        "time_seconds": int(est_time),
+    }
+
+
+def takes_line(takes: int) -> str:
+    """'1 continuous take' or '3 takes, 2 cuts'."""
+    if takes <= 1:
+        return "1 continuous take"
+    cuts = takes - 1
+    return f"{takes} takes, {cuts} cut{'s' if cuts != 1 else ''}"
+
+
+def time_line(seconds: int) -> str:
+    """'about 4 min' style."""
+    mins = max(1, round(seconds / 60))
+    return f"about {mins} min"
 
 
 # ---------------------------------------------------------------------------
@@ -719,7 +884,7 @@ def _blueprint_for_story(story: Story) -> dict:
 def outline_prompt(story: Story, story_set: object | None = None) -> str:
     """Build Stage 1 prompt: visual grammar lock, cast, and sequence outline."""
     bp = _blueprint_for_story(story)
-    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    style = style_of(story)
     brief = (
         f'\nBrief (from an earlier pass; improve it, keep what the user edited): """{story.brief.strip()}"""'
         if story.brief.strip()
@@ -836,7 +1001,7 @@ def sequence_shots_prompt(  # noqa: PLR0913, PLR0917
     story_set: object | None = None,
 ) -> str:
     """Build Stage 2 prompt: expand one sequence outline into exact shots."""
-    style = STYLE_BY_ID.get(story.style, STYLES[0])
+    style = style_of(story)
     shot_count = max(1, int(seq.get("shot_count") or 1))
     target_secs = int(seq.get("target_seconds") or shot_count * max(1, story.duration))
     avg_dur = max(_MIN_BEAT_SECONDS, round(target_secs / shot_count))
@@ -844,7 +1009,7 @@ def sequence_shots_prompt(  # noqa: PLR0913, PLR0917
     cam_rule = (
         f'Use the camera move "{story.camera}" for every shot.'
         if story.camera in CAMERA_IDS
-        else f"Pick the best camera move for each shot from: {cams}."
+        else f"Read the camera from the idea: if it says how the camera moves (for example 'the camera pans left to right slowly'), use that move, direction and speed for every shot it covers and do not change it between shots of one take. Otherwise pick the best camera move for each shot from: {cams}."
     )
     shot_sizes = ", ".join(f"{k} ({v})" for k, v in SHOT_SIZES.items())
     transitions = ", ".join(DIRECTOR_TRANSITION_IDS)

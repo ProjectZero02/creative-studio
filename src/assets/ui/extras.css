@@ -72,7 +72,7 @@
 .gm-brand-hint { font-size: 13px; color: var(--sys-on-surface-variant); }
 .gm-brand-colors { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .gm-brand-color { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 8px; border-radius: 12px;
-  border: 1px solid var(--sys-outline-variant, rgba(127, 127, 127, 0.25)); }
+  background: var(--gm-tonal, rgba(127, 127, 127, 0.08)); }
 .gm-brand-swatch .mat-mdc-form-field { width: 64px; }
 .gm-brand-swatch .mat-mdc-form-field-subscript-wrapper { display: none; }
 .gm-brand-swatch input[type="color"] { height: 28px; padding: 0; border: 0; background: none; cursor: pointer; }
@@ -84,6 +84,30 @@
 .gm-brand-logo-row .mat-mdc-form-field { width: 170px; }
 .gm-brand-logo-row .mat-mdc-form-field-subscript-wrapper { display: none; }
 .gm-brand-actions { display: flex; align-items: center; gap: 12px; }
+/* Brands list: cards on the left, the editor on the right. */
+.gm-brand-page { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.gm-brand-page .gm-brand { max-width: none; }
+.gm-brand-list { display: flex; flex-direction: column; gap: 8px; }
+.gm-brand-card { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 8px 12px; border-radius: 14px;
+  background: var(--gm-tonal, rgba(127, 127, 127, 0.08)); cursor: pointer; transition: background-color 160ms ease; }
+.gm-brand-card:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.12)); }
+.gm-brand-card.is-on { background: var(--sys-secondary-container, rgba(127, 127, 127, 0.18)); color: var(--sys-on-secondary-container, inherit); }
+.gm-brand-card-logo { width: 44px; height: 44px; flex: 0 0 44px; border-radius: 10px; display: flex; align-items: center;
+  justify-content: center; overflow: hidden; background: var(--gm-field-bg, rgba(127, 127, 127, 0.05)); }
+.gm-brand-card-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.gm-brand-card-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.gm-brand-card-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-brand-dots { display: flex; align-items: center; gap: 4px; }
+.gm-brand-dot { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.25); }
+.gm-brand-default { font-size: 12px; color: var(--sys-on-surface-variant); margin-left: 4px; }
+.gm-brand-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.gm-brand-head-actions, .gm-brand-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gm-brand-confirm { padding: 8px 12px; border-radius: 12px; background: var(--gm-tonal, rgba(127, 127, 127, 0.08)); }
+@media (max-width: 760px) {
+  .gm-brand-page { grid-template-columns: minmax(0, 1fr); }
+  .gm-brand-list { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+  .gm-brand-card { flex: 0 0 auto; max-width: 220px; }
+}
 
 /* Text inside the classed boxes above (me.text renders its own block). */
 .gm-usage-model > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
