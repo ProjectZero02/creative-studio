@@ -1257,6 +1257,7 @@ def test_other_omni_errors_are_not_retried(monkeypatch, set_store):
 
 def test_people_are_invented_as_ordinary_and_face_their_audience():
     from services.story_models import (
+        EVERYDAY_PERSON,
         NOT_FAMOUS,
         SPEAKER_FACING,
         clip_prompt,
@@ -1276,8 +1277,38 @@ def test_people_are_invented_as_ordinary_and_face_their_audience():
     assert SPEAKER_FACING in scen and NOT_FAMOUS in scen
     assert NOT_FAMOUS in set_build_prompt(story)
     frame = frame_prompt(story, story.scenes[0], False)
-    assert SPEAKER_FACING in frame and NOT_FAMOUS in frame
+    # Image prompts describe an everyday person and never name celebrities,
+    # which pulls image models towards famous faces.
+    assert SPEAKER_FACING in frame and EVERYDAY_PERSON in frame
+    assert "celebrit" not in frame.lower() and "film still" not in frame
     clip = clip_prompt(story, story.scenes[0])
     assert "looks at the camera" not in clip and "the audience in the scene" in clip
     char = _full_set().characters[0]
-    assert NOT_FAMOUS in story_sets.image_prompt(_full_set(), char, "front")
+    portrait = story_sets.image_prompt(_full_set(), char, "front")
+    assert EVERYDAY_PERSON in portrait and "celebrit" not in portrait.lower()
+    assert "Never base a character on a real" in set_build_prompt(story)
+
+
+def test_a_responsible_ai_refusal_is_retried_from_the_set(monkeypatch, set_store):
+    general = (
+        "Omni generation failed: Error code: 400 - The input could not be "
+        "submitted. This input violates Google's Responsible AI practices."
+    )
+    backend, story, sent = _lookalike_backend(
+        monkeypatch, set_store, [general, ("gs://b/clip.mp4", "int-2")]
+    )
+    assert (
+        backend.generate_clip(story, 0, story.scenes[0].frame_uri) == "gs://b/clip.mp4"
+    )
+    assert [r.omni_mode for r in sent] == ["i2v", "ref2v"]
+
+
+def test_a_responsible_ai_refusal_twice_says_what_to_do(monkeypatch, set_store):
+    from common.error_handling import GenerationError
+
+    general = "Error code: 400 - This input violates Google's Responsible AI practices."
+    backend, story, _ = _lookalike_backend(monkeypatch, set_store, [general, general])
+    with pytest.raises(GenerationError) as err:
+        backend.generate_clip(story, 0, story.scenes[0].frame_uri)
+    assert str(err.value) == story_service.REFUSED_MESSAGE
+    assert story_jobs.friendly_error(err.value) == story_service.REFUSED_MESSAGE

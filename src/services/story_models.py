@@ -50,7 +50,9 @@ STYLES: list[dict[str, str]] = [
         "id": "photographic",
         "label": "Photographic",
         "chip": "Photo",
-        "prompt": "cinematic photorealistic film still, natural light, shallow depth of field, 35mm",
+        # Not "cinematic film still": that pulls faces towards film actors,
+        # which the video model refuses as real people.
+        "prompt": "photorealistic, natural light, shallow depth of field, 35mm, candid documentary realism",
     },
     {
         "id": "2d",
@@ -1086,9 +1088,17 @@ SPEAKER_FACING = (
 
 # Generated faces that drift towards a famous face are refused by the video
 # model ("prominent individuals"), so people are invented as ordinary ones.
+# NOT_FAMOUS is for Gemini's writing, which follows "not" well.
 NOT_FAMOUS = (
-    "an ordinary, non-famous person who does not resemble any celebrity, "
-    "actor or public figure"
+    "an ordinary, non-famous person with an invented name, who does not "
+    "resemble or share the name of any celebrity, actor or public figure"
+)
+# EVERYDAY_PERSON is for image prompts. Image models follow "not" poorly, so
+# naming celebrities there pulls faces towards them: describe the opposite.
+EVERYDAY_PERSON = (
+    "a believable everyday person with their own natural, slightly uneven "
+    "features and real skin texture, like a candid photo of someone met on "
+    "the street, not glamorous or model-like"
 )
 
 
@@ -1416,7 +1426,9 @@ def _cast_item_rules() -> str:
   wording, no actions. "outfit": what they wear in every scene. Each person
   is {NOT_FAMOUS}: avoid stock "handsome leading man" or "model" wording and
   give one or two distinctive details (greying temples, freckles, glasses,
-  a crooked nose, a small scar).
+  a crooked nose, a small scar). Never base a character on a real, named
+  person: if the idea names a famous person, write an original character in
+  a similar role, because the video model refuses real people's faces.
 - Each character's "voice": "tts_voice" is one of {voices} and matches
   their gender; "style" is a short delivery note (e.g. "warm, unhurried");
   "description" is one fixed English line that starts with gender, then age,
@@ -1725,7 +1737,7 @@ def frame_prompt(
     place = f" Place: {where}." if where else ""
     people = ""
     if who:
-        people = f" Every person is {NOT_FAMOUS}."
+        people = f" Every person is {EVERYDAY_PERSON}."
         if any("face" in label for label in ref_labels or []):
             people += " Keep each face exactly as in its face image."
     facing = (
