@@ -150,6 +150,37 @@ def clip_end(clip: dict) -> float:
     return float(clip.get("start") or 0) + clip_length(clip)
 
 
+def merge_runs(clips: list[dict], fps: int = 24) -> list[dict]:
+    """Back-to-back pieces of one file (a continuous take cut into scenes)
+    as single clips: same source, the next piece starts where the last one
+    ended (in the file and on the timeline, within a frame), and no fade.
+    Rendered as one piece, the picture and its sound run straight through
+    the join instead of being cut and faded there."""
+    tol = 1.5 / max(1, fps)
+    out: list[dict] = []
+    for c in clips:
+        prev = out[-1] if out else None
+        if (
+            prev is not None
+            and c.get("src") == prev.get("src")
+            and not c.get("fade_in")
+            and abs(float(c.get("tempo") or 1.0) - 1.0) < 1e-6
+            and abs(float(prev.get("tempo") or 1.0) - 1.0) < 1e-6
+            and bool(c.get("ambient")) == bool(prev.get("ambient"))
+            and abs(float(c.get("gain", 1.0)) - float(prev.get("gain", 1.0))) < 1e-6
+            and abs(float(c["in"]) - float(prev["out"])) <= tol
+            and abs(float(c["start"]) - clip_end(prev)) <= tol
+        ):
+            out[-1] = {
+                **prev,
+                "out": c["out"],
+                "src_max": max(float(prev.get("src_max", prev["out"])), float(c.get("src_max", c["out"]))),
+            }
+            continue
+        out.append(dict(c))
+    return out
+
+
 def duration(timeline: dict) -> float:
     """Film length: the end of the last video clip (other tracks are cut there)."""
     ends = [clip_end(c) for c in track(timeline, "video")["clips"]]
@@ -816,7 +847,7 @@ def render_args(
     # Narrated clips' own sound: a bed under the voice, mixed after the
     # ducking so it neither ducks the music nor is ducked.
     beds: list[str] = []
-    vclips = track(timeline, "video")["clips"]
+    vclips = merge_runs(track(timeline, "video")["clips"], fps)
     color_match = bool(timeline.get("color_match", True))
     for k, c in enumerate(vclips):
         idx = add_input(paths[c["src"]])
@@ -1092,10 +1123,13 @@ def render_timeline(
     preset: str = "veryfast",
     logo: str = "",
     logo_corner: str = "br",
+    check_seams: bool = False,
 ) -> str:
     """Render a timeline to MP4. ``fetch(uri, local_path)`` copies a source
     file to disk (GCS download, or a local copy in demo mode). ``logo`` is an
-    image uri drawn small in ``logo_corner`` for the whole film."""
+    image uri drawn small in ``logo_corner`` for the whole film.
+    ``check_seams`` measures every join of the result into
+    ``timeline["seams"]`` (see :func:`seam_check`)."""
     from common.error_handling import GenerationError
 
     tl = normalize(timeline)
@@ -1160,7 +1194,71 @@ def render_timeline(
 
             get_logger(__name__).error("ffmpeg render failed: %s", result.stderr[-2000:])
             raise GenerationError("Rendering the film failed. Retry export.")
+    if check_seams:
+        cuts = [c["start"] for c in merge_runs(track(tl, "video")["clips"], tl["fps"])[1:]]
+        try:
+            timeline["seams"] = seam_check(out_path, cuts)
+        except Exception:  # the check never stops the film
+            from common.analytics import get_logger
+
+            get_logger(__name__).warning("Seam check skipped", exc_info=True)
     return out_path
+
+
+# A join whose picture change is this many times the film's typical
+# frame-to-frame change shows as a visible jump.
+SEAM_JUMP_RATIO = 5.0
+
+
+def frame_changes(path: str) -> list[tuple[float, float]]:
+    """(time, change from the previous frame) for every frame of a video:
+    ffmpeg's scene score, 0 for identical frames up to 1 for a new picture."""
+    import re
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log = os.path.join(tmp, "scores.txt")
+        subprocess.run(
+            [
+                _ffmpeg(), "-v", "error", "-i", path, "-an", "-vf",
+                "select='gte(scene,0)',metadata=print:key=lavfi.scene_score:file=scores.txt",
+                "-f", "null", "-",
+            ],
+            capture_output=True,
+            check=False,
+            cwd=tmp,
+        )
+        if not os.path.exists(log):
+            return []
+        with open(log, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    times = [float(t) for t in re.findall(r"pts_time:([\d.]+)", text)]
+    scores = [float(s) for s in re.findall(r"scene_score=([\d.]+)", text)]
+    return list(zip(times, scores, strict=False))
+
+
+def seam_check(path: str, cut_times: list[float], window: float = 0.09) -> list[dict]:
+    """How visible each join of a rendered film is: the largest frame change
+    within `window` seconds of the join, and how many times the film's
+    median change that is. ``jump`` marks a join past SEAM_JUMP_RATIO."""
+    changes = frame_changes(path)
+    if not changes or not cut_times:
+        return []
+    ordered = sorted(s for _, s in changes)
+    median = max(ordered[len(ordered) // 2], 1e-4)
+    report = []
+    for t in cut_times:
+        near = [s for ts, s in changes if abs(ts - t) <= window]
+        peak = max(near or [0.0])
+        ratio = round(peak / median, 1)
+        report.append(
+            {
+                "t": round(float(t), 3),
+                "score": round(peak, 4),
+                "ratio": ratio,
+                "jump": ratio >= SEAM_JUMP_RATIO,
+            }
+        )
+    return report
 
 
 def copy_timeline(timeline: dict) -> dict:

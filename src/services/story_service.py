@@ -432,8 +432,18 @@ def make_film(
         )
         timeline = tl_mod.keep_edits(timeline, story.timeline_json)
         tl_mod.render_timeline(
-            timeline, lambda uri, dest: shutil.copyfile(local(uri), dest), out_path
+            timeline,
+            lambda uri, dest: shutil.copyfile(local(uri), dest),
+            out_path,
+            check_seams=True,
         )
+        jumps = [s for s in timeline.get("seams", []) if s.get("jump")]
+        if jumps:
+            logger.warning(
+                "Story %s: visible jump at %s",
+                story.id,
+                ", ".join(f"{s['t']:.2f}s (x{s['ratio']})" for s in jumps),
+            )
     return timeline
 
 
@@ -1624,13 +1634,14 @@ def take_frame(story: Story, index: int) -> str:
 
 def take_turn_frame(story: Story, index: int, first: bool) -> str:
     """Storyboard frame sent with scene `index`'s turn of its take, which the
-    turn opens on. The take's first clip only opens on its frame when it was
-    made fresh from it (not from the previous clip's last frame). When the
-    scene uses an `extend` transition, returns "" so Omni continues smoothly."""
-    sc = story.scenes[index]
-    if sc.transition == "extend":
+    turn opens on. Only the take's first clip opens on a frame (when it was
+    made fresh from it, not from the previous clip's last frame). Later turns
+    get no picture: a separately painted frame made the camera jump back to
+    it and broke the shot. The take carries on from its own last second."""
+    if not first:
         return ""
-    return sc.frame_uri if not (first and sc.continues_from) else ""
+    sc = story.scenes[index]
+    return sc.frame_uri if not sc.continues_from else ""
 
 
 def take_history(

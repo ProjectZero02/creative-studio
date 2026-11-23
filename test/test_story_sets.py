@@ -1080,7 +1080,8 @@ def test_clip_prompt_uses_cast_and_speaker_voice_verbatim():
     assert "OLD TEXT" not in text and "OLD VOICE" not in text
     cont = clip_prompt(story, spoken, continuing=True, story_set=st)
     assert cont.startswith(
-        "Continue this exact shot without a cut: the same person (Ana (Ana look); Ben (Ben look))"
+        "Continue this exact shot without a cut, from its last frame: "
+        "the same person (Ana (Ana look); Ben (Ben look))"
     )
 
 

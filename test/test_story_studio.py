@@ -1193,20 +1193,21 @@ def test_continuation_carries_the_thread_and_its_history(omni_calls, monkeypatch
     (req,) = omni_calls
     assert req.previous_interaction_id == "int-b"
     assert req.omni_mode == "t2v" and req.duration_seconds == 8
-    assert "Carry on the same take" in req.prompt and "Maya" in req.prompt
-    # The thread keeps the voice; the scene's storyboard frame sets the shot.
-    assert req.reference_image_gcs == "gs://b/f2.png"
+    assert "Continue this exact shot without a cut" in req.prompt and "Maya" in req.prompt
+    # The take carries on from its own last second: no painted frame is sent
+    # (it pulled the camera back to a separately drawn shot).
+    assert not req.reference_image_gcs
     assert not req.last_reference_image_gcs
-    assert "hold that shot" in req.prompt
+    assert "hold that shot" not in req.prompt
     history = json.loads(req.chat_history_json)
     assert [h["type"] for h in history] == ["user_input", "model_output"] * 2
     assert history[0]["content"][0]["text"] == story_models.clip_prompt(
         story, story.scenes[0]
     )
-    # Each turn carries only its own frame.
+    # Only the take's first turn carries a frame.
     assert [p["uri"] for p in history[0]["content"][1:]] == ["gs://b/f0.png"]
-    assert "Carry on the same take" in history[2]["content"][0]["text"]
-    assert [p["uri"] for p in history[2]["content"][1:]] == ["gs://b/f1.png"]
+    assert "Continue this exact shot" in history[2]["content"][0]["text"]
+    assert history[2]["content"][1:] == []
     assert [h["content"][0]["gcs_uri"] for h in history[1::2]] == [
         "gs://b/c0.mp4",
         "gs://b/c1.mp4",

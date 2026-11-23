@@ -69,6 +69,11 @@ Note: "we may be over-complicating it" is partly right. Most of the cuts come fr
 
 ### Phase A: seamless engine (do first)
 
+Status (2026-11-23): A1, A2, A4, A5 and A6 (check and log) are built.
+
+- **Re-stitch of the live test film with A1:** the join change at 8 s and 16 s dropped from 0.018 to 0.0009 (normal motion; the film's median is 0.0006), and the sound runs through.
+- **Still to do:** A3, A7, A6 auto-retry, and the live re-test (section 5, tests 2–3).
+
 A1. **One take = one file.** In `build_stitch_plan`, collapse an extension chain into a single segment that uses the last extension's file whole (start at the chain head, trim 0, full length, its own audio). Merge only between separate clips. Player and export use the same rule.
 
 A2. **Takes up to 40 s in one file.** Raise `STORY_TAKE_MAX_SECONDS` to 40 for Omni (env-driven, per model in `config/omni_models.py`). Allow continuous takes for any shots, not only spoken pairs.
