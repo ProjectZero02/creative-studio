@@ -83,6 +83,26 @@ def test_event_keeps_billing_units_for_auditability(monkeypatch):
     assert recorded["billing_units"] is not units
 
 
+def test_event_keeps_feature_attribution(monkeypatch):
+    monkeypatch.setattr(
+        pricing,
+        "get_token_rates",
+        lambda model: pricing.TokenRates(0.30, 2.50, "2026-11-23T00:00:00Z"),
+    )
+
+    recorded = usage.event(
+        "a@x",
+        "gemini-3.5-flash",
+        "success",
+        {"prompt_tokens": 120},
+        task="try_on",
+        feature="fashion",
+        at=1_800_000_000,
+    )
+
+    assert recorded["feature"] == "fashion"
+
+
 def test_kinds():
     assert pricing.kind_of("gemini-omni-video", {"video_seconds_generated": 4}) == "video"
     assert pricing.kind_of("lyria-002", {}) == "music"
@@ -115,11 +135,65 @@ def test_summary_fills_every_day_and_sorts_by_cost(monkeypatch):
     assert [o["owner"] for o in out["owners"]] == ["a@x", "b@x"]
 
 
+def test_summary_groups_costs_by_feature(monkeypatch):
+    monkeypatch.setattr(
+        pricing,
+        "get_token_rates",
+        lambda model: pricing.TokenRates(1.0, 1.0, "2026-11-23T00:00:00Z"),
+    )
+    now = 1_800_000_000.0
+    events = [
+        usage.event(
+            "a@x",
+            "gemini-3.5-flash",
+            "success",
+            {"prompt_tokens": 1_000_000},
+            feature="fashion",
+            at=now,
+        ),
+        usage.event(
+            "a@x",
+            "gemini-3.5-flash",
+            "success",
+            {"prompt_tokens": 2_000_000},
+            feature="fashion",
+            at=now,
+        ),
+        usage.event(
+            "a@x",
+            "gemini-3.5-flash",
+            "success",
+            {"prompt_tokens": 500_000},
+            feature="interior_design",
+            at=now,
+        ),
+    ]
+
+    features = usage.summarize(events, 7, now=now)["features"]
+
+    assert features == [
+        {
+            "feature": "fashion",
+            "calls": 2,
+            "failed": 0,
+            "unpriced": 0,
+            "cost": pytest.approx(3.0),
+        },
+        {
+            "feature": "interior_design",
+            "calls": 1,
+            "failed": 0,
+            "unpriced": 0,
+            "cost": pytest.approx(0.5),
+        },
+    ]
+
+
 def test_background_calls_are_counted_for_the_job_owner(monkeypatch):
     stored = []
     done = threading.Event()
 
-    def fake_write(owner, model, status, units, page, task):
+    def fake_write(owner, model, status, units, page, task, feature):
         stored.append(usage.event(owner, model, status, units, page, task))
         usage._pending.release()
         done.set()
@@ -151,10 +225,16 @@ def test_log_model_call_records_usage(monkeypatch):
     from common import analytics
 
     calls = []
-    monkeypatch.setattr(usage, "record", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(usage, "record", lambda *a, **k: calls.append((a, k)))
     with usage.acting_for("thread@x"):
-        analytics.log_model_call("lyria-002", "success", billing_units={"sample_count": 1})
-    assert calls and calls[0][1] == "lyria-002"
+        analytics.log_model_call(
+            "lyria-002",
+            "success",
+            details={"task": "compose", "feature": "fashion"},
+            billing_units={"sample_count": 1},
+        )
+    assert calls and calls[0][0][1] == "lyria-002"
+    assert calls[0][1]["feature"] == "fashion"
 
 
 def test_load_reads_one_person_by_owner_and_filters_by_time(monkeypatch):

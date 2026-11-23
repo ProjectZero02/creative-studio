@@ -68,6 +68,7 @@ def event(
     page: str = "",
     task: str = "",
     at: float | None = None,
+    feature: str = "",
 ) -> dict:
     at = at if at is not None else time.time()
     units = units or {}
@@ -80,6 +81,7 @@ def event(
         "status": status,
         "page": page or "",
         "task": task or "",
+        "feature": feature or "",
         "cost": round(cost, 5) if cost is not None else None,
         **pricing_details,
         "at": at,
@@ -100,9 +102,10 @@ def _write(
     units: dict | None,
     page: str,
     task: str,
+    feature: str,
 ) -> None:
     try:
-        doc = event(owner, model, status, units, page, task)
+        doc = event(owner, model, status, units, page, task, feature=feature)
         _db().collection(COLLECTION).add(doc)
     except Exception:  # best effort: usage must never break a generation
         logger.debug("usage: could not store an event", exc_info=True)
@@ -117,6 +120,7 @@ def record(
     units: dict | None = None,
     page: str = "",
     task: str = "",
+    feature: str = "",
 ) -> None:
     """Store one model call (in the background)."""
     if not owner or owner == "unknown":
@@ -125,7 +129,7 @@ def record(
         return  # too many writes in flight: drop rather than slow down
     threading.Thread(
         target=_write,
-        args=(owner, model, status, units, page, task),
+        args=(owner, model, status, units, page, task, feature),
         daemon=True,
     ).start()
 
@@ -161,6 +165,15 @@ def summarize(events: list[dict], days: int, now: float | None = None) -> dict:
             "kind": "",
         }
     )
+    per_feature: dict[str, dict] = defaultdict(
+        lambda: {
+            "calls": 0,
+            "failed": 0,
+            "unpriced": 0,
+            "priced": 0,
+            "cost": 0.0,
+        }
+    )
     per_owner: dict[str, dict] = defaultdict(
         lambda: {"calls": 0, "unpriced": 0, "priced": 0, "cost": 0.0}
     )
@@ -176,6 +189,14 @@ def summarize(events: list[dict], days: int, now: float | None = None) -> dict:
         m["priced"] += int(not unpriced)
         m["cost"] += cost
         m["kind"] = e.get("kind") or m["kind"]
+        feature = e.get("feature") or ""
+        if feature:
+            f = per_feature[feature]
+            f["calls"] += 1
+            f["failed"] += int(failed)
+            f["unpriced"] += int(unpriced)
+            f["priced"] += int(not unpriced)
+            f["cost"] += cost
         o = per_owner[e.get("owner") or "unknown"]
         o["calls"] += 1
         o["unpriced"] += int(unpriced)
@@ -190,7 +211,7 @@ def summarize(events: list[dict], days: int, now: float | None = None) -> dict:
             per_day[e["day"]] += cost
     if not total["priced"]:
         total["cost"] = None
-    for row in (*per_model.values(), *per_owner.values()):
+    for row in (*per_model.values(), *per_feature.values(), *per_owner.values()):
         if not row["priced"]:
             row["cost"] = None
         row.pop("priced")
@@ -203,9 +224,14 @@ def summarize(events: list[dict], days: int, now: float | None = None) -> dict:
         ({"owner": k, **v} for k, v in per_owner.items()),
         key=lambda r: -(r["cost"] or 0),
     )
+    features = sorted(
+        ({"feature": k, **v} for k, v in per_feature.items()),
+        key=lambda r: -(r["cost"] or 0),
+    )
     return {
         "total": total,
         "models": models,
+        "features": features,
         "days": [{"day": d, "cost": round(c, 4)} for d, c in per_day.items()],
         "owners": owners,
     }

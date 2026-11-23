@@ -200,6 +200,17 @@ def usage_content(embedded: bool = False):
             with me.box(classes="gm-usage-card"):
                 _label("Estimated cost per day", "gm-usage-title")
                 _chart(summary["days"])
+            if summary["features"]:
+                with me.box(classes="gm-usage-card"):
+                    _label("Per product", "gm-usage-title")
+                    with me.box(classes="gm-usage-table gm-usage-table-3"):
+                        for col in ("Product", "Calls", "Failed", "Est. cost"):
+                            _label(col, "gm-usage-th")
+                        for row in summary["features"]:
+                            _label(row["feature"], "gm-usage-model")
+                            me.text(f"{row['calls']:,}")
+                            me.text(f"{row['failed']:,}")
+                            me.text(money(row["cost"]))
             with me.box(classes="gm-usage-card"):
                 _label("Per model", "gm-usage-title")
                 with me.box(classes="gm-usage-table"):

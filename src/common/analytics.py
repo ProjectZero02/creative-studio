@@ -182,6 +182,7 @@ def log_model_call(
             billing_units,
             page_name if page_name != "unknown" else "",
             str((details or {}).get("task") or ""),
+            feature=str((details or {}).get("feature") or ""),
         )
     except Exception:  # usage is best effort
         pass
