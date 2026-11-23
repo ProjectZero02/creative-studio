@@ -162,51 +162,79 @@ def make(
     settings: Any = None,
     source: str = "",
     jobs: LiveJobs | None = None,
+    inputs: Any = None,
 ) -> dict:
     """Start one job straight from the Home box's type controls.
 
-    No model call: the person picked Image, Video, Music or Voice and its
-    settings, so the job starts with exactly those (checked by
+    No model call: the person picked Image, Video, Music, Voice or Film and
+    its settings, so the job starts with exactly those (checked by
     services.studio_options). ``source`` is the handle of a finished picture
-    ("image 2") to edit or animate. The exchange is added to the chat's
+    ("image 2") to edit or animate. ``inputs`` fills the type's file slots:
+    ``{"first_frame": ["image 2"], "references": [...], "video": ["video 1"]}``
+    (see studio_options.inputs). The exchange is added to the chat's
     history so later messages can say "animate it". Returns {"reply", "job",
-    "settings", "summary"}. Raises ValueError for a bad request and
+    "settings", "summary", "trace"}. Raises ValueError for a bad request and
     live_jobs.JobLimitError when too many jobs run.
     """
     from common.i18n import tr
+    from services.live_jobs import LiveJob, video_missing_media
     from services.studio_options import KINDS, clean, summary
 
     if kind not in KINDS:
         raise ValueError("Pick Image, Video, Music, Voice or Film.")
+    picked = clean(kind, settings)
     prompt = (prompt or "").strip()[:MAX_MESSAGE]
+    auto_prompt = False
+    if not prompt and kind == "video" and picked.get("mode") == "upscale":
+        # Upscale sends no prompt (as Video Studio); the thread still needs a line.
+        prompt, auto_prompt = f"Upscale to {picked.get('resolution', '')}".strip(), True
     if not prompt:
         raise ValueError(tr("home.chat.need_prompt", "Write what to make first."))
     s = session_for(owner, jobs)
-    picked = clean(kind, settings)
+    line = summary(kind, picked)
+    trace = [_step(*_picked_label(kind, picked))]
+    if line:
+        trace.append(_step(tr("home.trace.settings", "Settings: {line}").format(line=line)))
     if kind == "film":
-        return _start_film(s, prompt, picked, summary(kind, picked))
-    src = None
-    if source and kind in ("image", "video"):
-        handle = str(source).strip().lower()
-        src = next(
-            (
-                j
-                for j in s.call.jobs.list(owner)
-                if j.handle == handle and j.kind == "image" and j.status == "done"
-            ),
-            None,
+        out = _start_film(s, prompt, picked, line)
+        trace.append(_step(_started_label(out["job"]["handle"])))
+        return {**out, "trace": trace}
+    slots, src = _resolve_inputs(s, kind, inputs, source)
+    for slot, items in slots.items():
+        trace.append(
+            _step(
+                tr("home.trace.using", "Using {items} as {slot}").format(
+                    items=", ".join(i["handle"] for i in items), slot=_slot_label(kind, slot)
+                )
+            )
         )
-        if src is None:
-            raise ValueError(tr("home.chat.source_gone", "That picture is gone. Add it again."))
+    params: dict[str, Any] = {"settings": picked, "from": "controls"}
+    if slots:
+        params["inputs"] = slots
+    if auto_prompt:
+        params["auto_prompt"] = True
+    if kind == "video":
+        probe = LiveJob(
+            id="",
+            owner=owner,
+            kind=kind,
+            handle="",
+            prompt=prompt,
+            source_uri=(src.gcs_uri or src.display_url) if src else "",
+            params=params,
+        )
+        problem = video_missing_media(probe, picked)
+        if problem:
+            raise ValueError(problem)
     job = s.call.jobs.submit(
         owner,
         kind,
         prompt,
         aspect_ratio=picked.get("aspect", ""),
         source=src,
-        params={"settings": picked, "from": "controls"},
+        params=params,
     )
-    line = summary(kind, picked)
+    trace.append(_step(_started_label(job.handle)))
     reply = tr("home.chat.making_job", "Making {job}.").format(job=job.handle)
     if src is not None:
         reply = tr("home.chat.making_from", "Making {job} from {source}.").format(
@@ -222,7 +250,184 @@ def make(
                 types.Content(role="model", parts=[types.Part.from_text(text=reply)]),
             ]
         )[-MAX_HISTORY:]
-    return {"reply": reply, "job": job.public(), "settings": picked, "summary": line}
+    return {
+        "reply": reply,
+        "job": job.public(),
+        "settings": picked,
+        "summary": line,
+        "trace": trace,
+    }
+
+
+MAX_INPUT_HANDLES = 20
+
+
+def _resolve_inputs(
+    s: ChatSession, kind: str, raw: Any, source: str
+) -> tuple[dict[str, list[dict]], LiveJob | None]:
+    """Turn ``{slot: [handle, ...]}`` into ``{slot: [{"handle", "uri", "mime"}]}``.
+
+    A handle names a finished picture or video of this person ("image 2",
+    "video 1", or a job id). ``source`` (the older single picture) fills the
+    references (image) or the first frame (video). Returns the slots and the
+    job to record as the source (the first picture used), or raises
+    ValueError when a slot or handle is unknown.
+    """
+    from common.i18n import tr
+    from services.studio_options import inputs as slot_list
+
+    slots = {sl["name"]: sl for sl in slot_list(kind)}
+    raw = dict(raw) if isinstance(raw, dict) else {}
+    if source and kind in ("image", "video"):
+        key = "references" if kind == "image" else "first_frame"
+        if not raw.get(key):
+            raw[key] = [source]
+    mine = s.call.jobs.list(s.owner)
+    out: dict[str, list[dict]] = {}
+    first: LiveJob | None = None
+    for name, handles in raw.items():
+        if not handles:
+            continue
+        slot = slots.get(str(name))
+        if slot is None:
+            raise ValueError(f"{kind.title()} has no '{name}' input.")
+        if isinstance(handles, str):
+            handles = [handles]
+        want = "video" if slot["accept"].startswith("video") else "image"
+        items = []
+        for handle in list(handles)[:MAX_INPUT_HANDLES][: int(slot["max"])]:
+            text = str(handle).strip().lower()
+            job = next(
+                (
+                    j
+                    for j in mine
+                    if (j.handle == text or j.id == text)
+                    and j.kind == want
+                    and j.status == "done"
+                    and (j.gcs_uri or j.display_url)
+                ),
+                None,
+            )
+            if job is None:
+                gone = (
+                    "That video is gone. Add it again."
+                    if want == "video"
+                    else "That picture is gone. Add it again."
+                )
+                raise ValueError(tr(f"home.chat.{want}_gone", gone))
+            items.append(
+                {
+                    "handle": job.handle,
+                    "uri": job.gcs_uri or job.display_url,
+                    "mime": job.mime_type,
+                }
+            )
+            if first is None and want == "image":
+                first = job
+        if items:
+            out[slot["name"]] = items
+    return out, first
+
+
+_KIND_LABELS = {
+    "image": "Image",
+    "video": "Video",
+    "music": "Music",
+    "voice": "Voice",
+    "film": "Film",
+    "story": "Film",
+}
+
+
+def _step(label: str, detail: str = "") -> dict:
+    return {"type": "step", "label": label, "detail": detail}
+
+
+def _picked_label(kind: str, settings: dict[str, str]) -> tuple[str, str]:
+    """("Picked Image · Nano Banana 2.1 · 16:9", why) for a type and its settings."""
+    from common.i18n import tr
+    from services.studio_options import option_label, summary
+
+    kind = "film" if kind == "story" else kind
+    parts = [tr(f"home.kind.{kind}", _KIND_LABELS.get(kind, kind.title()))]
+    if settings.get("model"):
+        parts.append(option_label(kind, "model", settings))
+    if settings.get("aspect") and settings["aspect"] != "auto":
+        parts.append(settings["aspect"])
+    detail = summary(kind, settings) if settings else ""
+    return tr("home.trace.picked", "Picked {what}").format(what=" · ".join(parts)), detail
+
+
+def _started_label(handle: str) -> str:
+    from common.i18n import tr
+
+    return tr("home.trace.started", "Started {job}").format(job=handle)
+
+
+def _slot_label(kind: str, slot: str) -> str:
+    from services.studio_options import inputs as slot_list
+
+    for sl in slot_list(kind):
+        if sl["name"] == slot:
+            return str(sl["label"]).lower()
+    return slot
+
+
+def _job_steps(job: LiveJob) -> list[dict]:
+    """The trace for a job the chat started: what, the prompt, started."""
+    from common.i18n import tr
+    from services.live_jobs import job_settings
+
+    settings = job_settings(job) if job.kind != "story" else {}
+    label, detail = _picked_label(job.kind, settings)
+    return [
+        _step(label, detail),
+        _step(tr("home.trace.prompt", "Wrote the prompt"), job.prompt),
+        _step(_started_label(job.handle)),
+    ]
+
+
+_TYPED = (
+    (r"\b(\d{1,2}:\d{1,2})\b", "{}"),
+    (r"\b(4k|2k|1k|720p|1080p)\b", "{}"),
+    (r"\b(\d{1,3})\s*(?:s|sec|secs|seconds?)\b", "{}s"),
+    (r"\b(\d{1,2})\s*(?:min|mins|minutes?)\b", "{}m"),
+)
+
+
+def typed_settings(message: str) -> list[str]:
+    """Settings written in the message ("16:9", "4K", "8 seconds"), for the trace."""
+    import re
+
+    found = []
+    for pattern, fmt in _TYPED:
+        for match in re.finditer(pattern, message or "", re.I):
+            value = fmt.format(match.group(1).upper() if "k" in match.group(1).lower() else match.group(1))
+            if value not in found:
+                found.append(value)
+    return found[:6]
+
+
+class _Trace:
+    """Collects the chat's steps and hands each to ``on_step`` as it happens."""
+
+    def __init__(self, on_step: Any = None):
+        self.steps: list[dict] = []
+        self._on_step = on_step
+
+    def step(self, label: str, detail: str = "") -> None:
+        item = _step(label, detail)
+        self.steps.append(item)
+        if self._on_step is not None:
+            try:
+                self._on_step(item)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("Studio chat: a trace listener failed")
+
+    def jobs(self, started: list[LiveJob]) -> None:
+        for job in started:
+            for item in _job_steps(job):
+                self.step(item["label"], item["detail"])
 
 
 def _remember(s: ChatSession, said: str, reply: str, job: LiveJob | None) -> None:
@@ -242,10 +447,26 @@ def _start_film(s: ChatSession, idea: str, picked: dict, line: str) -> dict:
     """Film: write the scenario (the cheap first step) of a new Story Studio story."""
     from common.i18n import tr
 
-    args = {"idea": idea}
-    for key, arg in (("length", "length"), ("aspect", "aspect_ratio"), ("style", "style"), ("language", "language")):
+    args: dict[str, Any] = {"idea": idea}
+    for key, arg in (
+        ("length", "length"),
+        ("aspect", "aspect_ratio"),
+        ("style", "style"),
+        ("language", "language"),
+        ("engine", "video_model"),
+        ("pacing", "pacing"),
+        ("speech", "speech_mode"),
+        ("camera", "camera"),
+    ):
         if picked.get(key, "auto") != "auto":
             args[arg] = picked[key]
+    for key, arg in (("scenes", "scene_count"), ("scene_length", "scene_seconds")):
+        if str(picked.get(key, "auto")).isdigit():
+            args[arg] = int(picked[key])
+    if picked.get("source") == "script":
+        # From a script: the text is the script; the idea is its opening.
+        args["script"] = idea
+        args["idea"] = " ".join(idea.split())[:400]
     out = asyncio.run(s.call.run_tool("create_story", args))
     if not isinstance(out, Deferred):
         raise ValueError(str((out or {}).get("error") or "The film could not start."))
@@ -310,7 +531,9 @@ def _tool_response(out: dict | Deferred) -> tuple[dict, LiveJob | None]:
     return (out if isinstance(out, dict) else {"result": str(out)}), None
 
 
-def _offline_reply(s: ChatSession, message: str) -> tuple[str, list[LiveJob]]:
+def _offline_reply(
+    s: ChatSession, message: str, trace: _Trace | None = None
+) -> tuple[str, list[LiveJob]]:
     said: list[str] = []
     before = {j.id for j in s.call.jobs.list(s.owner)}
 
@@ -319,10 +542,29 @@ def _offline_reply(s: ChatSession, message: str) -> tuple[str, list[LiveJob]]:
 
     asyncio.run(ScriptedAgent(s.call, say).handle(message))
     started = [j for j in s.call.jobs.list(s.owner) if j.id not in before]
+    if trace is not None:
+        trace.jobs(started)
+        if not started:
+            trace.step("Wrote the reply")
     return " ".join(said) or "Done.", started
 
 
-def _model_reply(s: ChatSession, message: str, client: Any, model: str) -> tuple[str, list[LiveJob]]:
+_TOOL_STEPS = {
+    "list_jobs": "Checked your jobs",
+    "story_status": "Checked the film",
+    "plan_film_fix": "Planned the fix",
+    "continue_story": "Moved the film on",
+}
+
+
+def _model_reply(
+    s: ChatSession,
+    message: str,
+    client: Any,
+    model: str,
+    trace: _Trace | None = None,
+) -> tuple[str, list[LiveJob]]:
+    trace = trace or _Trace()
     contents = list(s.history) + [
         types.Content(role="user", parts=[types.Part.from_text(text=message)])
     ]
@@ -351,9 +593,16 @@ def _model_reply(s: ChatSession, message: str, client: Any, model: str) -> tuple
             payload, job = _tool_response(out)
             if job is not None:
                 started.append(job)
+                trace.jobs([job])
+            elif isinstance(payload, dict) and payload.get("error"):
+                trace.step("Could not do that", str(payload["error"])[:300])
+            else:
+                trace.step(_TOOL_STEPS.get(fc.name or "", f"Used {fc.name}"))
             replies.append(types.Part.from_function_response(name=fc.name or "", response=payload))
         contents.append(types.Content(role="user", parts=replies))
     s.history = contents[-MAX_HISTORY:]
+    if text and not started:
+        trace.step("Wrote the reply")
     if not text:
         text = "On it." if started else "Sorry, I could not answer that. Try again?"
     return text, started
@@ -371,8 +620,16 @@ def _default_client() -> tuple[Any, str] | None:
     return client, Default.MODEL_ID
 
 
-UPLOAD_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+UPLOAD_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_VIDEO_UPLOAD_BYTES = 40 * 1024 * 1024
 
 
 def attach(owner: str, data_url: str, name: str = "", *, store: Any = None) -> dict:
@@ -385,22 +642,35 @@ def attach(owner: str, data_url: str, name: str = "", *, store: Any = None) -> d
     import base64
     import re
 
-    match = re.match(r"^data:(image/[a-z]+);base64,(.+)$", data_url or "", re.S)
+    match = re.match(r"^data:((?:image|video)/[a-z0-9.+-]+);base64,(.+)$", data_url or "", re.S)
     if not match or match.group(1) not in UPLOAD_TYPES:
-        raise ValueError("Attach a PNG, JPEG or WebP picture.")
+        raise ValueError("Attach a PNG, JPEG or WebP picture, or an MP4, WebM or MOV video.")
     mime = match.group(1)
+    is_video = mime.startswith("video/")
+    # Check the size before decoding (base64 is 4/3 of the bytes).
+    limit = MAX_VIDEO_UPLOAD_BYTES if is_video else MAX_UPLOAD_BYTES
+    if len(match.group(2)) * 3 // 4 > limit + 3:
+        raise ValueError("Videos can be up to 40 MB." if is_video else "Pictures can be up to 10 MB.")
     try:
         raw = base64.b64decode(match.group(2), validate=True)
     except ValueError as exc:
-        raise ValueError("That picture could not be read.") from exc
-    if len(raw) > MAX_UPLOAD_BYTES:
-        raise ValueError("Pictures can be up to 10 MB.")
+        what = "video" if is_video else "picture"
+        raise ValueError(f"That {what} could not be read.") from exc
+    if len(raw) > limit:
+        raise ValueError("Videos can be up to 40 MB." if is_video else "Pictures can be up to 10 MB.")
     clean_name = re.sub(r"[^\w.\- ]", "", name or "")[:60]
     if store is None:
         store = _store_upload
     uri, display_url = store(owner, raw, mime, data_url)
     jobs = session_for(owner).call.jobs
-    job = jobs.add_upload(owner, uri=uri, display_url=display_url, mime_type=mime, name=clean_name)
+    job = jobs.add_upload(
+        owner,
+        uri=uri,
+        display_url=display_url,
+        mime_type=mime,
+        name=clean_name,
+        kind="video" if is_video else "image",
+    )
     return job.public()
 
 
@@ -422,24 +692,39 @@ def _store_upload(owner: str, raw: bytes, mime: str, data_url: str) -> tuple[str
     return uri, create_display_url(uri)
 
 
-def send(owner: str, message: str, client_and_model: tuple[Any, str] | None | bool = True) -> dict:
-    """Handle one chat message. Returns {"reply", "jobs", "offline"}.
+def send(
+    owner: str,
+    message: str,
+    client_and_model: tuple[Any, str] | None | bool = True,
+    on_step: Any = None,
+) -> dict:
+    """Handle one chat message. Returns {"reply", "jobs", "offline", "trace"}.
 
     ``client_and_model``: True picks the app's client (or offline in mock
     mode); None forces the offline agent; a (client, model) pair is used as is.
+    ``on_step`` gets each trace step ({"type": "step", "label", "detail"}) as
+    it happens (it runs on this thread); ``trace`` lists them all.
     """
     message = (message or "").strip()[:MAX_MESSAGE]
     if not message:
-        return {"reply": "", "jobs": [], "offline": False}
+        return {"reply": "", "jobs": [], "offline": False, "trace": []}
+    trace = _Trace(on_step)
     s = session_for(owner)
     picked = _default_client() if client_and_model is True else client_and_model
+    offline = picked is None
+    trace.step(
+        "Reading your message",
+        "Offline helper" if offline else f"Gemini · {picked[1]}",
+    )
+    found = typed_settings(message)
+    if found:
+        trace.step("Found settings in your message", " · ".join(found))
     with s.lock:
-        offline = picked is None
         try:
             if offline:
-                reply, started = _offline_reply(s, message)
+                reply, started = _offline_reply(s, message, trace)
             else:
-                reply, started = _model_reply(s, message, *picked)
+                reply, started = _model_reply(s, message, *picked, trace=trace)
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Studio chat: the model call failed")
             reply = (
@@ -447,5 +732,11 @@ def send(owner: str, message: str, client_and_model: tuple[Any, str] | None | bo
                 f"Please try again. ({str(exc)[:120]})"
             )
             started = []
+            trace.step("Could not reach Gemini", str(exc)[:200])
         s.job_ids.extend(j.id for j in started)
-    return {"reply": reply, "jobs": [j.public() for j in started], "offline": offline}
+    return {
+        "reply": reply,
+        "jobs": [j.public() for j in started],
+        "offline": offline,
+        "trace": trace.steps,
+    }
