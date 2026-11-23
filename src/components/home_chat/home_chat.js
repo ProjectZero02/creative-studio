@@ -106,6 +106,9 @@ class GmHomeChat extends LitElement {
     _hasText: { state: true },
     _kind: { state: true },
     _enhancing: { state: true },
+    _panel: { state: true },
+    _dragOver: { state: true },
+    panelOpen: { type: Boolean, reflect: true, attribute: 'panel' },
   };
 
   constructor() {
@@ -133,6 +136,12 @@ class GmHomeChat extends LitElement {
     this._projectId = kept.projectId || ''; // project for a new chat
     this._saveTimer = null;
     this._loading = false;
+    // Jobs panel on the right: opens on the first job of a chat unless the
+    // person closed it; closed, a "Jobs" pill brings it back.
+    this._panel = !!kept.panel;
+    this._panelClosed = !!kept.panelClosed;
+    this._dragOver = false;
+    this.panelOpen = false;
     this._onOpenChat = (e) => this._openChat((e.detail && e.detail.id) || '');
     this._onNewChat = (e) => this._newChat((e.detail && e.detail.project_id) || '');
   }
@@ -175,8 +184,8 @@ class GmHomeChat extends LitElement {
   }
 
   updated(changed) {
-    if (changed.has('_msgs') || changed.has('_jobs')) {
-      save(STORE, { msgs: this._msgs, jobs: this._jobs, chatId: this._chatId, projectId: this._projectId });
+    if (changed.has('_msgs') || changed.has('_jobs') || changed.has('_panel')) {
+      save(STORE, { msgs: this._msgs, jobs: this._jobs, chatId: this._chatId, projectId: this._projectId, panel: this._panel, panelClosed: this._panelClosed });
       if (!this._loading && this._msgs.length) this._queueSave();
       // Keep the newest message in view: scroll the page's scroller to the end.
       const scroller = this.closest('.gm-page');
@@ -233,6 +242,7 @@ class GmHomeChat extends LitElement {
     this._jobs = next;
     this._msgs = [...this._msgs, { role: 'assistant', text: reply, jobs: jobs.map((j) => j.id), ask: message }];
     this._busy = false;
+    if (jobs.length && !this._panelClosed && !this._phone()) this._panel = true;
     if (jobs.length) this._poll();
     this.updateComplete.then(() => this._ta && this._ta.focus());
   }
@@ -272,6 +282,8 @@ class GmHomeChat extends LitElement {
     this._jobs = {};
     this._chatId = '';
     this._projectId = projectId || '';
+    this._panel = false;
+    this._panelClosed = false;
     this._setUrl('');
     this._announce();
     try {
@@ -373,6 +385,8 @@ class GmHomeChat extends LitElement {
     this._chatId = chat.id;
     this._projectId = chat.project_id || '';
     this._jobs = jobs;
+    this._panelClosed = false;
+    this._panel = Object.keys(jobs).length > 0 && !this._phone();
     this._msgs = msgs;
     this._setUrl(chat.id);
     this._announce();
@@ -428,7 +442,7 @@ class GmHomeChat extends LitElement {
     return html`<div class="kinds ${compact ? 'compact' : ''}" role="group" aria-label=${this._s.kinds || 'What to make'}>
       ${list.map((k) => html`<button type="button" class="kind k-${k.kind}" aria-pressed=${this._kind === k.kind ? 'true' : 'false'}
           title=${k.desc || ''} @click=${() => this._pickKind(k)}>
-          <span class="media" aria-hidden="true">${k.kind === 'music' || k.kind === 'voice' ? html`<span class="eq">${EQ.map((h, i) => html`<i style="--h:${h};--d:${i * -97}ms"></i>`)}</span>` : nothing}</span>
+          <span class="kmedia" aria-hidden="true">${k.kind === 'music' || k.kind === 'voice' ? html`<span class="eq">${EQ.map((h, i) => html`<i style="--h:${h};--d:${i * -97}ms"></i>`)}</span>` : nothing}</span>
           <span class="kbody">${svg(ICON[k.kind] || ICON.spark, 20)}<span class="ktext"><b>${k.label}</b>${k.desc ? html`<small>${k.desc}</small>` : nothing}</span></span>
         </button>`)}
     </div>`;
@@ -497,8 +511,60 @@ class GmHomeChat extends LitElement {
 
   _unattach(id) {
     const gone = this._files.find((f) => f.id === id);
-    if (gone) URL.revokeObjectURL(gone.preview);
+    if (gone && gone.preview.startsWith('blob:')) URL.revokeObjectURL(gone.preview);
     this._files = this._files.filter((f) => f.id !== id);
+  }
+
+  /** Put a finished picture in the box as a reference ("[Attached: image 2]"). */
+  _useRef(j) {
+    if (!j || j.status !== 'done' || j.kind !== 'image' || !j.display_url) return false;
+    if (!this._files.some((f) => f.handle === j.handle)) {
+      if (this._files.length >= MAX_FILES) return false;
+      this._files = [...this._files, { id: `job-${j.id}`, name: j.handle, preview: j.display_url, handle: j.handle, url: j.display_url }];
+    }
+    if (this._phone()) this._panel = false;
+    this.updateComplete.then(() => this._ta && this._ta.focus());
+    return true;
+  }
+
+  /** Animate: the picture goes in the box and the text asks for a video. */
+  _animate(j) {
+    if (!this._useRef(j)) return;
+    const lead = this._s.animate_lead || 'Make a video: ';
+    const now = (this._ta?.value || '').trim();
+    this.updateComplete.then(() => this._prefill(now ? `${lead}${now}` : lead));
+  }
+
+  _phone() {
+    return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches);
+  }
+
+  _togglePanel(open) {
+    this._panel = open;
+    if (!open) this._panelClosed = true;
+  }
+
+  // Drag a finished picture from the jobs panel (or a file) onto the box.
+  _onDragOver(e) {
+    const types = [...(e.dataTransfer?.types || [])];
+    if (!types.includes('application/x-gm-job') && !types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!this._dragOver) this._dragOver = true;
+  }
+
+  _onDragLeave(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) this._dragOver = false;
+  }
+
+  _onDrop(e) {
+    this._dragOver = false;
+    const id = e.dataTransfer?.getData('application/x-gm-job');
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!id && !files.length) return;
+    e.preventDefault();
+    if (id) this._useRef(this._jobs[id]);
+    else this._addFiles(files);
   }
 
   _attachments() {
@@ -593,7 +659,8 @@ class GmHomeChat extends LitElement {
     }
     const enhanceLabel = this._enhancing ? (S.enhancing || 'Enhancing…') : (S.enhance || 'Enhance prompt');
     return html`
-      <div class="box ${this._busy ? 'busy' : ''}">
+      <div class="box ${this._busy ? 'busy' : ''} ${this._dragOver ? 'drop' : ''}"
+        @dragover=${this._onDragOver} @dragleave=${this._onDragLeave} @drop=${this._onDrop}>
         ${this._attachments()}
         <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change=${this._onFiles}>
         <div class="row">
@@ -673,11 +740,90 @@ class GmHomeChat extends LitElement {
         ${j.status === 'done' || j.status === 'failed' ? html`<div class="job-actions">
           ${j.status === 'done' && j.display_url && !isStory ? html`<a class="act" href=${j.display_url} download target="_blank" rel="noopener">${svg(ICON.download, 18)}${S.download || 'Download'}</a>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._prefill(`${S.edit_prefix || 'Edit'} ${j.handle}: `)}>${svg(ICON.edit, 18)}${S.edit || 'Edit'}</button>` : nothing}
-          ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._prefill(`${S.animate_prefix || 'Make a video from'} ${j.handle}: `)}>${svg(ICON.spark, 18)}${S.animate || 'Animate'}</button>` : nothing}
+          ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._animate(j)}>${svg(ICON.spark, 18)}${S.animate || 'Animate'}</button>` : nothing}
           ${j.status === 'done' ? (() => { const href = this._studio(j); return html`<a class="act" href=${href} @click=${(e) => this._openStudio(e, href)}>${svg(ICON.open, 18)}${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}</a>`; })() : nothing}
           ${j.status === 'failed' ? html`<button class="act" type="button" @click=${() => this._send(j.prompt)}>${svg(ICON.retry, 18)}${S.retry || 'Try again'}</button>` : nothing}
         </div>` : nothing}
       </div>`;
+  }
+
+  // ---------------------------------------------------------------- jobs panel
+
+  _thumb(j) {
+    const url = j.display_url || '';
+    const mime = j.mime_type || '';
+    if (j.status !== 'done' || !url) {
+      return html`<div class="pj-ph ${j.kind} ${j.status === 'failed' ? '' : 'shim'}">${svg(ICON[j.kind] || ICON.spark, 22)}</div>`;
+    }
+    if (mime.startsWith('video/') || j.kind === 'video' || (j.kind === 'story' && j.params && j.params.has_film)) {
+      return html`<video class="pj-img" src=${url} muted playsinline loop preload="metadata"
+        @mouseenter=${(e) => e.target.play().catch(() => {})} @mouseleave=${(e) => e.target.pause()}></video>`;
+    }
+    if (mime.startsWith('audio/') || j.kind === 'music' || j.kind === 'voice') {
+      return html`<audio class="pj-audio" src=${url} controls preload="metadata"></audio>`;
+    }
+    if (mime.startsWith('image/') || j.kind === 'image') {
+      return html`<img class="pj-img" src=${url} alt=${j.prompt || j.handle} loading="lazy" draggable="false">`;
+    }
+    return html`<div class="pj-ph ${j.kind}">${svg(ICON[j.kind] || ICON.spark, 22)}</div>`;
+  }
+
+  _panelJob(j) {
+    const S = this._s;
+    const name = (j.handle || '').replace(/^./, (c) => c.toUpperCase());
+    const running = j.status !== 'done' && j.status !== 'failed';
+    const done = j.status === 'done';
+    const isStory = j.kind === 'story';
+    const canDrag = done && j.kind === 'image' && !!j.display_url;
+    const state = running ? (S.making || 'Making…') : j.status === 'failed' ? (S.failed || 'Failed') : (S.ready || 'Ready');
+    const href = done ? this._studio(j) : '';
+    return html`
+      <li class="pj ${j.status} pk-${j.kind}" draggable=${canDrag ? 'true' : 'false'}
+        @dragstart=${canDrag ? (e) => { e.dataTransfer.setData('application/x-gm-job', j.id); e.dataTransfer.setData('text/uri-list', j.display_url); e.dataTransfer.effectAllowed = 'copy'; } : null}>
+        <div class="pj-media">${this._thumb(j)}</div>
+        <div class="pj-head"><b>${name}</b><span class="pj-state">${running ? html`<i class="dot" aria-hidden="true"></i>` : nothing}${state}</span></div>
+        ${j.prompt ? html`<p class="pj-prompt" title=${j.prompt}>${j.prompt}</p>` : nothing}
+        ${j.status === 'failed' && j.error ? html`<p class="pj-error">${j.error}</p>` : nothing}
+        ${done || j.status === 'failed' ? html`<div class="pj-acts">
+          ${done && j.kind === 'image' ? html`<button class="pa" type="button" @click=${() => this._animate(j)}>${svg(ICON.spark, 16)}${S.animate || 'Animate'}</button>
+            <button class="pa" type="button" @click=${() => this._useRef(j)} title=${S.reference_tip || 'Use as a reference in your next message'}>${svg(ICON.plus, 16)}${S.reference || 'Reference'}</button>` : nothing}
+          ${done && j.display_url && !isStory ? html`<a class="pa icon" href=${j.display_url} download target="_blank" rel="noopener" aria-label=${S.download || 'Download'} title=${S.download || 'Download'}>${svg(ICON.download, 18)}</a>` : nothing}
+          ${done ? html`<a class="pa ${isStory ? '' : 'icon'}" href=${href} @click=${(e) => this._openStudio(e, href)}
+              aria-label=${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}
+              title=${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}>${svg(ICON.open, 18)}${isStory ? (S.open_short || 'Open') : nothing}</a>` : nothing}
+          ${j.status === 'failed' ? html`<button class="pa" type="button" @click=${() => this._send(j.prompt)}>${svg(ICON.retry, 16)}${S.retry || 'Try again'}</button>` : nothing}
+        </div>` : nothing}
+      </li>`;
+  }
+
+  /** The closed panel's button: floating top-right, or in the dock on phones. */
+  _jobsPill(where) {
+    const all = Object.values(this._jobs);
+    if (!all.length || this._panel) return nothing;
+    const S = this._s;
+    const running = all.filter((j) => j.status !== 'done' && j.status !== 'failed').length;
+    const label = S.jobs || 'Jobs';
+    const count = running ? `${running} ${S.jobs_running || 'running'}` : `${all.length}`;
+    return html`<button class="jobs-pill ${where}" type="button" @click=${() => this._togglePanel(true)} aria-label=${`${label}: ${count}`}>
+      ${running ? html`<i class="dot" aria-hidden="true"></i>` : svg(ICON.image, 18)}<span>${label}</span><span class="n">${running || all.length}</span></button>`;
+  }
+
+  _jobsPanel() {
+    const S = this._s;
+    const all = Object.values(this._jobs);
+    if (!all.length) return nothing;
+    const running = all.filter((j) => j.status !== 'done' && j.status !== 'failed').length;
+    const label = S.jobs || 'Jobs';
+    const count = running ? `${running} ${S.jobs_running || 'running'}` : `${all.length}`;
+    if (!this._panel) return this._jobsPill('float');
+    return html`
+      <aside class="jobs" aria-label=${label}>
+        <div class="jobs-head">
+          <b>${label}</b><span class="jobs-count">${count}</span>
+          <button class="icon sm" type="button" @click=${() => this._togglePanel(false)} aria-label=${S.close || 'Close'} title=${S.close || 'Close'}>${svg(ICON.close, 18)}</button>
+        </div>
+        <ul class="jobs-list">${[...all].reverse().map((j) => this._panelJob(j))}</ul>
+      </aside>`;
   }
 
   _thread() {
@@ -704,12 +850,18 @@ class GmHomeChat extends LitElement {
             <h1 class="title">${S.title || "Google's creative AI, in one studio"}</h1>
           </section>`}
         <div class="dock">
-          ${chatting ? html`<button class="ghost newchat" type="button" @click=${() => this._newChat(this._projectId)} title=${S.new_chat_tip || 'Start over with an empty chat'}>
-              ${svg(ICON.newchat, 18)}<span>${S.new_chat || 'New chat'}</span></button>` : nothing}
+          ${chatting ? html`<div class="dock-top">${this._jobsPill('inline')}<button class="ghost newchat" type="button" @click=${() => this._newChat(this._projectId)} title=${S.new_chat_tip || 'Start over with an empty chat'}>
+              ${svg(ICON.newchat, 18)}<span>${S.new_chat || 'New chat'}</span></button></div>` : nothing}
           ${this._box()}
           ${this._kindChips(chatting || this._hasText)}
         </div>
-      </div>`;
+      </div>
+      ${this._jobsPanel()}`;
+  }
+
+  willUpdate() {
+    // The host makes room for the open panel (wide screens only, in CSS).
+    this.panelOpen = this._panel && Object.keys(this._jobs).length > 0;
   }
 
   static styles = css`
@@ -809,20 +961,20 @@ class GmHomeChat extends LitElement {
     .ktext b { font-size: 15px; font-weight: 600; }
     .ktext small { font-size: 12.5px; color: var(--sys-on-surface-variant, #6b7280); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     /* The sample: hidden at rest, it fades in behind the label on hover. */
-    .media { position: absolute; inset: 0; z-index: 0; opacity: 0; transform: scale(1.06); background-size: cover; background-position: center;
+    .kmedia { position: absolute; inset: 0; z-index: 0; opacity: 0; transform: scale(1.06); background-size: cover; background-position: center;
       transition: opacity 260ms ease, transform 700ms ease; }
-    .media::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 20%, rgba(0, 0, 0, 0.7)); }
-    .kinds:not(.compact) .kind:hover .media, .kinds:not(.compact) .kind:focus-visible .media, .kinds:not(.compact) .kind[aria-pressed='true'] .media { opacity: 1; transform: scale(1); }
+    .kmedia::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0.05) 20%, rgba(0, 0, 0, 0.7)); }
+    .kinds:not(.compact) .kind:hover .kmedia, .kinds:not(.compact) .kind:focus-visible .kmedia, .kinds:not(.compact) .kind[aria-pressed='true'] .kmedia { opacity: 1; transform: scale(1); }
     .kinds:not(.compact) .kind:hover, .kinds:not(.compact) .kind:focus-visible, .kinds:not(.compact) .kind[aria-pressed='true'] { color: #fff; }
     .kinds:not(.compact) .kind:hover small, .kinds:not(.compact) .kind:focus-visible small, .kinds:not(.compact) .kind[aria-pressed='true'] small { color: rgba(255, 255, 255, 0.82); }
     .kinds:not(.compact) .kind[aria-pressed='true'] { box-shadow: 0 0 0 2px var(--sys-on-surface, #e8eaed); }
-    .k-image .media { background-image: url('/ui/posters/gemini-image__page-cover.webp'); background-position: 90% 10%; background-size: 260%; }
-    .k-video .media { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
-    .k-video:hover .media, .k-video[aria-pressed='true'] .media { background-image: url('/ui/home/word-video.webp'); }
-    .k-film .media { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
-    .k-film:hover .media, .k-film[aria-pressed='true'] .media { background-image: url('/ui/home/word-film.webp'); }
-    .k-music .media { background-image: url('/ui/posters/lyria_header.webp'); }
-    .k-voice .media { background-image: url('/ui/posters/capability__native-audio_16-9.webp'); }
+    .k-image .kmedia { background-image: url('/ui/posters/gemini-image__page-cover.webp'); background-position: 90% 10%; background-size: 260%; }
+    .k-video .kmedia { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
+    .k-video:hover .kmedia, .k-video[aria-pressed='true'] .kmedia { background-image: url('/ui/home/word-video.webp'); }
+    .k-film .kmedia { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
+    .k-film:hover .kmedia, .k-film[aria-pressed='true'] .kmedia { background-image: url('/ui/home/word-film.webp'); }
+    .k-music .kmedia { background-image: url('/ui/posters/lyria_header.webp'); }
+    .k-voice .kmedia { background-image: url('/ui/posters/capability__native-audio_16-9.webp'); }
     /* Music and Voice: an equaliser that moves like sound over the picture. */
     .eq { position: absolute; z-index: 1; left: 14px; right: 14px; top: 14px; height: 40%; display: flex; align-items: center; justify-content: space-between; }
     .eq i { width: 4px; height: calc(var(--h) * 100%); border-radius: 4px; background: rgba(255, 255, 255, 0.92); transform: scaleY(0.4); transform-origin: 50% 50%; }
@@ -836,7 +988,7 @@ class GmHomeChat extends LitElement {
     .kinds.compact .kbody { flex-direction: row; align-items: center; gap: 8px; }
     .kinds.compact .kbody svg { width: 18px; height: 18px; }
     .kinds.compact .ktext b { font-size: 14px; font-weight: 500; }
-    .kinds.compact small, .kinds.compact .media { display: none; }
+    .kinds.compact small, .kinds.compact .kmedia { display: none; }
     .kinds.compact .kind[aria-pressed='true'] { background: var(--sys-on-surface, #e8eaed); color: var(--sys-surface, #15171c); }
 
     /* Conversation */
@@ -878,9 +1030,9 @@ class GmHomeChat extends LitElement {
     @keyframes shim { from { background-position: 100% 0; } to { background-position: -150% 0; } }
     @media (prefers-reduced-motion: reduce) {
       .shimmer, .typing i, .spin, .icon.working svg, .eq i { animation: none !important; }
-      .kind, .media { transition: none; }
-      .k-video:hover .media, .k-video[aria-pressed='true'] .media { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
-      .k-film:hover .media, .k-film[aria-pressed='true'] .media { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
+      .kind, .kmedia { transition: none; }
+      .k-video:hover .kmedia, .k-video[aria-pressed='true'] .kmedia { background-image: url('/ui/posters/gemini-omni__page-cover__hero.webp'); }
+      .k-film:hover .kmedia, .k-film[aria-pressed='true'] .kmedia { background-image: url('/ui/posters/veo__cover_s0RKXWX.webp'); }
     }
     /* The picture at its own shape: no letterbox bars around it. */
     .media { display: block; width: auto; height: auto; max-width: 100%; max-height: 480px; border-radius: 12px; }
@@ -896,6 +1048,75 @@ class GmHomeChat extends LitElement {
       background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #15171c); text-decoration: none; font-size: 13.5px; font-weight: 500; cursor: pointer;
     }
     .act:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.16)); }
+    /* In the thread, results stay small; the jobs panel holds the rest. */
+    .job .media { max-height: 360px; }
+
+    /* Dropping a picture or a job card on the box. */
+    .box.drop { border-color: var(--sys-primary, #1a73e8); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sys-primary, #1a73e8) 30%, transparent); }
+
+    /* Jobs panel: a card floating on the right; the page makes room for it
+       on wide screens, it overlays on mid widths, and is a bottom sheet on phones. */
+    :host { --gm-jobs-w: 340px; transition: padding 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+    @media (min-width: 1100px) { :host([panel]) { padding-inline-end: calc(var(--gm-jobs-w) + 16px); } }
+    .jobs {
+      position: fixed; z-index: 30; top: 12px; bottom: 12px; inset-inline-end: 12px; width: var(--gm-jobs-w);
+      display: flex; flex-direction: column; border-radius: 24px; overflow: hidden;
+      background: var(--gm-panel, #1d1f25); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
+      animation: jobs-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    @keyframes jobs-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+    :host-context([dir='rtl']) .jobs { animation-name: jobs-in-rtl; }
+    @keyframes jobs-in-rtl { from { transform: translateX(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .jobs-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 18px; font-size: 15px; }
+    .jobs-count { color: var(--sys-on-surface-variant, #6b7280); font-size: 13.5px; flex: 1; }
+    .icon.sm { width: 36px; height: 36px; }
+    .jobs-list { list-style: none; margin: 0; padding: 4px 10px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; flex: 1; scrollbar-width: thin; }
+    .pj { display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 18px; background: var(--gm-tonal, rgba(127, 127, 127, 0.08)); }
+    .pj[draggable='true'] { cursor: grab; }
+    .pj-media { border-radius: 12px; overflow: hidden; line-height: 0; }
+    .pj-img { width: 100%; max-height: 220px; object-fit: cover; display: block; background: rgba(0, 0, 0, 0.2); }
+
+    .pj-audio { width: 100%; height: 40px; }
+    .pj-ph { height: 96px; display: grid; place-items: center; color: var(--sys-on-surface-variant, #6b7280); background: rgba(127, 127, 127, 0.1); }
+    .pj-ph svg { fill: currentColor; opacity: 0.7; }
+    .pj-ph.image, .pj-ph.video { height: 150px; }
+    .pj-ph.shim { background: linear-gradient(100deg, rgba(127, 127, 127, 0.10) 20%, rgba(127, 127, 127, 0.22) 40%, rgba(127, 127, 127, 0.10) 60%); background-size: 250% 100%; animation: shim 1.4s ease-in-out infinite; }
+    .pj-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px; font-size: 14px; }
+    .pj-state { display: inline-flex; align-items: center; gap: 6px; color: var(--sys-on-surface-variant, #6b7280); font-size: 13px; }
+    .pj.failed .pj-state, .pj-error { color: #d93025; }
+    .pj-prompt, .pj-error { margin: 0; padding: 0 4px; font-size: 13px; line-height: 1.4; color: var(--sys-on-surface-variant, #6b7280);
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .pj-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .pa { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 34px; padding: 0 12px 0 9px; border: 0; border-radius: 999px;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.12)); color: var(--sys-on-surface, #15171c); text-decoration: none; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .pa.icon { width: 34px; padding: 0; }
+    .pa svg { fill: currentColor; flex: none; }
+    .pa:hover { background: var(--gm-tonal-hover, rgba(127, 127, 127, 0.18)); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sys-primary, #1a73e8); animation: pulse 900ms ease-in-out infinite alternate; flex: none; }
+    .jobs-pill {
+      position: fixed; z-index: 30; top: 16px; inset-inline-end: 16px; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 14px;
+      border: 0; border-radius: 999px; cursor: pointer; font-size: 14px; font-weight: 500;
+      background: var(--gm-panel, #1d1f25); color: var(--sys-on-surface, #15171c); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+    .jobs-pill svg { fill: currentColor; }
+    .jobs-pill .n { min-width: 24px; height: 24px; padding: 0 7px; border-radius: 999px; display: grid; place-items: center; font-size: 12.5px;
+      background: var(--gm-tonal, rgba(127, 127, 127, 0.16)); }
+    .jobs-pill:hover { filter: brightness(1.08); }
+    .jobs-pill.inline { display: none; position: static; box-shadow: none; background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); }
+    .dock-top { align-self: stretch; display: flex; justify-content: flex-end; gap: 8px; }
+    .job .shimmer { width: 420px; max-width: 100%; }
+    .job .shimmer.image { width: 300px; }
+    .job:has(> .shimmer) { width: fit-content; max-width: 100%; }
+    @media (max-width: 760px) {
+      .jobs { top: auto; bottom: 0; inset-inline: 0; width: auto; max-height: 72dvh; border-radius: 24px 24px 0 0; animation-name: sheet-in; }
+      @keyframes sheet-in { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+      .jobs-pill.float { display: none; }
+      .jobs-pill.inline { display: inline-flex; margin-inline-end: auto; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .jobs, :host { animation: none !important; transition: none !important; }
+      .dot, .pj-ph.shim { animation: none !important; }
+    }
 
     @media (max-width: 600px) {
       .wrap.empty { gap: 18px; padding-bottom: 0; }
