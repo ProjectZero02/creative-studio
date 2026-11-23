@@ -31,7 +31,7 @@ def test_clean():
     assert k["colors"] == ["#1a73e8", "#ffffff"]
     assert k["corner"] == "tl" and k["logo_uri"] == "gs://b/logo.png"
     assert bk.clean({"logo_uri": "javascript:x", "corner": "middle"})["logo_uri"] == ""
-    assert bk.clean({"corner": "middle"})["corner"] == "br"
+    assert bk.clean({"corner": "middle"})["corner"] == "auto"
     assert bk.clean({"colors": [f"#00000{i}" for i in range(9)]})["colors"][-1] == "#000004"
     assert bk.is_empty({}) and not bk.is_empty({"tone": "calm"})
     assert bk.from_json("not json") == bk.empty()
@@ -65,7 +65,7 @@ def test_logo_overlay_sits_in_the_corner(tmp_path):
     bbox = img.getchannel("A").getbbox()
     assert bbox[2] <= 1280 - 28 and bbox[3] <= 720 - 28 and bbox[0] > 1280 / 2
     tl = Image.open(bk.logo_overlay_png(str(logo), 1280, 720, str(tmp_path / "t.png"), "tl"))
-    assert tl.getchannel("A").getbbox()[0] == int(720 * 0.04)
+    assert tl.getchannel("A").getbbox()[0] == round(720 * 0.05)
 
 
 def test_render_args_overlay_the_logo_last():

@@ -37,12 +37,33 @@ COLLECTION = "brand_kits"
 MAX_COLORS = 5
 NAME_LIMIT = 60
 TONE_LIMIT = 300
-CORNERS = ("br", "bl", "tr", "tl")
+CORNERS = ("auto", "br", "bl", "tr", "tl")
+# Logo width as a share of the frame's short side (broadcast "bugs" are
+# about 5 to 8% of the width; small is about 7% of a 16:9 frame's width).
+LOGO_SIZES = {"s": 0.12, "m": 0.16, "l": 0.22}
+LOGO_MARGIN = 0.05  # of the short side, inside title-safe
+LOGO_OPACITY = 0.85
 _HEX = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 
 def empty() -> dict:
-    return {"name": "", "colors": [], "tone": "", "logo_uri": "", "corner": "br"}
+    return {
+        "name": "",
+        "colors": [],
+        "tone": "",
+        "logo_uri": "",
+        "corner": "auto",
+        "logo_size": "s",
+    }
+
+
+def resolve_corner(corner: str, width: int, height: int) -> str:
+    """The real corner: "auto" is top right for portrait (9:16) films, where
+    social apps draw buttons and captions over the bottom and right edge,
+    and bottom right otherwise."""
+    if corner in ("br", "bl", "tr", "tl"):
+        return corner
+    return "tr" if height > width else "br"
 
 
 def clean_color(value) -> str:
@@ -69,8 +90,10 @@ def clean(kit: dict | None) -> dict:
     out["colors"] = colors[:MAX_COLORS]
     out["tone"] = " ".join(str(kit.get("tone") or "").split())[:TONE_LIMIT]
     logo = str(kit.get("logo_uri") or "")
-    out["logo_uri"] = logo if logo.startswith(("gs://", "/", "http")) else ""
-    out["corner"] = kit.get("corner") if kit.get("corner") in CORNERS else "br"
+    # local:// is a demo-mode file (services/story_service.py).
+    out["logo_uri"] = logo if logo.startswith(("gs://", "/", "http", "local://")) else ""
+    out["corner"] = kit.get("corner") if kit.get("corner") in CORNERS else "auto"
+    out["logo_size"] = kit.get("logo_size") if kit.get("logo_size") in LOGO_SIZES else "s"
     return out
 
 
@@ -132,23 +155,45 @@ def save(owner: str, kit: dict) -> dict:
     return kit
 
 
+def logo_box(
+    logo_w: int, logo_h: int, width: int, height: int, corner: str = "auto", size: str = "s"
+) -> tuple[int, int, int, int]:
+    """Where the logo goes on a width x height frame: (x, y, w, h).
+
+    The logo is LOGO_SIZES[size] of the short side wide (a tall logo is held
+    to the same height instead), LOGO_MARGIN of the short side in from the
+    edges, in the resolved corner (see :func:`resolve_corner`)."""
+    short = min(width, height)
+    box = max(8, round(short * LOGO_SIZES.get(size, LOGO_SIZES["s"])))
+    scale = box / max(1, max(logo_w, logo_h))
+    w, h = max(1, round(logo_w * scale)), max(1, round(logo_h * scale))
+    margin = round(short * LOGO_MARGIN)
+    corner = resolve_corner(corner, width, height)
+    x = width - w - margin if corner in ("br", "tr") else margin
+    y = height - h - margin if corner in ("br", "bl") else margin
+    return x, y, w, h
+
+
 def logo_overlay_png(
-    logo_path: str, width: int, height: int, out_path: str, corner: str = "br"
+    logo_path: str,
+    width: int,
+    height: int,
+    out_path: str,
+    corner: str = "auto",
+    size: str = "s",
+    opacity: float = LOGO_OPACITY,
 ) -> str:
-    """A full-frame transparent PNG with the logo small in one corner."""
+    """A full-frame transparent PNG with the logo in one corner (see
+    :func:`logo_box`), slightly see-through like a broadcast bug."""
     from PIL import Image
 
     frame = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     with Image.open(logo_path) as raw:
         logo = raw.convert("RGBA")
-    box = int(min(width, height) * 0.14)
-    logo.thumbnail((max(16, int(box * 1.6)), max(16, box)))
-    # Slightly see-through, like a broadcast bug.
-    alpha = logo.getchannel("A").point(lambda a: int(a * 0.9))
+    x, y, w, h = logo_box(logo.width, logo.height, width, height, corner, size)
+    logo = logo.resize((w, h), Image.LANCZOS)
+    alpha = logo.getchannel("A").point(lambda a: int(a * max(0.0, min(1.0, opacity))))
     logo.putalpha(alpha)
-    margin = int(min(width, height) * 0.04)
-    x = width - logo.width - margin if corner in ("br", "tr") else margin
-    y = height - logo.height - margin if corner in ("br", "bl") else margin
     frame.alpha_composite(logo, (x, y))
     frame.save(out_path)
     return out_path

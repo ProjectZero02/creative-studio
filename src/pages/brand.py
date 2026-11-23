@@ -37,7 +37,8 @@ from state.state import AppState
 logger = logging.getLogger(__name__)
 
 LOGO_TYPES = ["image/png", "image/webp", "image/jpeg"]
-CORNER_LABELS = {"br": "Bottom right", "bl": "Bottom left", "tr": "Top right", "tl": "Top left"}
+CORNER_LABELS = {"auto": "Auto", "br": "Bottom right", "bl": "Bottom left", "tr": "Top right", "tl": "Top left"}
+SIZE_LABELS = {"s": "Small", "m": "Medium", "l": "Large"}
 
 
 def _label(text: str, cls: str) -> None:
@@ -117,6 +118,11 @@ def on_remove_color(e: me.ClickEvent):
 def on_corner(e: me.SelectSelectionChangeEvent):
     s = me.state(BrandState)
     _set(s, {**_kit(s), "corner": e.value})
+
+
+def on_logo_size(e: me.SelectSelectionChangeEvent):
+    s = me.state(BrandState)
+    _set(s, {**_kit(s), "logo_size": e.value})
 
 
 def on_logo(e: me.UploadEvent):
@@ -244,6 +250,14 @@ def brand_content(embedded: bool = False):
                         on_selection_change=on_corner,
                         appearance="outline",
                         key="brand-corner",
+                    )
+                    me.select(
+                        label="Size",
+                        options=[me.SelectOption(label=v, value=k) for k, v in SIZE_LABELS.items()],
+                        value=kit["logo_size"],
+                        on_selection_change=on_logo_size,
+                        appearance="outline",
+                        key="brand-logo-size",
                     )
             if s.error:
                 me.text(s.error, style=me.Style(color=me.theme_var("error")))
