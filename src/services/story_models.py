@@ -341,6 +341,14 @@ def clip_parts(seconds: int, single_max: int | None = None) -> list[int]:
     return [base + (1 if i < extra else 0) for i in range(turns)]
 
 
+def _json_list(text: str) -> list:
+    try:
+        data = json.loads(text or "[]")
+    except ValueError:
+        return []
+    return data if isinstance(data, list) else []
+
+
 def record_turns(
     parts: list[int],
     lines: list[str] | None = None,
@@ -436,12 +444,15 @@ class Scene:
     # Cuts the last render found inside this clip: [{"t": film seconds,
     # "turn": turn index}].
     cuts_json: str = ""
+    # Sound checks of the last render (story_timeline.sound_flags): a turn
+    # much louder or quieter than the take, or background noise.
+    sound_json: str = ""
 
     def clear_clip(self) -> None:
         """Forget the clip and everything made from it (take, Omni thread)."""
         self.clip_uri = self.extends_from = self.interaction_id = ""
         self.bridged_to = self.video_model_used = self.turns_json = ""
-        self.cuts_json = ""
+        self.cuts_json = self.sound_json = ""
         self.clip_in = 0.0
 
     def turns(self) -> list[dict]:
@@ -452,11 +463,10 @@ class Scene:
         return data if isinstance(data, list) else []
 
     def cuts(self) -> list[dict]:
-        try:
-            data = json.loads(self.cuts_json or "[]")
-        except ValueError:
-            return []
-        return data if isinstance(data, list) else []
+        return _json_list(self.cuts_json)
+
+    def sound(self) -> list[dict]:
+        return _json_list(self.sound_json)
 
     def turn_at(self, seconds: float) -> int:
         """Index of the turn playing at `seconds` into the clip (0 if unknown)."""
@@ -562,6 +572,9 @@ class Story:
     # Back-to-back spoken scenes continue the previous clip (one Omni thread),
     # so the person, shot and voice carry on. Those clips render in order.
     continuous_takes: bool = True
+    # Extra music tracks, each under chosen takes (see music_tracks); the
+    # film's own music plays wherever no track does.
+    music_tracks_json: str = ""
     # One seed for every clip of the film (0: pick one on first render).
     seed: int = 0
     # Music made for the film (kept for the editor and re-exports).
@@ -600,6 +613,25 @@ class Story:
             if s.frame_uri:
                 return s.frame_uri
         return ""
+
+    def music_tracks(self) -> list[dict]:
+        """[{"id", "takes": [take numbers, 0-based], "prompt", "uri"}]. A take
+        has one track: a take an earlier track already has is dropped."""
+        out, used = [], set()
+        for t in _json_list(self.music_tracks_json):
+            if not isinstance(t, dict):
+                continue
+            takes = [k for k in t.get("takes") or [] if k not in used]
+            if takes:
+                used.update(takes)
+                out.append({**t, "takes": takes})
+        return out
+
+    @property
+    def chains_takes(self) -> bool:
+        """Each new take starts from the last frame of the one before: the
+        film asked for it (continuity) or is one long continuous scene."""
+        return bool(self.continuity or self.one_take)
 
     @property
     def alt_language(self) -> str:

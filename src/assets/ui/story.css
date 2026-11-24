@@ -693,3 +693,18 @@ html body .ss-dl-btn.is-primary a:hover { background: color-mix(in srgb, var(--s
 .ss-turn .ss-turn-lines { font-size: 13px; }
 .ss-second-row { display: flex; align-items: center; min-height: var(--gm-control-h, 40px); }
 .ss-alt-offer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+
+/* v5 M4: music tracks */
+.ss-tracks { display: flex; flex-direction: column; gap: 12px; }
+.ss-tracks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ss-tracks-tools { display: flex; gap: 8px; }
+.ss-tracks-tools .mat-mdc-button-base { min-width: 120px; height: var(--gm-control-h, 40px); border-radius: var(--gm-radius-md, 12px); }
+.ss-track {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; border-radius: var(--gm-radius-md, 12px); background: var(--gm-tonal);
+}
+.ss-track-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ss-track-name { font-size: 14px; font-weight: 600; }
+.ss-track-head .mat-mdc-button-base { min-width: 96px; height: 36px; border-radius: var(--gm-radius-md, 12px); }
+.ss-track-takes { display: flex; flex-wrap: wrap; gap: 6px; }
+.ss-sound-flag { font-size: 13px; color: var(--sys-error); }

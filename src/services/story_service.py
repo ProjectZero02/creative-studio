@@ -188,6 +188,7 @@ class StoryBackend(Protocol):
         self, story: Story, index: int, prev_clip_uri: str
     ) -> tuple[str, float]: ...
     def redo_turn(self, story: Story, index: int, turn: int) -> str: ...
+    def upscale_clip(self, story: Story, index: int, resolution: str) -> str: ...
     def interaction_of(self, clip_uri: str) -> str: ...
     def render_timeline(self, story: Story, timeline: dict, **opts) -> str: ...
     def save_audio_upload(self, data: bytes, mime_type: str) -> str: ...
@@ -403,9 +404,16 @@ def make_film(
             seg.index: v for seg, v in zip(plan.segments, voice_uris or [], strict=False) if v
         }
         size = None
+        sound: dict[str, list[dict]] = {}
         for seg in plan.segments:
             path = local(seg.clip_uri)
             length, has_sound = tl_mod.probe(path)
+            if seg.spoken and has_sound and str(seg.index) not in sound:
+                # The take's own sound, before any music: turn levels and noise.
+                scene = story.scenes[seg.index] if seg.index < len(story.scenes) else None
+                flags = tl_mod.sound_flags(path, scene.turns() if scene else [])
+                if flags:
+                    sound[str(seg.index)] = flags
             # The picture's own length (the file can run longer with its
             # sound) and any frozen frames at either end.
             picture, head, tail = tl_mod.clip_edges(path, seg.spoken and has_sound)
@@ -451,6 +459,9 @@ def make_film(
                 story.id,
                 ", ".join(f"{s['t']:.2f}s (x{s['ratio']})" for s in jumps),
             )
+        if sound:
+            timeline["sound"] = sound
+            logger.warning("Story %s: sound checks %s", story.id, sound)
         cuts = timeline.get("cuts") or []
         for cut in cuts:
             # Which scene and Omni turn made it (M2 redoes that turn).
@@ -1343,6 +1354,16 @@ class MockStoryBackend:
             story, prev_clip_uri, index
         )
         return self.generate_clip(story, index, start), 0.0
+
+    def upscale_clip(self, story: Story, index: int, resolution: str) -> str:
+        """Demo stand-in: the same clip, stored again."""
+        self._sleep(0.5, 1.0)
+        src = local_path(story.scenes[index].clip_uri)
+        uri, path = self._new_uri(story, f"clip{index + 1}_{resolution}")
+        import shutil
+
+        shutil.copyfile(src, path)
+        return uri
 
     def redo_turn(self, story: Story, index: int, turn: int) -> str:
         """Demo stand-in: the whole clip again from its frame."""
@@ -2423,6 +2444,28 @@ class VertexStoryBackend:
                 turns[1].append(interaction_id)
                 turns[2].append(new_uri)
         return self._join_parts(story, index, pieces), interaction_id
+
+    def upscale_clip(self, story: Story, index: int, resolution: str) -> str:
+        """The scene's clip at `resolution` with Omni's upscale task (same
+        picture and sound, more pixels). Raises GenerationError when Omni
+        can't upscale it."""
+        from models.omni import generate_omni_video
+
+        scene = story.scenes[index]
+        if not scene.clip_uri:
+            raise GenerationError(f"Take {index + 1} has no clip yet.")
+        request = self._omni_request(
+            story,
+            index,
+            "",
+            omni_mode="upscale",
+            reference_video_gcs=scene.clip_uri,
+            reference_video_mime_type="video/mp4",
+        ).model_copy(update={"resolution": resolution})
+        uri, _ = generate_omni_video(request)
+        if not uri:
+            raise GenerationError(f"Gemini Omni could not upscale take {index + 1}.")
+        return uri
 
     def redo_turn(self, story: Story, index: int, turn: int) -> str:
         """Make turn `turn` (and every turn after it) of scene `index` again,

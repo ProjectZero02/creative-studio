@@ -96,6 +96,11 @@ class DeskHandlers:
     on_scene_narration_alt: Callable
     on_toggle_music: Callable
     on_music_prompt: Callable
+    on_make_music: Callable
+    on_add_track: Callable
+    on_track_take: Callable
+    on_track_prompt: Callable
+    on_remove_track: Callable
     on_toggle_voice: Callable
     on_voice: Callable
     on_speaker_voice: Callable
@@ -312,6 +317,8 @@ def _render_turns(story: Story, sel: int, busy: bool, h: DeskHandlers) -> None:
                 else "No cuts found",
                 "ss-turn-status" + (" is-bad" if cuts else ""),
             )
+            for flag in sc.sound():
+                _t(sound_note(flag), "ss-sound-flag")
         if len(rows) < 2:
             # One turn: "Redo clip" makes it again.
             return
@@ -328,6 +335,17 @@ def _render_turns(story: Story, sel: int, busy: bool, h: DeskHandlers) -> None:
                     )
                 if row["lines"]:
                     _t(row["lines"], "ss-turn-lines")
+
+
+def sound_note(flag: dict) -> str:
+    """One sound check result in words."""
+    if flag.get("kind") == "level":
+        db = float(flag.get("db", 0))
+        return (
+            f"Turn {int(flag.get('turn', 0)) + 1} is {abs(db):.0f} dB "
+            + ("louder" if db > 0 else "quieter")
+        )
+    return "Background noise under the speech"
 
 
 def _render_take_facts(
@@ -676,7 +694,89 @@ def _render_brief(story: Story, busy: bool, h: DeskHandlers) -> None:
 
 
 def _render_sound(story: Story, busy: bool, h: DeskHandlers) -> None:
-    """Music step: the film's music and voices."""
+    """Music step: the film's music and voices, then extra music tracks."""
+    _render_voices_and_music(story, busy, h)
+    if story.music_on:
+        _render_tracks(story, busy, h)
+
+
+def _render_tracks(story: Story, busy: bool, h: DeskHandlers) -> None:
+    """Extra music tracks, each under the takes picked for it. The film's
+    music plays wherever no track does."""
+    groups = take_groups(story)
+    tracks = story.music_tracks()
+    making = h.job_active_for("music")
+    used = {k for t in tracks for k in t.get("takes", [])}
+    free = [k for k in range(len(groups)) if k not in used]
+    with me.box(classes="ss-card ss-tracks"):
+        with me.box(classes="ss-tracks-head"):
+            me.text("Tracks", style=me.Style(font_size=16, font_weight=600))
+            with me.box(classes="ss-tracks-tools"):
+                me.button(
+                    "Add track",
+                    type="stroked",
+                    disabled=busy or not free,
+                    on_click=h.on_add_track,
+                    key="ss-add-track",
+                )
+                me.button(
+                    "Making…" if making else "Make music",
+                    type="flat",
+                    color="primary",
+                    disabled=busy,
+                    on_click=h.on_make_music,
+                    key="ss-make-music",
+                )
+        _t(
+            "Film music: every take"
+            if not tracks
+            else "Film music: takes " + ", ".join(str(k + 1) for k in free)
+            if free
+            else "Film music: none",
+            "ss-muted ss-small",
+        )
+        for n, t in enumerate(tracks):
+            tid = t.get("id", "")
+            with me.box(classes="ss-track"):
+                with me.box(classes="ss-track-head"):
+                    _t(
+                        f"Track {n + 1} · " + ("made" if t.get("uri") else "not made yet"),
+                        "ss-track-name",
+                    )
+                    me.button(
+                        "Remove",
+                        type="stroked",
+                        disabled=busy,
+                        on_click=h.on_remove_track,
+                        key=f"trdel|{tid}",
+                    )
+                with me.box(classes="ss-chip-row ss-track-takes"):
+                    for k in range(len(groups)):
+                        on = k in (t.get("takes") or [])
+                        with me.box(classes="ss-pill" + (" is-on" if on else "")):
+                            me.button(
+                                f"Take {k + 1}",
+                                type="stroked",
+                                disabled=busy,
+                                on_click=h.on_track_take,
+                                key=f"trtake|{tid}|{k}",
+                            )
+                me.textarea(
+                    label="Music prompt",
+                    value=t.get("prompt", ""),
+                    placeholder=story.music_prompt or default_music_prompt(story),
+                    autosize=True,
+                    min_rows=2,
+                    max_rows=5,
+                    appearance="outline",
+                    disabled=busy,
+                    on_blur=h.on_track_prompt,
+                    style=me.Style(width="100%"),
+                    key=f"trprompt|{tid}",
+                )
+
+
+def _render_voices_and_music(story: Story, busy: bool, h: DeskHandlers) -> None:
     with me.box(classes="ss-card ss-sound-drawer"):
         with me.box(classes="ss-sound-grid"):
             with me.box(classes="ss-sound-col"):

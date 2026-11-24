@@ -830,7 +830,7 @@ def start_video(story_id: str, owner: str) -> Job:
     for i, sc in enumerate(story.scenes):
         if sc.clip_uri:
             continue
-        if story.continuity and i > 0 and i not in takes:
+        if story.chains_takes and i > 0 and i not in takes:
             bridge_tasks[i] = _add_task(
                 job, f"Scene {i + 1} · last frame of scene {i}", "bridge", i
             )
@@ -842,13 +842,18 @@ def start_video(story_id: str, owner: str) -> Job:
             else "video clip"
         )
         clip_tasks[i] = _add_task(job, f"Scene {i + 1} · {what}", "clip", i)
-    sequential = story.continuity or bool(takes & set(clip_tasks))
+    sequential = story.chains_takes or bool(takes & set(clip_tasks))
     # Music is kept between renders until its prompt changes.
     music_task = (
         _add_task(job, "Music · Lyria score", "music")
         if story.music_on and not story.music_uri
         else None
     )
+    track_tasks = {
+        t["id"]: _add_task(job, f"Music · track for takes {_takes_label(t)}", "music")
+        for t in story.music_tracks()
+        if story.music_on and not t.get("uri")
+    }
     voice_tasks = {
         i: _add_task(job, f"Scene {i + 1} · voiceover", "voice", i)
         for i, sc in enumerate(story.scenes)
@@ -1082,6 +1087,17 @@ def start_video(story_id: str, owner: str) -> Job:
                         job.cancel_event,
                     )
                 )
+            for tid, t in track_tasks.items():
+                if job.cancel_event.is_set():
+                    break
+                futures.append(
+                    pool.submit(
+                        _run_task,
+                        t,
+                        lambda tid=tid: _make_track(story_id, owner, backend, tid),
+                        job.cancel_event,
+                    )
+                )
             for i, t in voice_tasks.items():
                 if job.cancel_event.is_set():
                     break
@@ -1163,7 +1179,7 @@ def start_video(story_id: str, owner: str) -> Job:
             return uri
 
         pending_alt = [i for i, t in alt_clip_tasks.items() if t.status == QUEUED]
-        if pending_alt and story.continuity:
+        if pending_alt and story.chains_takes:
             # One after another: each may start from the previous one.
             for i in sorted(pending_alt):
                 if job.cancel_event.is_set():
@@ -1196,7 +1212,7 @@ def start_video(story_id: str, owner: str) -> Job:
         plan = build_stitch_plan(
             final.scenes,
             cfg.STORY_CROSSFADE_SECONDS,
-            seamless=final.continuity and final.seamless_joins,
+            seamless=final.chains_takes and final.seamless_joins,
         )
         voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
         made: dict = {}
@@ -1227,7 +1243,7 @@ def start_video(story_id: str, owner: str) -> Job:
                 plan = build_stitch_plan(
                     final.scenes,
                     cfg.STORY_CROSSFADE_SECONDS,
-                    seamless=final.continuity and final.seamless_joins,
+                    seamless=final.chains_takes and final.seamless_joins,
                 )
                 voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
                 film_uri, made["timeline"] = _film_and_timeline(
@@ -1249,7 +1265,7 @@ def start_video(story_id: str, owner: str) -> Job:
                 plan = build_stitch_plan(
                     final.scenes,
                     cfg.STORY_CROSSFADE_SECONDS,
-                    seamless=final.continuity and final.seamless_joins,
+                    seamless=final.chains_takes and final.seamless_joins,
                 )
                 voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
                 film_uri, made["timeline"] = _film_and_timeline(
@@ -1271,8 +1287,9 @@ def start_video(story_id: str, owner: str) -> Job:
             s.step = "video"
             if made.get("timeline"):
                 s.timeline_json = json.dumps(made["timeline"])
-            # What the cut scan found, shown on each take.
+            # What the cut scan and sound checks found, shown on each take.
             cuts = (made.get("timeline") or {}).get("cuts") or []
+            sound = (made.get("timeline") or {}).get("sound") or {}
             for i, sc in enumerate(s.scenes):
                 mine = [
                     {"t": c.get("t", 0), "turn": c.get("turn", -1)}
@@ -1280,6 +1297,8 @@ def start_video(story_id: str, owner: str) -> Job:
                     if c.get("scene") == i
                 ]
                 sc.cuts_json = json.dumps(mine) if mine else ""
+                flags = sound.get(str(i)) or []
+                sc.sound_json = json.dumps(flags) if flags else ""
             story_versions.remember(s, "render")
 
         mutate_story(story_id, owner, apply)
@@ -1311,7 +1330,7 @@ def start_video(story_id: str, owner: str) -> Job:
         alt_plan = build_stitch_plan(
             second.scenes,
             cfg.STORY_CROSSFADE_SECONDS,
-            seamless=second.continuity and second.seamless_joins,
+            seamless=second.chains_takes and second.seamless_joins,
         )
         alt_voices = [alt_voice_uris.get(seg.index, "") for seg in alt_plan.segments]
         if not _run_task(
@@ -1398,6 +1417,58 @@ def _redo_turn(story_id: str, owner: str, backend, index: int, turn: int) -> str
 
     mutate_story(story_id, owner, apply)
     return uri
+
+
+def start_upscale(story_id: str, owner: str, resolution: str) -> Job:
+    """Final quality: upscale every clip to `resolution` with Omni, then
+    make the film again from the sharper clips (same takes, music and
+    voice)."""
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    if not story.scenes or not all(sc.clip_uri for sc in story.scenes):
+        raise GenerationError("Make the film first, then upscale it.")
+    job = _new_job(owner, story_id, "clips", {"indices": list(range(len(story.scenes)))})
+    tasks = {
+        i: _add_task(job, f"Take {i + 1} · upscale to {resolution}", "clip", i)
+        for i in range(len(story.scenes))
+    }
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+
+        def upscale(i: int) -> str:
+            current = get_store().get(story_id, owner)
+            if current is None:
+                raise StoryAccessError("Story not found.")
+            uri = backend.upscale_clip(current, i, resolution)
+            scene_id = current.scenes[i].id
+
+            def apply(s: Story) -> None:
+                # Same take, sharper: the turn records and thread still hold.
+                for x in s.scenes:
+                    if x.id == scene_id:
+                        x.clip_uri = uri
+
+            mutate_story(story_id, owner, apply)
+            return uri
+
+        ok = True
+        for i in sorted(tasks):
+            if job.cancel_event.is_set():
+                return
+            ok = _run_task(tasks[i], lambda i=i: upscale(i), job.cancel_event) and ok
+        if not ok or job.cancel_event.is_set():
+            return
+
+        def done(s: Story) -> None:
+            s.resolution = resolution
+            s.clear_films()
+
+        mutate_story(story_id, owner, done)
+        job.params["next_job"] = start_video(story_id, owner).id
+
+    return _spawn(job, work)
 
 
 def start_turn_redo(story_id: str, owner: str, index: int, turn: int) -> Job:
@@ -1773,12 +1844,18 @@ def start_subtitled(story_id: str, owner: str, variant: str) -> Job:
 
 
 def start_music(story_id: str, owner: str) -> Job:
-    """Make the film's music with Lyria and put it on the timeline."""
+    """Make the film's music with Lyria (and any track still without music)
+    and put it on the timeline."""
     story = get_store().get(story_id, owner)
     if story is None:
         raise StoryAccessError("Story not found.")
     job = _new_job(owner, story_id, "music")
     task = _add_task(job, "Music · Lyria score", "music")
+    track_tasks = {
+        t["id"]: _add_task(job, f"Music · track for takes {_takes_label(t)}", "music")
+        for t in story.music_tracks()
+        if not t.get("uri")
+    }
 
     def work(job: Job) -> None:
         backend = get_backend()
@@ -1790,14 +1867,59 @@ def start_music(story_id: str, owner: str) -> Job:
             set_music(story_id, owner, uri)
             return uri
 
-        _run_task(task, make)
+        _run_task(task, make, job.cancel_event)
+        for tid, t in track_tasks.items():
+            if job.cancel_event.is_set():
+                break
+            _run_task(t, lambda tid=tid: _make_track(story_id, owner, backend, tid), job.cancel_event)
+        current = get_store().get(story_id, owner)
+        if current is not None and current.timeline_json:
+            set_music(story_id, owner, current.music_uri)
 
     return _spawn(job, work)
 
 
+def _takes_label(track: dict) -> str:
+    return ", ".join(str(int(k) + 1) for k in sorted(track.get("takes") or []))
+
+
+def _make_track(story_id: str, owner: str, backend, track_id: str) -> str:
+    """Make one music track (its takes' length) and save it on the story."""
+    current = get_store().get(story_id, owner)
+    if current is None:
+        raise StoryAccessError("Story not found.")
+    track = next((t for t in current.music_tracks() if t.get("id") == track_id), None)
+    if track is None:
+        raise GenerationError("That music track was removed.")
+    groups = take_groups(current)
+    seconds = float(
+        sum(
+            current.scenes[i].duration
+            for k in track.get("takes") or []
+            if 0 <= int(k) < len(groups)
+            for i in groups[int(k)]
+        )
+    ) or 30.0
+    prompt = (track.get("prompt") or "").strip() or (
+        current.music_prompt or default_music_prompt(current)
+    )
+    uri = backend.generate_music(current, prompt, seconds)
+
+    def apply(s: Story) -> None:
+        tracks = s.music_tracks()
+        for t in tracks:
+            if t.get("id") == track_id and (t.get("prompt") or "") == (track.get("prompt") or ""):
+                t["uri"] = uri
+        s.music_tracks_json = json.dumps(tracks)
+
+    mutate_story(story_id, owner, apply)
+    return uri
+
+
 def set_music(story_id: str, owner: str, uri: str) -> Story:
-    """Use `uri` as the film's music: one clip across the whole timeline."""
-    from services.story_timeline import duration, new_clip_id, normalize, track
+    """Use `uri` as the film's music: one clip across the whole timeline,
+    or, with music tracks, wherever no track plays (story_timeline.place_music)."""
+    from services.story_timeline import normalize, place_music, track
 
     def apply(s: Story) -> None:
         s.music_uri = uri
@@ -1806,17 +1928,7 @@ def set_music(story_id: str, owner: str, uri: str) -> Story:
             return
         tl = normalize(s.timeline_json)
         old = track(tl, "music")["clips"]
-        total = duration(tl)
-        track(tl, "music")["clips"] = [
-            {
-                "id": new_clip_id(),
-                "src": uri,
-                "start": 0.0,
-                "in": 0.0,
-                "out": total,
-                "gain": old[0]["gain"] if old else 0.8,
-            }
-        ]
+        place_music(tl, s, uri, gain=old[0]["gain"] if old else 0.8)
         s.timeline_json = json.dumps(normalize(tl))
 
     return mutate_story(story_id, owner, apply)
