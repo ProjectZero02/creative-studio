@@ -420,6 +420,9 @@ class Default:
     # Seamless joins (bridges, rolling takes) that still show a jump after
     # stitching are made again this many times.
     STORY_SEAM_RETRIES: int = int(os.environ.get("STORY_SEAM_RETRIES", 1))
+    # A cut Omni put inside a take: make that turn again, at most this many
+    # times per take in one render.
+    STORY_TURN_REDOS: int = int(os.environ.get("STORY_TURN_REDOS", 1))
     # Longest scene. Past the video model's single-clip limit (15 s for Omni
     # 1.2 Flash) a scene is one clip plus extensions in the same Omni thread
     # (3 to 10 s each); Omni extends up to 30 s in all.

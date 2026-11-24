@@ -343,9 +343,11 @@ def record_turns(
     lines: list[str] | None = None,
     prompts: list[str] | None = None,
     ids: list[str] | None = None,
+    uris: list[str] | None = None,
 ) -> str:
     """JSON for `Scene.turns_json`: one record per turn, with its start
-    offset in the clip, so a cut found in the take maps to its turn."""
+    offset in the clip, so a cut found in the take maps to its turn, and
+    the turn's own video, so a later turn can be made again from it."""
     records, start = [], 0
     for i, seconds in enumerate(parts):
         records.append(
@@ -355,6 +357,7 @@ def record_turns(
                 "lines": (lines[i] if lines and i < len(lines) else ""),
                 "interaction_id": (ids[i] if ids and i < len(ids) else ""),
                 "prompt": (prompts[i] if prompts and i < len(prompts) else ""),
+                "uri": (uris[i] if uris and i < len(uris) else ""),
             }
         )
         start += int(seconds)
