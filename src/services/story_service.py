@@ -57,6 +57,7 @@ from services.story_models import (
     Story,
     apply_caps,
     clip_parts,
+    record_turns,
     clip_prompt,
     clip_refs,
     frame_refs,
@@ -448,6 +449,24 @@ def make_film(
                 "Story %s: visible jump at %s",
                 story.id,
                 ", ".join(f"{s['t']:.2f}s (x{s['ratio']})" for s in jumps),
+            )
+        cuts = timeline.get("cuts") or []
+        for cut in cuts:
+            # Which scene and Omni turn made it (M2 redoes that turn).
+            scene_index, at = tl_mod.locate(timeline, cut["t"])
+            if 0 <= scene_index < len(story.scenes):
+                cut["scene"] = scene_index
+                cut["turn"] = story.scenes[scene_index].turn_at(at)
+        if cuts:
+            logger.warning(
+                "Story %s: unplanned cut inside a take at %s",
+                story.id,
+                ", ".join(
+                    f"{c['t']:.2f}s (x{c['ratio']}"
+                    + (f", scene {c['scene'] + 1} turn {c['turn'] + 1}" if "turn" in c else "")
+                    + ")"
+                    for c in cuts
+                ),
             )
     return timeline
 
@@ -1230,6 +1249,13 @@ class MockStoryBackend:
             return arr
 
         clip = VideoClip(make_frame, duration=float(scene.duration))
+        parts = clip_parts(scene.duration)
+        lines = (
+            split_narration_parts(scene.narration, parts)
+            if len(parts) > 1 and scene.spoken
+            else [scene.narration]
+        )
+        scene.turns_json = record_turns(parts, lines)
         uri, path = self._new_uri(story, f"clip{index + 1}")
         uri, path = uri + ".mp4", path + ".mp4"
         clip.write_videofile(
@@ -2267,6 +2293,7 @@ class VertexStoryBackend:
             )
         if not uri:
             raise GenerationError("Gemini Omni returned no video for this scene.")
+        prompts, ids = [prompt], [interaction_id]
         if len(parts) > 1:
             uri, interaction_id = self._lengthen(
                 story,
@@ -2278,7 +2305,9 @@ class VertexStoryBackend:
                 story_set,
                 part_lines=part_lines,
                 model_id=engine,
+                turns=(prompts, ids),
             )
+        scene.turns_json = record_turns(parts, part_lines, prompts, ids)
         scene.video_model_used = engine
         self._interactions[uri] = interaction_id
         return uri
@@ -2342,6 +2371,7 @@ class VertexStoryBackend:
         story_set,
         part_lines: list[str] | None = None,
         model_id: str = "",
+        turns: tuple[list[str], list[str]] | None = None,
     ) -> tuple[str, str]:
         """Make a scene longer than one clip: continue the first clip in its
         Omni thread, one turn per part of `rest`, then join the parts into
@@ -2373,6 +2403,9 @@ class VertexStoryBackend:
                 )
             history += _turn(more, new_uri)
             pieces.append(new_uri)
+            if turns is not None:
+                turns[0].append(more)
+                turns[1].append(interaction_id)
         return self._join_parts(story, index, pieces), interaction_id
 
     def _join_parts(self, story: Story, index: int, pieces: list[str]) -> str:

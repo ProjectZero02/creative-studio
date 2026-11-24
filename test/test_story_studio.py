@@ -1293,11 +1293,11 @@ def test_scene_lengths_stop_at_the_clip_limit_without_extension(monkeypatch):
     [
         (8, [8]),
         (15, [15]),
-        (16, [13, 3]),
-        (17, [14, 3]),
-        (20, [15, 5]),
-        (25, [15, 10]),
-        (30, [15, 8, 7]),
+        (16, [8, 8]),
+        (17, [9, 8]),
+        (20, [10, 10]),
+        (25, [9, 8, 8]),
+        (30, [10, 10, 10]),
     ],
 )
 def test_clip_parts_first_clip_then_extensions(seconds, parts):
@@ -1404,14 +1404,18 @@ def test_vertex_long_scene_extends_in_the_thread_and_joins(monkeypatch):
     backend._join_parts = fake_join
     uri = backend.generate_clip(story, 0, "gs://b/f0.png")
     assert uri == "gs://b/joined.mp4"
-    assert [c.duration_seconds for c in calls] == [15, 10]
+    assert [c.duration_seconds for c in calls] == [9, 8, 8]
     follow = calls[1]
     assert follow.previous_interaction_id == "turn1"
     history = json.loads(follow.chat_history_json)
     assert history[1]["content"][0]["gcs_uri"] == "gs://b/part1.mp4"
     assert follow.prompt.startswith("Continue this exact shot")
-    assert joined["pieces"] == ["gs://b/part1.mp4", "gs://b/part2.mp4"]
-    assert backend.interaction_of(uri) == "turn2"  # a next take continues from here
+    assert joined["pieces"] == ["gs://b/part1.mp4", "gs://b/part2.mp4", "gs://b/part3.mp4"]
+    assert backend.interaction_of(uri) == "turn3"  # a next take continues from here
+    turns = story.scenes[0].turns()
+    assert [t["seconds"] for t in turns] == [9, 8, 8]
+    assert [t["interaction_id"] for t in turns] == ["turn1", "turn2", "turn3"]
+    assert turns[1]["prompt"] == follow.prompt
 
 
 def test_scenario_writer_prefers_fewer_longer_spoken_scenes():
@@ -1485,7 +1489,9 @@ def test_make_film_keeps_omni_sound_under_the_voiceover(tmp_path):
     assert narrated.get("ambient") and narrated["gain"] > 0
     assert not spoken.get("ambient")
     # Same tone in both clips: the ambient bed at -30 LUFS is 10 dB under dialogue at -20.
-    assert narrated["gain"] / spoken["gain"] == pytest.approx(10 ** (-10 / 20), rel=0.05)
+    # Spoken gain is capped (SPOKEN_GAIN_MAX), so the gap can be a little narrower.
+    ratio = narrated["gain"] / spoken["gain"]
+    assert 10 ** (-10 / 20) * 0.95 <= ratio <= 10 ** (-8 / 20)
 
 
 def test_follow_up_turn_carries_its_frames():

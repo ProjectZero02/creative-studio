@@ -378,7 +378,8 @@ class Default:
         "PROJECTS_COLLECTION_NAME", "chat_projects"
     )
     # Cost guardrails: every film is capped by these values.
-    STORY_MIN_SCENES: int = 3
+    # A one-shot film is one scene (one continuous take).
+    STORY_MIN_SCENES: int = 1
     STORY_MAX_SCENES: int = int(os.environ.get("STORY_MAX_SCENES", 120))
     STORY_MAX_FILM_SECONDS: int = int(os.environ.get("STORY_MAX_FILM_SECONDS", 900))
     STORY_SEQUENCE_THRESHOLD_SCENES: int = int(
@@ -403,6 +404,8 @@ class Default:
     # Omni on Vertex returns up to 40 s per extension but reads only the last
     # 30 s of its input, so a take keeps growing while it is at most
     # STORY_TAKE_CONTEXT_SECONDS long and stays within STORY_TAKE_MAX_SECONDS.
+    # A one-take film is planned in takes of STORY_TAKE_CONTEXT_SECONDS, the
+    # documented 30 s chain.
     STORY_TAKE_MAX_SECONDS: int = int(os.environ.get("STORY_TAKE_MAX_SECONDS", 40))
     STORY_TAKE_CONTEXT_SECONDS: int = int(
         os.environ.get("STORY_TAKE_CONTEXT_SECONDS", 30)

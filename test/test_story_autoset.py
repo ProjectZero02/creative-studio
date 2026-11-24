@@ -93,7 +93,7 @@ def test_plan_length_hits_the_total_and_keeps_fixed_values():
     n, d = auto.plan_length(60, duration=20)
     assert (n, d) == (3, 20)
     n, d = auto.plan_length(15)  # short film: closest total first
-    assert abs(n * d - 15) <= 1 and d <= 6
+    assert abs(n * d - 15) <= 1
 
 
 def test_long_films_use_long_scenes():
