@@ -324,19 +324,41 @@ def split_narration_parts(text: str, parts: list[int]) -> list[str]:
 
 def clip_parts(seconds: int, single_max: int | None = None) -> list[int]:
     """How a scene of `seconds` is made: the first clip, then extension
-    turns of EXTEND_MIN_SECONDS..EXTEND_MAX_SECONDS each. 20 -> [15, 5],
-    30 -> [15, 8, 7], 16 -> [13, 3] (with a 15 s single-clip limit)."""
+    turns, all as even as possible. Omni extends at most EXTEND_MAX_SECONDS
+    a turn and reads the last 10 s, so even 10 s parts keep every turn's
+    script and action the same size: 30 -> [10, 10, 10], 20 -> [10, 10],
+    25 -> [9, 8, 8], 16 -> [8, 8] (with a 15 s single-clip limit)."""
     seconds = int(seconds)
     top = single_clip_max() if single_max is None else single_max
     if seconds <= top:
         return [seconds]
-    first, rest = top, seconds - top
-    if rest < EXTEND_MIN_SECONDS:
-        first -= EXTEND_MIN_SECONDS - rest
-        rest = EXTEND_MIN_SECONDS
-    turns = -(-rest // EXTEND_MAX_SECONDS)
-    base, extra = divmod(rest, turns)
-    return [first] + [base + (1 if i < extra else 0) for i in range(turns)]
+    step = max(EXTEND_MIN_SECONDS, min(int(top), EXTEND_MAX_SECONDS))
+    turns = max(2, -(-seconds // step))
+    base, extra = divmod(seconds, turns)
+    return [base + (1 if i < extra else 0) for i in range(turns)]
+
+
+def record_turns(
+    parts: list[int],
+    lines: list[str] | None = None,
+    prompts: list[str] | None = None,
+    ids: list[str] | None = None,
+) -> str:
+    """JSON for `Scene.turns_json`: one record per turn, with its start
+    offset in the clip, so a cut found in the take maps to its turn."""
+    records, start = [], 0
+    for i, seconds in enumerate(parts):
+        records.append(
+            {
+                "seconds": int(seconds),
+                "start": start,
+                "lines": (lines[i] if lines and i < len(lines) else ""),
+                "interaction_id": (ids[i] if ids and i < len(ids) else ""),
+                "prompt": (prompts[i] if prompts and i < len(prompts) else ""),
+            }
+        )
+        start += int(seconds)
+    return json.dumps(records)
 
 
 # ---------------------------------------------------------------------------
@@ -402,12 +424,30 @@ class Scene:
     transition: str = "auto"  # auto | cut | bridge | extend | dissolve | fade_black
     bridged_to: str = ""  # frame_uri of next scene used as last_frame
     video_model_used: str = ""
+    # One record per Omni turn of this clip (see `record_turns`): seconds,
+    # start offset, lines, interaction ID and the prompt sent.
+    turns_json: str = ""
 
     def clear_clip(self) -> None:
         """Forget the clip and everything made from it (take, Omni thread)."""
         self.clip_uri = self.extends_from = self.interaction_id = ""
-        self.bridged_to = self.video_model_used = ""
+        self.bridged_to = self.video_model_used = self.turns_json = ""
         self.clip_in = 0.0
+
+    def turns(self) -> list[dict]:
+        try:
+            data = json.loads(self.turns_json or "[]")
+        except ValueError:
+            return []
+        return data if isinstance(data, list) else []
+
+    def turn_at(self, seconds: float) -> int:
+        """Index of the turn playing at `seconds` into the clip (0 if unknown)."""
+        index = 0
+        for i, turn in enumerate(self.turns()):
+            if float(turn.get("start", 0)) <= seconds:
+                index = i
+        return index
 
     def alt_clip_key(self) -> str:
         """What a second-language clip must match to still be current."""
@@ -446,6 +486,10 @@ class Story:
     music_prompt: str = ""
     voice_on: bool = True
     voice_name: str = "Kore"
+    # The idea asks for one continuous shot: the film is as few long takes
+    # as fit, they run on without a cut, and the film is trimmed to
+    # target_seconds when stitched (story_director.is_one_take).
+    one_take: bool = False
     continuity: bool = False
     # With continuity on, join scenes that really continue each other with a
     # straight cut instead of a crossfade (a crossfade there double-exposes the
@@ -677,8 +721,9 @@ class Caps:
 
 
 # Resolutions offered in Setup, lowest first.
-STORY_RESOLUTIONS = ("720p", "1080p", "4k")
-RESOLUTION_LABELS = {"720p": "720p", "1080p": "1080p", "4k": "4K"}
+# 360p is a cheap draft (about a third of 720p on the price list).
+STORY_RESOLUTIONS = ("360p", "720p", "1080p", "4k")
+RESOLUTION_LABELS = {"360p": "360p draft", "720p": "720p", "1080p": "1080p", "4k": "4K"}
 
 
 def resolution_options(model_id: str | None = None) -> list[str]:
@@ -1546,8 +1591,25 @@ def scenario_prompt(story: Story, story_set=None) -> str:
         if story.brief.strip()
         else ""
     )
-    return f"""Turn the idea below into a short film of exactly {story.scene_count} scenes,
-each about {story.duration} seconds long. Visual style: {style["label"]}.
+    if getattr(story, "one_take", False):
+        total = int(getattr(story, "target_seconds", 0) or 0) or story.scene_count * story.duration
+        parts = (
+            "one scene"
+            if story.scene_count == 1
+            else f"exactly {story.scene_count} scenes that run on from each other with no cut"
+        )
+        opening = (
+            f"Turn the idea below into ONE CONTINUOUS TAKE of {total} seconds: {parts},\n"
+            f"each {story.duration} seconds long. Visual style: {style['label']}."
+        )
+        take_rules = ONE_TAKE_RULES
+    else:
+        opening = (
+            f"Turn the idea below into a short film of exactly {story.scene_count} scenes,\n"
+            f"each about {story.duration} seconds long. Visual style: {style['label']}."
+        )
+        take_rules = ""
+    return f"""{opening}
 
 Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}{_main_character(story, story_set)}
 
@@ -1564,13 +1626,27 @@ Rules:
   their face, hair, build or clothes there: the cast holds their looks, the
   same in every shot. Every person is {NOT_FAMOUS}. Write visuals in English.
 - {cam_rule}
-- Build a clear beginning, middle and end.{_set_cast_rules(story_set)}{_scenario_cast_rules(casting)}{_brand_rule(story)}
+- Build a clear beginning, middle and end.{take_rules}{_set_cast_rules(story_set)}{_scenario_cast_rules(casting)}{_brand_rule(story)}
 - "brief": first, rewrite the idea as a clear, vivid film brief in English
   (3 to 5 sentences: subject, audience, tone, arc, setting and look). Keep
   everything the idea asks for and add nothing that contradicts it. Then
   write the scenes from the brief.
 
 Return only JSON: {{"brief": str, "title": str, "voice": str, "scenes": [{{"narration": str, "spoken": bool, "seconds": int, "visual": str, "camera": str{links}}}]{cast_shape}}}"""
+
+
+# Breakdown rules for a one-take film (Story.one_take).
+ONE_TAKE_RULES = """
+- ONE CONTINUOUS TAKE: the camera never cuts, jumps or reframes. Scene 1's
+  visual sets the framing, place and lighting once; any later scene only says
+  what changes (the action and the words), never a new framing, backdrop,
+  angle or lighting.
+- One camera move for the whole take, slow and steady. When the camera moves
+  for a long time, the person moves with it (walks across the space while the
+  camera tracks them) so they stay in frame the whole time; the camera never
+  leaves the person.
+- The speaker talks the whole time in one voice; the narration is one
+  continuous speech split across the scenes at sentence ends."""
 
 
 # System instructions: the role and the craft rules that never change. The
@@ -1988,6 +2064,10 @@ def _cast_text(story: Story, scene: Scene, story_set) -> str:
     """Who is on screen: the scene's cast looks, else the cast the scenario
     wrote (no set yet), else the story's character."""
     cast = scene_cast(story_set, scene)
+    if not cast and story_set is not None and getattr(scene, "spoken", False):
+        # A spoken scene the breakdown did not link: its speaker is the
+        # set's lead, so later turns can still name who is on screen.
+        cast = list(story_set.on_screen())[:1]
     if cast:
         return "; ".join(c.look() for c in cast)
     if story_set is None:
@@ -1995,6 +2075,20 @@ def _cast_text(story: Story, scene: Scene, story_set) -> str:
         if who:
             return who
     return story.character
+
+
+def _who_short(story: Story, scene: Scene, story_set) -> str:
+    """A short name for who is on screen ("Arthur", "the presenter"), so a
+    camera line can say to keep them in frame. Empty when nobody is."""
+    cast = scene_cast(story_set, scene)
+    if not cast and story_set is not None:
+        cast = list(story_set.on_screen())[:1]
+    if cast:
+        name = (getattr(cast[0], "name", "") or "").strip()
+        return name.split()[0] if name else "the person on screen"
+    if (story.character or "").strip() or getattr(scene, "spoken", False):
+        return "the person on screen"
+    return ""
 
 
 def _names_cast(story: Story, scene: Scene, story_set) -> bool:
@@ -2122,12 +2216,25 @@ def clip_prompt(
     # sound. The camera move leads and is said to win, so the action text
     # cannot turn the camera the other way.
     moving = bool(cam) and scene.camera not in ("static", "auto")
-    base = "Single continuous shot, no scene cuts."
+    who_short = _who_short(story, scene, story_set)
+    # A later turn of the same scene (part_narration set) only continues:
+    # resending the scene's framing makes Omni reframe with a cut.
+    same_scene_turn = continuing and part_narration is not None
+    base = "One continuous shot, no cuts."
     if cam:
-        base += f" Camera, for the whole clip: {cam}."
+        follow = f", keeping {who_short} in frame" if moving and who_short else ""
+        base += f" Camera: {cam}{follow}."
     else:
         base += " Camera: natural camera movement."
-    base += f" {scene.visual}"
+    if same_scene_turn:
+        base += (
+            f" Keep the same framing, place and lighting; {who_short or 'the subject'}"
+            " carries on from the last frame."
+        )
+    elif continuing:
+        base += f" What happens now: {scene.visual}"
+    else:
+        base += f" {scene.visual}"
     if motion:
         base += f" Action: {motion}."
         if moving:
@@ -2151,15 +2258,11 @@ def clip_prompt(
         else:
             base = (
                 f"Continue this exact shot without a cut, from its last frame: "
-                f"the same person{who}, outfit, place and lighting, the camera "
-                "moving the same way and at the same speed as before, and the "
-                f"same voice, pace and room sound. {base}"
+                f"the same person{who}, outfit, place, lighting and camera "
+                "height, the camera moving the same way and at the same speed, "
+                f"and the same voice, pace and room sound. {base}"
             )
-    if moving:
-        base += (
-            " Avoid: cuts, a new location, the camera stopping or reversing "
-            "direction."
-        )
+    base += " Avoid: cuts, jump cuts, a new location, new people."
     if continuing and start_frame:
         base += (
             " Start exactly on the attached image (this scene's storyboard "
@@ -2206,7 +2309,8 @@ def clip_prompt(
         f'{story.language}: "{spoken_line}" '
         f"They speak in {voice}, the same voice in every scene. They are the only "
         "voice: no narrator, no other speakers, no voice-over. Clear, natural, "
-        "lip-synced speech with light room sound. No music, no subtitles, no "
+        "lip-synced speech over quiet room tone. No music, applause, crowd "
+        "noise or hiss; no subtitles, no "
         f"on-screen text.{bridge_note}"
     )
 

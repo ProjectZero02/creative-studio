@@ -85,6 +85,9 @@ RTL_BOLD_FONT_CANDIDATES = (
 )
 _RTL = re.compile("[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]")
 MAX_GAIN = 4.0
+# Spoken clips are already near dialogue level; pushing them harder only
+# drives the master limiter and flattens the voice.
+SPOKEN_GAIN_MAX = 1.15
 # Loudness targets (LUFS): each clip's dialogue, the model's own sound under
 # a narrator (an ambient bed), and the finished film.
 DIALOGUE_LUFS = -20.0
@@ -179,6 +182,29 @@ def merge_runs(clips: list[dict], fps: int = 24) -> list[dict]:
             continue
         out.append(dict(c))
     return out
+
+
+def trim_to(timeline: dict, seconds: float) -> dict:
+    """Cut every clip at `seconds`: clips that start after it go, clips that
+    run past it end there (a one-take film lands on the asked length)."""
+    end = float(seconds)
+    if end <= 0:
+        return timeline
+    for t in timeline.get("tracks", []):
+        kept = []
+        for c in t.get("clips", []):
+            start = float(c.get("start") or 0)
+            if start >= end - 1e-6:
+                continue
+            if clip_end(c) > end + 1e-6:
+                if "dur" in c and "out" not in c:
+                    c["dur"] = round(end - start, 3)
+                else:
+                    tempo = float(c.get("tempo") or 1.0) or 1.0
+                    c["out"] = round(float(c.get("in") or 0) + (end - start) * tempo, 3)
+            kept.append(c)
+        t["clips"] = kept
+    return timeline
 
 
 def duration(timeline: dict) -> float:
@@ -618,6 +644,9 @@ def build_timeline(
                 "scene": seg.index,
             }
         )
+    asked = float(getattr(story, "target_seconds", 0) or 0)
+    if getattr(story, "one_take", False) and 0 < asked < duration(tl):
+        trim_to(tl, asked)
     if music_uri:
         total = duration(tl) or plan.total
         length = music_length or total
@@ -771,7 +800,7 @@ def clip_gain(lufs: float | None, spoken: bool) -> float:
     narrated clip's sound (ambience, effects) kept low at AMBIENT_LUFS so the
     narrator sits on top of it."""
     if spoken:
-        return gain_to(lufs, DIALOGUE_LUFS)
+        return min(SPOKEN_GAIN_MAX, gain_to(lufs, DIALOGUE_LUFS))
     if lufs is None:
         return AMBIENT_GAIN
     return gain_to(lufs, AMBIENT_LUFS, floor=0.01)
@@ -1418,6 +1447,12 @@ def render_timeline(
         ]
         try:
             timeline["seams"] = seam_check(out_path, cuts)
+            planned = [c["t"] for c in cuts if not c["seamless"]]
+            # Cuts nobody planned (inside a take, or at a seamless join).
+            timeline["cuts"] = [
+                c for c in take_cuts(out_path)
+                if all(abs(c["t"] - p) > 0.3 for p in planned)
+            ]
         except Exception:  # the check never stops the film
             from common.analytics import get_logger
 
@@ -1456,6 +1491,45 @@ def frame_changes(path: str) -> list[tuple[float, float]]:
     times = [float(t) for t in re.findall(r"pts_time:([\d.]+)", text)]
     scores = [float(s) for s in re.findall(r"scene_score=([\d.]+)", text)]
     return list(zip(times, scores, strict=False))
+
+
+# A frame change this many times a film's median is a hard cut (a jump to a
+# new framing), wherever it falls; a continuous take should have none.
+CUT_RATIO = 30.0
+
+
+def locate(timeline: dict, t: float) -> tuple[int, float]:
+    """(scene index, seconds into that scene's clip) at film time `t`, or
+    (-1, 0.0) when no video clip plays there."""
+    for clip in track(timeline, "video")["clips"]:
+        start = float(clip.get("start", 0))
+        length = float(clip.get("out", 0)) - float(clip.get("in", 0))
+        if start <= t < start + length:
+            return int(clip.get("scene", -1)), float(clip.get("in", 0)) + t - start
+    return -1, 0.0
+
+
+def take_cuts(path: str, ratio: float = CUT_RATIO, skip: float = 0.25) -> list[dict]:
+    """Hard cuts anywhere in a rendered film: every frame whose change is at
+    least `ratio` times the median (ignoring the first `skip` seconds).
+    Unlike seam_check, which only looks next to planned joins, this finds a
+    cut the video model made inside one generated take."""
+    changes = frame_changes(path)
+    if len(changes) < 3:
+        return []
+    scores = sorted(s for _, s in changes)
+    median = max(scores[len(scores) // 2], 1e-4)
+    found = []
+    for t_, s in changes:
+        if t_ >= skip and s / median >= ratio:
+            if found and t_ - found[-1]["t"] < 0.2:  # one cut, several frames
+                if s > found[-1]["score"]:
+                    found[-1].update(t=round(t_, 3), score=round(s, 4),
+                                     ratio=round(s / median, 1))
+                continue
+            found.append({"t": round(t_, 3), "score": round(s, 4),
+                          "ratio": round(s / median, 1)})
+    return found
 
 
 def seam_check(path: str, cuts: list, window: float = 0.09) -> list[dict]:

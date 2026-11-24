@@ -1353,6 +1353,7 @@ def setup_plan(s: StoryState) -> tuple[int, int, int]:
         seconds or story_director.DEFAULT_FILM_SECONDS,
         pacing=s.pacing,
         video_model=setup_view.engine_of(s),
+        one_take=setup_view.one_take_of(s),
     )
     return int(seconds or 0), int(bp["scene_count"]), int(bp["duration"])
 
@@ -1390,7 +1391,10 @@ def on_generate_scenario(e: me.ClickEvent):
             story.brief = ""  # a new idea: Gemini writes a new brief
         story.input_mode = s.input_mode if s.input_mode in ("idea", "script") else "idea"
         story.raw_script = s.raw_script if story.input_mode == "script" else ""
-        story.target_seconds = int(target or 0)
+        story.one_take = setup_view.one_take_of(s)
+        story.target_seconds = int(target or 0) or (
+            story_director.DEFAULT_FILM_SECONDS if story.one_take else 0
+        )
         story.pacing = s.pacing if s.pacing in PACING_IDS else "cinematic"
         story.video_model = s.video_model
         story.resolution = caps.resolution if s.resolution else ""

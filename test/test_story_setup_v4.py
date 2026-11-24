@@ -76,7 +76,7 @@ def test_parse_duration_text_is_capped():
 
 
 def test_blueprint_30s_is_one_continuous_take():
-    bp = sd.setup_blueprint(30, video_model="gemini-omni-1.2-flash")
+    bp = sd.setup_blueprint(30, video_model="gemini-omni-1.2-flash", one_take=True)
     assert bp["takes"] == 1 and bp["cuts"] == 0
     assert sd.takes_line(bp["takes"]) == "1 continuous take"
     assert bp["shots"] * bp["shot_seconds"] == bp["seconds"]
@@ -119,7 +119,7 @@ def test_blueprint_resolution_follows_the_engine():
         ]
         == "4k"
     )
-    assert sm.resolution_options("gemini-omni-1.2-flash") == ["720p", "1080p", "4k"]
+    assert sm.resolution_options("gemini-omni-1.2-flash") == ["360p", "720p", "1080p", "4k"]
     # An engine without 4K falls back to the configured default.
     assert "4k" not in sm.resolution_options("gemini-omni-flash-preview")
 
@@ -486,7 +486,12 @@ def test_scenario_then_frames_runs_on_its_own(jobs_env):
     assert job.status == "done"
     snap = story_jobs.job_snapshot(job.id, OWNER)
     assert snap["next_job"]
-    frames = _run(story_jobs.get_job(snap["next_job"], OWNER))
+    # A fresh story has no set, so the set is built first, then the frames.
+    set_job = _run(story_jobs.get_job(snap["next_job"], OWNER))
+    assert set_job.kind == "set" and set_job.status == "done"
+    assert store.get(story.id, OWNER).set_id
+    next_id = story_jobs.job_snapshot(set_job.id, OWNER)["next_job"]
+    frames = _run(story_jobs.get_job(next_id, OWNER))
     assert frames.kind == "storyboard" and frames.status == "done"
     assert sm.frames_ready(store.get(story.id, OWNER))
 

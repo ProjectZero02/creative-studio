@@ -567,14 +567,19 @@ def _render_soundtrack_drawer(story: Story, busy: bool, h: DeskHandlers) -> None
                         style=me.Style(width="100%"),
                         key="ss-music",
                     )
-                me.slide_toggle(
-                    "Narrator voice",
-                    checked=story.voice_on,
-                    disabled=busy,
-                    on_change=h.on_toggle_voice,
-                    key="ss-voice-on",
+                # A film spoken entirely on camera has no narrator.
+                all_on_camera = bool(story.scenes) and all(
+                    sc.spoken for sc in story.scenes
                 )
-                if story.voice_on:
+                if not all_on_camera:
+                    me.slide_toggle(
+                        "Narrator voice",
+                        checked=story.voice_on,
+                        disabled=busy,
+                        on_change=h.on_toggle_voice,
+                        key="ss-voice-on",
+                    )
+                if story.voice_on and not all_on_camera:
                     me.select(
                         label="Voice",
                         options=[me.SelectOption(label=v, value=v) for v in VOICES],

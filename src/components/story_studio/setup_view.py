@@ -118,6 +118,12 @@ def film_seconds(s: StoryState) -> tuple[int, str]:
     return 0, "auto"
 
 
+def one_take_of(s: StoryState) -> bool:
+    """The idea (or script) asks for one continuous shot."""
+    text = s.raw_script if s.input_mode == "script" else s.idea
+    return story_director.is_one_take(text or "")
+
+
 def blueprint(s: StoryState) -> dict:
     seconds, source = film_seconds(s)
     bp = story_director.setup_blueprint(
@@ -125,6 +131,7 @@ def blueprint(s: StoryState) -> dict:
         pacing=s.pacing,
         video_model=engine_of(s),
         resolution=s.resolution,
+        one_take=one_take_of(s),
     )
     bp["source"] = source
     return bp
@@ -190,7 +197,9 @@ def _references(s: StoryState, set_rows: list[dict], h: SetupHandlers) -> None:
         with me.box(classes="ss-ref-pickers"):
             me.select(
                 label="Set",
-                options=[me.SelectOption(label="No set", value="none")]
+                # Every film has a set: a saved one, or a new one built
+                # from the breakdown's cast before any frame is painted.
+                options=[me.SelectOption(label="New set", value="none")]
                 + [
                     me.SelectOption(
                         label=f"{r['name']} · {r['summary']}", value=r["id"]
@@ -475,16 +484,33 @@ def _blueprint_card(
     brand = picked_brand(s)
     with me.box(classes="ss-card ss-summary", key="ss-blueprint"):
         _t("Blueprint", "ss-label")
+        # An asked length is kept exactly for a one-take film.
+        exact = bp.get("one_take") and bp["source"] in ("box", "idea")
         me.text(
-            f"≈ {h.fmt_secs(bp['seconds'])}",
+            f"{'' if exact else '≈ '}{h.fmt_secs(bp['seconds'])}",
             style=me.Style(font_size=40, font_weight=700, line_height="1.1"),
         )
         if source:
             _t(source, "ss-muted")
-        with me.box(classes="ss-bp-rows"):
-            for label, value in (
+        if bp.get("one_take"):
+            takes = bp["takes"]
+            plan_rows = (
+                (
+                    "Takes",
+                    "1 continuous take"
+                    if takes == 1
+                    else f"{takes} takes, joined with no cut",
+                ),
+                ("Video", f"{takes} × {bp['shot_seconds']}s"),
+            )
+        else:
+            plan_rows = (
                 ("Takes", story_director.takes_line(bp["takes"])),
                 ("Shots", f"{bp['shots']} × ~{bp['shot_seconds']}s"),
+            )
+        with me.box(classes="ss-bp-rows"):
+            for label, value in (
+                *plan_rows,
                 ("Picture", f"{RESOLUTION_LABELS.get(res, res)} · {s.aspect_ratio}"),
                 ("Brand", brand_kit.label(brand) if brand else "None"),
                 ("Time", story_director.time_line(bp["time_seconds"])),
@@ -513,4 +539,4 @@ def _blueprint_card(
                 on_click=h.on_generate_scenario,
                 key="ss-generate",
             )
-            _t("Next: start frames paint on their own.", "ss-muted ss-small")
+            _t("Next: the set and start frames are made for you.", "ss-muted ss-small")

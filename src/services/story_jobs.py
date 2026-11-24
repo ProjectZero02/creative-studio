@@ -440,6 +440,8 @@ def start_scenario(story_id: str, owner: str, then_frames: bool = False) -> Job:
                 if sequences_json:
                     s.sequences_json = sequences_json
                 s.scenes = scenes
+                if scenes and all(sc.spoken for sc in scenes):
+                    s.voice_on = False  # all on camera: no narrator
                 s.cast_json = cast_json
                 s.approved = False
                 s.clear_films()
@@ -456,9 +458,18 @@ def start_scenario(story_id: str, owner: str, then_frames: bool = False) -> Job:
             and not job.cancel_event.is_set()
         ):
             try:
-                job.params["next_job"] = start_storyboard(story_id, owner).id
+                # Always a set before any frame: a story without one gets
+                # its set built (from the cast the breakdown wrote), and the
+                # set job then paints the start frames from it.
+                fresh = get_store().get(story_id, owner)
+                if fresh is not None and not fresh.set_id:
+                    job.params["next_job"] = start_set(
+                        story_id, owner, then_frames=True
+                    ).id
+                else:
+                    job.params["next_job"] = start_storyboard(story_id, owner).id
             except Exception:
-                logger.exception("Story %s: could not start the frames", story_id)
+                logger.exception("Story %s: could not start the set or frames", story_id)
 
     return _spawn(job, work)
 
@@ -1794,7 +1805,9 @@ def _set_from_scenario(story: Story) -> StorySet | None:
         return None
 
 
-def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
+def start_set(
+    story_id: str, owner: str, targets: list | None = None, then_frames: bool = False
+) -> Job:
     """Make the story's set.
 
     A story without a set is cast first with one Gemini call (characters,
@@ -1807,7 +1820,12 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
     story = get_store().get(story_id, owner)
     if story is None:
         raise StoryAccessError("Story not found.")
-    job = _new_job(owner, story_id, "set", {"targets": targets, "task_targets": {}})
+    job = _new_job(
+        owner,
+        story_id,
+        "set",
+        {"targets": targets, "task_targets": {}, "then_frames": then_frames},
+    )
     cast_task = None
     if not story.set_id:
         cast_task = _add_task(
@@ -1939,6 +1957,12 @@ def start_set(story_id: str, owner: str, targets: list | None = None) -> Job:
                     break
                 views.sort(key=lambda v: order.get(v, 1))
                 pool.submit(chain, kind, aid, views)
+        # Setup's guided flow: the start frames are painted from the set.
+        if then_frames and not job.cancel_event.is_set():
+            try:
+                job.params["next_job"] = start_storyboard(story_id, owner).id
+            except Exception:
+                logger.exception("Story %s: could not start the frames", story_id)
 
     return _spawn(job, work)
 

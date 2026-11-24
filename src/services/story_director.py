@@ -92,12 +92,45 @@ DIRECTOR_SYSTEM = (
 # ---------------------------------------------------------------------------
 
 
+# Words in an idea that ask for one unbroken camera run.
+_ONE_TAKE = re.compile(
+    r"\b(one|single|a single|1)[ -](shot|take)\b|\boner\b|\bcontinuous(ly)?\b"
+    r"|\bunbroken\b|\bno (jump )?cuts?\b|\bwithout (any )?cuts?\b"
+    r"|\bthroughout (that|the) (whole |entire )?(time|film|video|shot|clip)\b"
+)
+
+
+def is_one_take(text: str) -> bool:
+    """True when the idea asks for one continuous shot ("one shot", "single
+    take", "continuous", "no cuts", "the camera pans ... throughout")."""
+    return bool(_ONE_TAKE.search((text or "").lower()))
+
+
+def plan_one_take(target_seconds: int, video_model: str = "") -> tuple[int, int]:
+    """(scenes, seconds each) for a continuous film: as few takes as fit,
+    each at most STORY_TAKE_CONTEXT_SECONDS (Omni's documented 30 s chain).
+    30 -> (1, 30); 45 -> (2, 25)
+    (the stitch trims the film to the asked length); 300 -> (10, 30)."""
+    cfg = Default()
+    cap = max(1, int(getattr(cfg, "STORY_TAKE_CONTEXT_SECONDS", 30) or 30))
+    target = max(1, min(int(target_seconds or 0) or 30, int(cfg.STORY_MAX_FILM_SECONDS)))
+    takes = max(1, -(-target // cap))
+    each = -(-target // takes)
+    lengths = [d for d in supported_durations(video_model) if d >= each]
+    duration = min(lengths) if lengths else max(supported_durations(video_model))
+    return takes, duration
+
+
 def plan_film_blueprint(
     target_seconds: int,
     pacing: str = "cinematic",
     video_model: str = "",
+    one_take: bool = False,
 ) -> dict:
     """Plan sequence and shot counts for a target runtime.
+
+    ``one_take``: the idea asks for one continuous shot, so the film is as
+    few long takes as fit (plan_one_take), never split to fill a count.
 
     Respects ``STORY_MIN_SCENES``..``STORY_MAX_SCENES`` and
     ``STORY_MAX_FILM_SECONDS``, snapping durations to
@@ -120,7 +153,9 @@ def plan_film_blueprint(
 
     n_pref = round(target / preferred_d)
     max_fit = max_film // preferred_d
-    if min_scenes <= n_pref <= max_scenes and n_pref * preferred_d <= max_film:
+    if one_take:
+        scene_count, duration = plan_one_take(target, video_model)
+    elif min_scenes <= n_pref <= max_scenes and n_pref * preferred_d <= max_film:
         scene_count, duration = n_pref, preferred_d
     elif (
         n_pref * preferred_d > max_film
@@ -280,6 +315,7 @@ def setup_blueprint(
     resolution: str = "",
     voice_on: bool = True,
     music_on: bool = True,
+    one_take: bool = False,
 ) -> dict:
     """What Setup's live blueprint shows for a film of about `seconds`:
     shots, takes and cuts, resolution, an estimated cost (catalog
@@ -289,19 +325,31 @@ def setup_blueprint(
     Video is priced per generated second: an extension bills only its new
     seconds, so a take costs its own length once.
     """
-    from services.story_models import _video_model_spec, apply_caps, single_clip_max
+    from services.story_models import (
+        _video_model_spec,
+        apply_caps,
+        clip_parts,
+        single_clip_max,
+    )
 
     cfg = Default()
     asked = int(seconds or 0) or DEFAULT_FILM_SECONDS
-    plan = plan_film_blueprint(asked, pacing=pacing, video_model=video_model)
+    plan = plan_film_blueprint(
+        asked, pacing=pacing, video_model=video_model, one_take=one_take
+    )
     shots, shot_secs = int(plan["scene_count"]), int(plan["duration"])
     length = shots * shot_secs
+    if one_take:
+        # A continuous film is trimmed to the asked length when stitched.
+        length = min(length, asked)
     caps = apply_caps(shots, shot_secs, resolution=resolution, model_id=video_model)
     take_max = int(getattr(cfg, "STORY_TAKE_MAX_SECONDS", 40) or 40)
-    takes = _pack_takes(shots, shot_secs, take_max)
+    takes = [1] * shots if one_take else _pack_takes(shots, shot_secs, take_max)
     take_count = len(takes)
 
     video_rate = _video_price(video_model)
+    if caps.resolution == "360p":
+        video_rate *= 0.33  # list price: 360p is about a third of 720p
     image_rate = _FALLBACK_IMAGE
     words = length * WORDS_PER_SECOND
     voice_cost = (
@@ -325,6 +373,10 @@ def setup_blueprint(
              for n in takes]
     waves = -(-take_count // parallel)
     clip_time = waves * max(turns) * per_call
+    if one_take:
+        # Continuous takes are made one after another (each starts where
+        # the one before ends).
+        clip_time = sum(turns) * per_call
     est_time = 30 + 20 * -(-take_count // parallel) + clip_time + 30
     return {
         "asked_seconds": int(seconds or 0),
@@ -332,7 +384,10 @@ def setup_blueprint(
         "shots": shots,
         "shot_seconds": shot_secs,
         "takes": take_count,
-        "cuts": max(0, take_count - 1),
+        # A continuous film joins its takes without a cut.
+        "cuts": 0 if one_take else max(0, take_count - 1),
+        "one_take": bool(one_take),
+        "turns": clip_parts(shot_secs, single),
         "shots_per_take": takes,
         "resolution": caps.resolution,
         "cost": cost,
