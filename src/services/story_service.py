@@ -187,6 +187,7 @@ class StoryBackend(Protocol):
     def extend_clip(
         self, story: Story, index: int, prev_clip_uri: str
     ) -> tuple[str, float]: ...
+    def redo_turn(self, story: Story, index: int, turn: int) -> str: ...
     def interaction_of(self, clip_uri: str) -> str: ...
     def render_timeline(self, story: Story, timeline: dict, **opts) -> str: ...
     def save_audio_upload(self, data: bytes, mime_type: str) -> str: ...
@@ -1343,6 +1344,13 @@ class MockStoryBackend:
         )
         return self.generate_clip(story, index, start), 0.0
 
+    def redo_turn(self, story: Story, index: int, turn: int) -> str:
+        """Demo stand-in: the whole clip again from its frame."""
+        scene = story.scenes[index]
+        if not 0 < turn < len(scene.turns()) or not scene.frame_uri:
+            return ""
+        return self.generate_clip(story, index, scene.frame_uri)
+
     def interaction_of(self, clip_uri: str) -> str:
         """Demo clips have no Omni thread."""
         return ""
@@ -2293,7 +2301,7 @@ class VertexStoryBackend:
             )
         if not uri:
             raise GenerationError("Gemini Omni returned no video for this scene.")
-        prompts, ids = [prompt], [interaction_id]
+        prompts, ids, uris = [prompt], [interaction_id], [uri]
         if len(parts) > 1:
             uri, interaction_id = self._lengthen(
                 story,
@@ -2305,9 +2313,9 @@ class VertexStoryBackend:
                 story_set,
                 part_lines=part_lines,
                 model_id=engine,
-                turns=(prompts, ids),
+                turns=(prompts, ids, uris),
             )
-        scene.turns_json = record_turns(parts, part_lines, prompts, ids)
+        scene.turns_json = record_turns(parts, part_lines, prompts, ids, uris)
         scene.video_model_used = engine
         self._interactions[uri] = interaction_id
         return uri
@@ -2371,17 +2379,24 @@ class VertexStoryBackend:
         story_set,
         part_lines: list[str] | None = None,
         model_id: str = "",
-        turns: tuple[list[str], list[str]] | None = None,
+        turns: tuple[list[str], list[str], list[str]] | None = None,
+        prior: list[dict] | None = None,
     ) -> tuple[str, str]:
         """Make a scene longer than one clip: continue the first clip in its
         Omni thread, one turn per part of `rest`, then join the parts into
-        one clip. Returns (joined clip, last interaction ID)."""
+        one clip. Returns (joined clip, last interaction ID). `prior`: turn
+        records made before `prompt`/`uri` (redoing a later turn), sent
+        again as the thread so far."""
         from models.omni import generate_omni_video
 
         scene = story.scenes[index]
-        history = _turn(prompt, uri)
-        pieces = [uri]
-        for k, seconds in enumerate(rest, start=1):
+        prior = prior or []
+        history: list[dict] = []
+        for t in prior:
+            history += _turn(t.get("prompt", ""), t.get("uri", ""))
+        history += _turn(prompt, uri)
+        pieces = [t.get("uri", "") for t in prior] + [uri]
+        for k, seconds in enumerate(rest, start=len(prior) + 1):
             more_kw: dict = {"continuing": True, "story_set": story_set}
             if part_lines is not None and k < len(part_lines):
                 more_kw["part_narration"] = part_lines[k]
@@ -2406,7 +2421,52 @@ class VertexStoryBackend:
             if turns is not None:
                 turns[0].append(more)
                 turns[1].append(interaction_id)
+                turns[2].append(new_uri)
         return self._join_parts(story, index, pieces), interaction_id
+
+    def redo_turn(self, story: Story, index: int, turn: int) -> str:
+        """Make turn `turn` (and every turn after it) of scene `index` again,
+        continuing the Omni thread from the turn before it. Each turn holds the
+        whole video so far, so later turns are dropped and made again. Returns
+        the new clip, or "" when the turn can't be redone on its own (the first
+        turn, a Veo clip, or no record of the turn before): make the clip
+        again then."""
+        scene = story.scenes[index]
+        turns = scene.turns()
+        if not 0 < turn < len(turns):
+            return ""
+        before = turns[:turn]
+        if not all(t.get("uri") and t.get("interaction_id") for t in before):
+            return ""
+        engine = resolve_video_engine(
+            story, scene, getattr(self.cfg, "STORY_VIDEO_MODEL", "")
+        )
+        if _is_veo_model(engine):
+            return ""
+        parts = [int(t.get("seconds", 0)) for t in turns]
+        lines = [t.get("lines", "") for t in turns]
+        part_lines = lines if scene.spoken and any(lines) else None
+        prompts = [t.get("prompt", "") for t in before]
+        ids = [t["interaction_id"] for t in before]
+        uris = [t["uri"] for t in before]
+        last = before[-1]
+        uri, interaction_id = self._lengthen(
+            story,
+            index,
+            last.get("prompt", ""),
+            last["uri"],
+            last["interaction_id"],
+            parts[turn:],
+            self._set(story),
+            part_lines=part_lines,
+            model_id=engine,
+            turns=(prompts, ids, uris),
+            prior=before[:-1],
+        )
+        scene.turns_json = record_turns(parts, part_lines, prompts, ids, uris)
+        scene.video_model_used = engine
+        self._interactions[uri] = interaction_id
+        return uri
 
     def _join_parts(self, story: Story, index: int, pieces: list[str]) -> str:
         """One clip from a scene's parts (see join_plan), stored next to the

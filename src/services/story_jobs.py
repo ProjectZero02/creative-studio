@@ -689,10 +689,12 @@ def start_scene_clips(story_id: str, owner: str, indices: list[int]) -> Job:
             thread = _interaction_of(backend, uri)
             scene_id = sc.id
             model_used = sc.video_model_used or resolve_video_engine(current, sc)
+            turns_json = sc.turns_json
 
             def apply(s: Story) -> None:
                 for x in s.scenes:
                     if x.id == scene_id:
+                        x.turns_json = turns_json
                         x.clip_uri = uri
                         x.continues_from = ""
                         x.extends_from, x.clip_in = "", 0.0
@@ -931,6 +933,8 @@ def start_video(story_id: str, owner: str) -> Job:
                 current, scene_obj
             )
 
+            turns_json = scene_obj.turns_json
+
             def apply(s: Story) -> None:
                 for sc in s.scenes:
                     if sc.id == scene_id:
@@ -940,6 +944,7 @@ def start_video(story_id: str, owner: str) -> Job:
                         sc.interaction_id = thread
                         sc.bridged_to = end_frame
                         sc.video_model_used = model_used
+                        sc.turns_json = turns_json
 
             mutate_story(story_id, owner, apply)
             return uri
@@ -975,6 +980,7 @@ def start_video(story_id: str, owner: str) -> Job:
                         sc.clip_uri, sc.continues_from = uri, ""
                         sc.extends_from, sc.clip_in = prev_clip, clip_in
                         sc.interaction_id = thread
+                        sc.turns_json = ""
                         sc.bridged_to = ""
                         sc.video_model_used = model_used
 
@@ -1227,6 +1233,28 @@ def start_video(story_id: str, owner: str) -> Job:
                 film_uri, made["timeline"] = _film_and_timeline(
                     backend.stitch(final, plan, music_uri, voices)
                 )
+            # A cut Omni put inside a take: make that turn again and re-stitch.
+            for _ in range(max(0, int(getattr(cfg, "STORY_TURN_REDOS", 1)))):
+                redo = turns_to_redo(final, (made.get("timeline") or {}).get("cuts"))
+                if not redo or job.cancel_event.is_set():
+                    break
+                for i, turn in redo:
+                    try:
+                        _redo_turn(story_id, owner, backend, i, turn)
+                    except Exception:
+                        logger.exception(
+                            "Making scene %s turn %s again failed", i + 1, turn + 1
+                        )
+                final = get_store().get(story_id, owner) or final
+                plan = build_stitch_plan(
+                    final.scenes,
+                    cfg.STORY_CROSSFADE_SECONDS,
+                    seamless=final.continuity and final.seamless_joins,
+                )
+                voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
+                film_uri, made["timeline"] = _film_and_timeline(
+                    backend.stitch(final, plan, music_uri, voices)
+                )
             return film_uri
 
         if not _run_task(stitch_task, stitch, job.cancel_event):
@@ -1318,6 +1346,70 @@ def seams_to_redo(story: Story, seams: list[dict] | None) -> list[int]:
             continue
         out.append(i)
     return out
+
+
+def turns_to_redo(story: Story, cuts: list[dict] | None) -> list[tuple[int, int]]:
+    """(scene, turn) to make again for each scene with a cut inside it: the
+    first cut's turn. Only a scene no later scene continues (see
+    `seams_to_redo`)."""
+    out: list[tuple[int, int]] = []
+    n = len(story.scenes)
+    for c in cuts or []:
+        i, turn = int(c.get("scene", -1)), int(c.get("turn", -1))
+        if not 0 <= i < n or turn < 0 or any(i == j for j, _ in out):
+            continue
+        if i + 1 < n and story.continues_take(i + 1):
+            continue
+        out.append((i, turn))
+    return out
+
+
+def _redo_turn(story_id: str, owner: str, backend, index: int, turn: int) -> str:
+    """Make turn `turn` of scene `index` again (the whole clip for the first
+    turn, or when the turn can't be redone on its own) and save it."""
+    current = get_store().get(story_id, owner)
+    if current is None or not 0 <= index < len(current.scenes):
+        raise StoryAccessError("Story not found.")
+    redo = getattr(backend, "redo_turn", None)
+    uri = redo(current, index, turn) if callable(redo) and turn > 0 else ""
+    if not uri:
+        uri = backend.generate_clip(current, index, frame_for(current, index))
+    sc = current.scenes[index]
+    scene_id, thread, turns_json = sc.id, _interaction_of(backend, uri), sc.turns_json
+    model_used = sc.video_model_used or resolve_video_engine(current, sc)
+
+    def apply(s: Story) -> None:
+        for x in s.scenes:
+            if x.id == scene_id:
+                x.clip_uri, x.interaction_id = uri, thread
+                x.turns_json, x.video_model_used = turns_json, model_used
+                x.continues_from, x.extends_from, x.clip_in = "", "", 0.0
+                x.bridged_to = ""
+        s.clear_films()
+
+    mutate_story(story_id, owner, apply)
+    return uri
+
+
+def start_turn_redo(story_id: str, owner: str, index: int, turn: int) -> Job:
+    """Make one turn of a take again ("Redo this turn")."""
+    story = get_store().get(story_id, owner)
+    if story is None or not 0 <= index < len(story.scenes):
+        raise StoryAccessError("Story not found.")
+    job = _new_job(owner, story_id, "clips", {"indices": [index]})
+    task = _add_task(
+        job, f"Take {index + 1} · turn {turn + 1} again", "clip", index
+    )
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+        _run_task(
+            task,
+            lambda: _redo_turn(story_id, owner, backend, index, turn),
+            job.cancel_event,
+        )
+
+    return _spawn(job, work)
 
 
 def _film_and_timeline(result) -> tuple[str, dict | None]:
