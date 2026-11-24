@@ -24,3 +24,13 @@ def notify_bridge(*, seq: int, title: str, body: str, key: str | None = None):
         name="gm-notify",
         properties={"seq": seq, "title": title, "body": body},
     )
+
+
+@me.web_component(path="./notify_toggle.js")
+def notify_toggle(*, label: str, key: str | None = None):
+    """The "Notify me when done" switch (Settings > General)."""
+    return me.insert_web_component(
+        key=key,
+        name="gm-notify-toggle",
+        properties={"label": label},
+    )
