@@ -120,7 +120,7 @@ _PAGE = """<!doctype html>
 <body>
 <div class="auth">
   <aside class="auth-visual">
-    <div class="brand">{brand_mark}<span>GenMedia Studio</span></div>
+    <div class="brand">{brand_mark}<span>Creative Studio</span></div>
     <div class="visual-copy">
       <h2>{s_visual_title}</h2>
       <p>{s_visual_body}</p>
@@ -135,7 +135,7 @@ _PAGE = """<!doctype html>
       <span lang="{other_lang}">{s_other_name}</span>
     </button>
     <div class="auth-card">
-      <div class="brand">{brand_mark}<span>GenMedia Studio</span></div>
+      <div class="brand">{brand_mark}<span>Creative Studio</span></div>
       <h1>{s_welcome}</h1>
       <p class="lead">{s_lead}</p>
       <form method="post" action="/login" autocomplete="on">

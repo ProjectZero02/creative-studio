@@ -12,9 +12,9 @@ These variables define the fundamental operating context of the application.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| **`PROJECT_ID`** | *None* (Required) | The Google Cloud Project ID where resources (Vertex AI, Firestore, Storage) are located. |
-| **`LOCATION`** | `us-central1` | The default GCP region for most services (Vertex AI, etc.). |
-| **`VERTEX_API_VERSION`** | `v1beta1` | The Vertex AI API version used for all `google-genai` client initializations. Override to switch the API surface in one place. |
+| **`PROJECT_ID`** | *None* (Required) | The Google Cloud Project ID where resources (Gemini Enterprise Agent Platform, formerly Vertex AI; Firestore; Storage) are located. |
+| **`LOCATION`** | `us-central1` | The default GCP region for most services (Gemini Enterprise Agent Platform, etc.). |
+| **`VERTEX_API_VERSION`** | `v1beta1` | The Gemini Enterprise Agent Platform (Vertex AI) API version used for all `google-genai` client initializations. Override to switch the API surface in one place. |
 | **`APP_ENV`** | `""` (Empty) | Defines the environment name (e.g., `dev`, `godemos`). This is used as a metadata tag on the Config page. |
 | **`GMCS_OVERRIDE_PATH`** | *None* | **(Development Only)** An absolute path to a directory containing configuration overrides. If a file exists in this path (e.g., `config/about_content.json`), the app will prioritize it over the local version. |
 | **`API_BASE_URL`** | `http://localhost:{PORT}` | The base URL for the application's backend APIs. |
@@ -64,7 +64,7 @@ The "Talk to the studio" call: a Gemini Live session (held by the server at `/ap
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | **`LIVE_AGENT_ENABLED`** | `true` | Shows the call button and opens `/api/live`. Set `false` to hide the feature. |
-| **`LIVE_MODEL`** | `gemini-3.8-live` | Gemini Live model on Vertex AI. |
+| **`LIVE_MODEL`** | `gemini-3.8-live` | Gemini Live model on Gemini Enterprise Agent Platform. |
 | **`LIVE_LOCATION`** | `us-central1` | Region for the Live model. |
 | **`LIVE_VOICE`** | `Aoede` | The agent's voice (a Gemini Live prebuilt voice name). |
 | **`LIVE_AVATAR`** | `Kira` | The Live Avatar preset shown when "Avatar" is on in the call dock. Empty hides the switch. |
@@ -136,7 +136,7 @@ Specific configuration for the Interior Design workflow.
 | **`INTERIOR_DESIGN_IMAGE_MODEL`** | `gemini-nano-banana-2.1` | The specific Gemini image model used for floor plan to 3D and styled images. |
 | **`INTERIOR_DESIGN_VIDEO_DURATION`** | `6` | The duration in seconds for each generated video segment. |
 
-## 🎬 Story Studio
+## 🎬 Film Studio
 Sets hold a story's characters (with their voices), locations, props and style, and can be reused across stories. The other `STORY_*` settings are listed in `src/config/default.py`.
 
 | Variable | Default | Description |
@@ -144,12 +144,12 @@ Sets hold a story's characters (with their voices), locations, props and style, 
 | **`STORY_SETS_COLLECTION_NAME`** | `story_sets` | Firestore collection for saved sets. Each set is owner-only; the list query filters on `owner` alone and sorts in the app, so no composite index is needed. |
 | **`STORY_MAX_CLIP_REFERENCES`** | `6` | Most reference images sent with one clip when a story uses a set (storyboard frame, cast faces and fronts, location plate, props). The video model's own `max_reference_images` also caps it, so the lower of the two wins. When over the cap, props are dropped first, then extra character views. |
 | **`STORY_MAX_SCENE_SECONDS`** | `30` | Longest scene. Up to the video model's single-clip limit (15 s for Gemini Omni 1.2 Flash) a scene is one clip; a longer scene is that clip plus extension turns in the same Omni thread (3 to 10 s each), joined into one clip. Omni extends up to 30 s in all. |
-| **`STORY_SCENARIO_MODEL_ID`** | `MODEL_ID` (`gemini-4-neon`) | Gemini model that writes the Story Studio scenario and its cast, casts older stories on the Set step, rewrites scenes and plans fixes. |
+| **`STORY_SCENARIO_MODEL_ID`** | `MODEL_ID` (`gemini-4-neon`) | Gemini model that writes the Film Studio scenario and its cast, casts older stories on the Set step, rewrites scenes and plans fixes. |
 | **`STORY_LIVE_SETTINGS_MODEL`** | `gemini-3.5-flash-lite` | Small Gemini model that reads the film settings (length, scenes, aspect ratio, language, style, who speaks) out of the idea each time typing pauses on the Create step, after a free rules pass. Empty turns the live model off (the rules pass still runs). |
 | **`STORY_MAX_SCENES`** | `120` | Maximum number of shots allowed in one film (supports 10–15+ minute multi-sequence films). |
 | **`STORY_MAX_FILM_SECONDS`** | `900` | Maximum target/planned film length in seconds (default 15 minutes). |
 | **`STORY_SEQUENCE_THRESHOLD_SCENES`** | `10` | Scene count threshold above which scenario generation switches to two-stage hierarchical `Act -> Sequence -> Shot` expansion. |
-| **`STORY_VIDEO_MODEL`** | `gemini-omni-1.2-flash` | Default Story Studio video engine (`gemini-omni-1.2-flash`, `3.1-fast`, `3.1`, or `hybrid` routing spoken/>8s shots to Omni and short B-roll to Veo). |
+| **`STORY_VIDEO_MODEL`** | `gemini-omni-1.2-flash` | Default Film Studio video engine (`gemini-omni-1.2-flash`, `3.1-fast`, `3.1`, or `hybrid` routing spoken/>8s shots to Omni and short B-roll to Veo). |
 | **`STORY_AUDIO_OVERLAP_SECONDS`** | `0.18` | Ambient L-cut overlap window across visual cuts to prevent silence dips. |
 | **`STORY_MUSIC_LOOP_CROSSFADE`** | `2.5` | Equal-power cosine/sine crossfade duration in seconds when looping shorter music tracks across multi-minute films. |
 | **`STORY_COLOR_MATCH`** | `true` | Applies subtle boundary luminance matching (`compute_boundary_eq`) across `bridge` joins during timeline rendering. |

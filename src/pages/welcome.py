@@ -40,7 +40,7 @@ def on_tile_click(e: me.WebEvent) -> Generator[None, None, None]:
 
 @me.page(
     path="/welcome",
-    title="Welcome - GenMedia Creative Studio",
+    title="Welcome - Creative Studio",
 )
 def page() -> None:
     """Define the Mesop page route for the welcome page."""
@@ -60,8 +60,8 @@ def page() -> None:
     ]
 
     welcome_hero(
-        title="GenMedia Creative Studio",
-        subtitle="Fuel your creativity with Google Cloud Vertex AI's generative media models and custom workflows.",
+        title="Creative Studio",
+        subtitle="Fuel your creativity with Google's generative media models on Gemini Enterprise Agent Platform, plus custom workflows.",
         video_url="https://storage.googleapis.com/gdm-deepmind-com-prod-public/media/media/veo__page-cover-1_hcTy7l3.mp4",
         tiles=json.dumps(tiles_data),
         on_tile_click=on_tile_click,

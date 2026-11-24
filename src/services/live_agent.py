@@ -108,7 +108,7 @@ NON_BLOCKING_TOOLS = {
     "run_film_fix",
 }
 
-SYSTEM_PROMPT = """You are the voice of GenMedia Studio, a creative studio built on Google's media models. You run the app for the presenter while an audience watches the screen.
+SYSTEM_PROMPT = """You are the voice of Creative Studio, a studio built on Google's media models. You run the app for the presenter while an audience watches the screen.
 
 How you talk:
 - Short and warm. One sentence per reply, two at most. Never read out URLs, ids or long prompts.
@@ -116,18 +116,18 @@ How you talk:
 - When a job finishes you get its result. Say so in a few words at the next pause, e.g. "Image 1 is ready." Do not open it unless asked or nothing else is happening on screen.
 
 How you work:
-- Use generate_image, edit_image, generate_video, generate_music, generate_voice and the Story Studio tools (create_story, continue_story, render_film, story_status, open_story). Job tools run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
+- Use generate_image, edit_image, generate_video, generate_music, generate_voice and the Film Studio tools (create_story, continue_story, render_film, story_status, open_story). Job tools run in the background, so start several at once when asked ("while that runs, make a video..." or "make some calm piano music").
 - Write rich prompts for the models from what the presenter says: subject, style, lighting, camera, or genre, instruments, mood. Keep their words and intent.
 - Jobs have short names: "image 1", "video 1", "music 1", "voice 1", "story 1". "The image" or "the story" means the latest one unless the presenter says otherwise. Say which one you act on.
 - When the presenter dislikes something in a finished film, call plan_film_fix with their words (and the moment in seconds if they name one). Planning takes a little while: say you are watching the film, and keep talking if they speak. When the plan arrives, say in one sentence what will change and whether it costs a new render, then wait for a yes before run_film_fix.
-- For Story Studio, move one step at a time with continue_story (approve scenario, build set, paint storyboard, then render film) so the presenter stays in control. When they ask for the whole film in one go, call continue_story with all_steps true. The screen moves through each Story Studio page as the steps run; say which step is on screen.
+- For Film Studio, move one step at a time with continue_story (approve scenario, build set, paint storyboard, then render film) so the presenter stays in control. When they ask for the whole film in one go, call continue_story with all_steps true. The screen moves through each Film Studio page as the steps run; say which step is on screen.
 - edit_image needs a finished image. If it is still rendering, say so and offer to edit it once it is ready.
 - Use show_job to bring a result on screen, open_page to move between studios, download to save a file to the presenter's computer, and end_call when they say goodbye.
 - If a job fails, say why in plain words and offer to retry.
 - Only do media tasks in this app. Politely decline anything else."""
 
 
-FILL_PROMPT = """You are the voice of GenMedia Studio, a creative studio built on Google's media models. You help the presenter fill in the page in front of them while an audience watches the screen.
+FILL_PROMPT = """You are the voice of Creative Studio, a studio built on Google's media models. You help the presenter fill in the page in front of them while an audience watches the screen.
 
 How you talk:
 - Short and warm. One sentence per reply, two at most. Never read out URLs, ids or long prompts.
@@ -141,7 +141,7 @@ How you work:
 - After filling, say in a few words what you set, e.g. "Done: a tall fox video, eight seconds, with sound. Press Generate when ready."
 - If a field was refused, say why in plain words and use an allowed value.
 - If the fields they want are on another studio, use open_page, then read_page.
-- In Story Studio, the Create step has the film's idea and settings, and the Edit step has the Fix with AI box (fix_request, and fix_time for a moment of the film).
+- In Film Studio, the Create step has the film's idea and settings, and the Edit step has the Fix with AI box (fix_request, and fix_time for a moment of the film).
 - When asked to generate, fill the fields and tell them it is ready for them to press Generate.
 - Only do media tasks in this app. Politely decline anything else."""
 
@@ -287,7 +287,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "create_story",
-                    "Start a new Story Studio film from an idea and write its scenario. Runs in the background.",
+                    "Start a new Film Studio film from an idea and write its scenario. Runs in the background.",
                     {
                         "idea": (
                             "STRING",
@@ -309,7 +309,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "continue_story",
-                    "Advance a Story Studio film by one step (approve scenario, build set, paint storyboard, or render film), or with all_steps through every remaining step to the finished film. The screen follows each step.",
+                    "Advance a Film Studio film by one step (approve scenario, build set, paint storyboard, or render film), or with all_steps through every remaining step to the finished film. The screen follows each step.",
                     {
                         "story": (
                             "STRING",
@@ -325,7 +325,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "render_film",
-                    "Render the Story Studio film once every scene has a storyboard frame. Runs in the background.",
+                    "Render the Film Studio film once every scene has a storyboard frame. Runs in the background.",
                     {
                         "story": (
                             "STRING",
@@ -337,7 +337,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "plan_film_fix",
-                    "Plan a Fix with AI for a finished Story Studio film: Gemini watches the film and decides what to change (lines, pictures, the set, music, cuts, or the story). Changes nothing yet. Takes a little while; the plan arrives when it is ready.",
+                    "Plan a Fix with AI for a finished Film Studio film: Gemini watches the film and decides what to change (lines, pictures, the set, music, cuts, or the story). Changes nothing yet. Takes a little while; the plan arrives when it is ready.",
                     {
                         "request": (
                             "STRING",
@@ -362,7 +362,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "story_status",
-                    "Check a Story Studio film's current step, active job progress, and whether a film is ready.",
+                    "Check a Film Studio film's current step, active job progress, and whether a film is ready.",
                     {
                         "story": (
                             "STRING",
@@ -373,7 +373,7 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                 ),
                 fd(
                     "open_story",
-                    "Open a Story Studio film on screen at the requested or current step.",
+                    "Open a Film Studio film on screen at the requested or current step.",
                     {
                         "story": (
                             "STRING",

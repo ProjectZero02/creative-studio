@@ -50,7 +50,7 @@ from state.state import AppState
 
 @me.page(
     path="/storyboarder",
-    title="Storyboarder - GenMedia Creative Studio",
+    title="Storyboarder - Creative Studio",
 )
 def page():
     with page_scaffold(page_name="storyboarder"):

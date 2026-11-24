@@ -291,7 +291,7 @@ def on_empty_create_click(e: me.ClickEvent):
 
 @me.page(
     path="/library_v2",
-    title="GenMedia Creative Studio - Library",
+    title="Library - Creative Studio",
     on_load=on_load,
 )
 def page():

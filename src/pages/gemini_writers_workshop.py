@@ -289,7 +289,7 @@ def _prompt_templates_ui():
 
 @me.page(
     path="/gemini-writers-workshop",
-    title="Gemini Writers Workshop - GenMedia Creative Studio",
+    title="Gemini Writers Workshop - Creative Studio",
     on_load=on_load,
 )
 def page():

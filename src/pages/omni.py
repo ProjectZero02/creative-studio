@@ -105,7 +105,7 @@ def on_omni_load_legacy(_e: me.LoadEvent) -> Generator[None]:
 
 @me.page(
     path="/gemini-omni",
-    title="Gemini Omni - GenMedia Creative Studio",
+    title="Gemini Omni - Creative Studio",
     on_load=on_omni_load,
 )
 def omni_page() -> None:

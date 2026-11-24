@@ -26,7 +26,7 @@ def on_navigate(e: me.ClickEvent):
     me.navigate(e.key)
 
 
-@me.page(path="/labs", title="Labs: GenMedia Creative Studio")
+@me.page(path="/labs", title="Labs: Creative Studio")
 def page():
     app_state = me.state(AppState)
     theme_manager(theme=app_state.theme_mode, on_theme_load=on_theme_load)
@@ -193,7 +193,7 @@ def page():
         ):
             with me.tooltip(message="Back to Welcome Page"):
                 me.icon(icon="auto_awesome", style=me.Style(color=me.theme_var("inverse-on-surface")))
-            me.text("Return to GenMedia Creative Studio")
+            me.text("Return to Creative Studio")
 
 
 def on_home_click(e: me.ClickEvent) -> None:  # pylint: disable=W0613:unused-argument

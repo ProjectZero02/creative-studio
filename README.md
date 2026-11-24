@@ -1,15 +1,15 @@
 <div align="center">
 
-# GenMedia Studio
+# Creative Studio
 
 ### Google's creative AI, in one studio.
 
 One idea becomes an image, a video, a voice-over, a song, or a finished short film,<br>
-using Google's newest generative models on **Vertex AI**, deployed to **Cloud Run** with one command.
+using Google's newest generative models on **Gemini Enterprise Agent Platform** (formerly Vertex AI), deployed to **Cloud Run** with one command.
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
-[![Vertex AI](https://img.shields.io/badge/models-Vertex_AI-4285F4.svg?logo=googlecloud&logoColor=white)](#the-google-models-inside)
+[![Gemini Enterprise Agent Platform](https://img.shields.io/badge/models-Gemini_Enterprise_Agent_Platform-4285F4.svg?logo=googlecloud&logoColor=white)](#the-google-models-inside)
 [![Cloud Run](https://img.shields.io/badge/runs_on-Cloud_Run-4285F4.svg?logo=googlecloud&logoColor=white)](deploy/quickstart/README.md)
 [![English and Arabic](https://img.shields.io/badge/languages-English_and_Arabic-34A853.svg)](#built-for-real-demos)
 
@@ -20,27 +20,27 @@ using Google's newest generative models on **Vertex AI**, deployed to **Cloud Ru
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/home-dark.webp">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/home-light.webp">
-  <img alt="GenMedia Studio home page: one prompt box with Image, Video, Film, Voice and Music, and a Talk to the studio button" src="docs/images/home-light.webp" width="100%">
+  <img alt="Creative Studio home page: one prompt box with Image, Video, Film, Voice and Music, and a Talk to the studio button" src="docs/images/home-light.webp" width="100%">
 </picture>
 
 </div>
 
 ## Why it exists
 
-Google's media models are best understood by watching them work together. GenMedia Studio puts them in one polished app a presenter can open in front of a customer: type an idea once, pick what to make, and the right studio opens with the idea filled in. Or click **Talk to the studio** and drive the whole app by voice.
+Google's media models are best understood by watching them work together. Creative Studio puts them in one polished app a presenter can open in front of a customer: type an idea once, pick what to make, and the right studio opens with the idea filled in. Or click **Talk to the studio** and drive the whole app by voice.
 
 - **Every modality in one place.** Images, video, speech, music and multi-scene films share one prompt box, one library and one look.
-- **Real workflows, not just prompts.** Story Studio chains five models into a finished film; the industry demos show retail, real estate and brand use cases end to end.
+- **Real workflows, not just prompts.** Film Studio chains five models into a finished film; the industry demos show retail, real estate and brand use cases end to end.
 - **Yours in your own project.** One script deploys it to Cloud Run in your Google Cloud project. It uses Google Cloud credentials (no API keys), keeps every file in your own bucket, and costs nothing while idle.
 
-### What this adds to Google's Creative Studio
+### What this adds to Google's GenMedia Creative Studio
 
-GenMedia Studio builds on Google's open-source [GenMedia Creative Studio](https://github.com/GoogleCloudPlatform/genmedia-creative-studio) and keeps its features, so upstream fixes still merge in. On top of it:
+Creative Studio builds on Google's open-source [GenMedia Creative Studio](https://github.com/GoogleCloudPlatform/genmedia-creative-studio) and keeps its features, so upstream fixes still merge in. On top of it:
 
 | Added here | What it means for a demo |
 |---|---|
 | **One prompt for everything** | The home page routes one idea to the right studio, already filled in. |
-| **Story Studio, idea to film** | Script, set, storyboard, scenes with on-camera speech, narration, music, a timeline editor and an Arabic version. |
+| **Film Studio, idea to film** | Script, set, storyboard, scenes with on-camera speech, narration, music, a timeline editor and an Arabic version. |
 | **Talk to the studio** | A Gemini Live agent drives the app by voice and runs several jobs at once. |
 | **English and Arabic** | Every screen, right to left, in light and dark. |
 | **A redesigned interface** | One look across every studio, fewer clicks, works on a phone. |
@@ -53,9 +53,9 @@ GenMedia Studio builds on Google's open-source [GenMedia Creative Studio](https:
     <td width="50%" valign="top">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/images/story-dark.webp">
-        <img alt="Story Studio storyboard with four scenes and camera moves" src="docs/images/story-light.webp">
+        <img alt="Film Studio storyboard with four scenes and camera moves" src="docs/images/story-light.webp">
       </picture>
-      <h3>Story Studio</h3>
+      <h3>Film Studio</h3>
       One idea to a finished film. Gemini writes the script, Nano Banana paints the storyboard, Gemini Omni shoots each scene with sound and on-camera speech, Gemini TTS narrates and Lyria scores it. Finish it in the timeline editor, export an Arabic version, and reuse <b>Sets</b> (the same characters, places and voices) across films.
     </td>
     <td width="50%" valign="top">
@@ -182,8 +182,8 @@ flowchart TB
 
   subgraph gcp ["Your Google Cloud project"]
     direction TB
-    run["<b>Cloud Run</b><br>GenMedia Studio · Mesop UI on FastAPI"]
-    run -- "service account, no API keys" --> vertex["<b>Vertex AI</b><br>Gemini 3.8 Flash · Nano Banana 2.1 · Gemini Omni · Veo 3.1<br>Gemini TTS · Chirp 3 HD · Lyria 3 · Gemini Live"]
+    run["<b>Cloud Run</b><br>Creative Studio · Mesop UI on FastAPI"]
+    run -- "service account, no API keys" --> vertex["<b>Gemini Enterprise Agent Platform</b><br>Gemini 3.8 Flash · Nano Banana 2.1 · Gemini Omni · Veo 3.1<br>Gemini TTS · Chirp 3 HD · Lyria 3 · Gemini Live"]
     run --> gcs[("<b>Cloud Storage</b><br>images, video, audio")]
     run --> fs[("<b>Firestore</b><br>library, users, stories, sets")]
     run --> sm["<b>Secret Manager</b>"]
@@ -197,13 +197,13 @@ flowchart TB
 ```
 
 - **One Cloud Run service** serves the UI and API, with session affinity for the Gemini Live WebSocket. It scales to zero when nobody is using it.
-- **Vertex AI** is called with the service account's credentials, so there are no API keys to leak or rotate.
+- **Gemini Enterprise Agent Platform** is called with the service account's credentials, so there are no API keys to leak or rotate.
 - **Cloud Storage** holds every generated file; **Firestore** holds the library, users, stories and sets.
 - Long jobs (films, multi-scene renders) run in the background and survive page changes.
 
 | Folder | What's in it |
 |---|---|
-| `src/` | The app: `main.py`, `pages/` (one file per studio), `components/`, `models/` (Vertex AI calls), `services/` (story, live agent and job runners), `routers/`, `state/`, `config/` |
+| `src/` | The app: `main.py`, `pages/` (one file per studio), `components/`, `models/` (model calls), `services/` (story, live agent and job runners), `routers/`, `state/`, `config/` |
 | `deploy/` | Cloud Run quickstart, Cloud Build files and Terraform |
 | `test/` | `pytest` suite (700+ tests) |
 | `docs/` | Configuration reference, FAQ, plans and screenshots |
@@ -213,7 +213,7 @@ flowchart TB
 
 1. **Home.** Type *"Our sneaker on a Tokyo street at night"*, pick **Image**, and press send. Image Studio opens with the prompt filled in.
 2. **Image to video.** Click **Make a video** on the result. Gemini Omni animates it, with sound.
-3. **Story.** In Story Studio, type one line, for example *"A coffee brand's 30-second ad: sunrise, first sip, city waking up"*. Walk through script, set, storyboard and scenes, then play the finished film in the editor.
+3. **Film.** In Film Studio, type one line, for example *"A coffee brand's 30-second ad: sunrise, first sip, city waking up"*. Walk through script, set, storyboard and scenes, then play the finished film in the editor.
 4. **Arabic.** Click **العربية**. The whole app flips to Arabic, right to left. Turn on the Arabic version of the film.
 5. **Voice.** Click **Talk to the studio** and ask for two things at once. The app works by itself while you talk.
 

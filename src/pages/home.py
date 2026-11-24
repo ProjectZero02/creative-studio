@@ -30,7 +30,7 @@ from state.state import AppState
 
 @me.page(
     path="/home",
-    title="GenMedia Studio · Google Cloud Vertex AI",
+    title="Creative Studio · Google Cloud",
     security_policy=me.SecurityPolicy(
         dangerously_disable_trusted_types=True,
     ),

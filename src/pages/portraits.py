@@ -119,7 +119,7 @@ class PageState:
 from config.portrait_styles import PORTRAIT_STYLES
 
 
-@me.page(path="/motion_portraits", title="Motion Portraits - GenMedia Creative Studio")
+@me.page(path="/motion_portraits", title="Motion Portraits - Creative Studio")
 def motion_portraits_page():
     """Implement the Motion Portraits page."""
     state = me.state(AppState)

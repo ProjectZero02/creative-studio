@@ -35,7 +35,7 @@ WORDS = {
     "video": ("video", "/veo", "Open Video Studio"),
     "voice": ("voice", "/voice", "Open Voice"),
     "music": ("music", "/lyria", "Open Music"),
-    "film": ("film", "/story", "Open Story Studio"),
+    "film": ("film", "/story", "Open Film Studio"),
 }
 
 LEDE = "Turn one idea into {images}, {video}, {voice} and {music}, or a finished short {film}."
@@ -174,11 +174,11 @@ _STRINGS = {
     "close": ("home.chat.close", "Close"),
     "open_short": ("home.chat.open_short", "Open"),
     "open": ("home.chat.open", "Open in Library"),
-    "open_film": ("home.chat.open_film", "Open in Story Studio"),
+    "open_film": ("home.chat.open_film", "Open in Film Studio"),
     "retry": ("home.chat.retry", "Try again"),
     "story_step": (
         "home.chat.story_step",
-        'This step of your film is ready. Say "next step" to keep going, or open it in Story Studio.',
+        'This step of your film is ready. Say "next step" to keep going, or open it in Film Studio.',
     ),
     "error": ("home.chat.error", "Something went wrong. Please try again."),
     "lost": ("home.chat.lost", "This job was lost. Please try again."),

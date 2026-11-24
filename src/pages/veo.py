@@ -156,7 +156,7 @@ def on_veo_load(e: me.LoadEvent):
 
 @me.page(
     path="/veo",
-    title="Video Studio - GenMedia Creative Studio",
+    title="Video Studio - Creative Studio",
     on_load=on_veo_load,
     stylesheets=["/ui/video_studio.css"],
 )

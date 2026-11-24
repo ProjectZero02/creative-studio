@@ -208,7 +208,7 @@ def sidenav(current_page: Optional[str]):
                     ):
                         with me.box(style=me.Style(display="flex", flex_direction="column", align_items="flex-start", line_height="1.1")):
                             me.text(
-                                "GenMedia Studio",
+                                cfg.APP_NAME,
                                 style=me.Style(font_size=16, font_weight=600, color=me.theme_var("on-surface"), white_space="nowrap"),
                             )
                             me.text(

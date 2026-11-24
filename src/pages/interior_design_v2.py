@@ -139,7 +139,7 @@ STEPS = ["Upload floor plan", "3D view and rooms", "Style the rooms", "Video tou
 
 @me.page(
     path="/interior_design",
-    title="Interiors - GenMedia Studio",
+    title="Interiors - Creative Studio",
     on_load=on_load,
     stylesheets=DEMO_STYLESHEETS,
 )

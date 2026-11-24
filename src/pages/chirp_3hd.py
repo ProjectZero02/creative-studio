@@ -70,7 +70,7 @@ class Chirp3hdState:
 
 @me.page(
     path="/chirp-3hd",
-    title="Voice - GenMedia Creative Studio",
+    title="Voice - Creative Studio",
     on_load=legacy_on_load(CHIRP_ENGINE),
     stylesheets=["/ui/audio-studio.css"],
 )

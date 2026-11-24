@@ -660,7 +660,7 @@ def _voice_fields() -> list[dict]:
             tier="advanced",
             type="textarea",
             show_if={"model": [CHIRP_ENGINE]},
-            placeholder="GenMedia=jen media",
+            placeholder="Lyria=leer-ee-uh",
             help=tr("studio.help.pronunciations", "One per line: word=how to say it"),
             max_length=2000,
         )

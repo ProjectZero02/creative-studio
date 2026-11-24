@@ -26,7 +26,7 @@ from components.project_view.project_view import project_view
 
 @me.page(
     path="/project",
-    title="Project | GenMedia Studio",
+    title="Project | Creative Studio",
     security_policy=me.SecurityPolicy(dangerously_disable_trusted_types=True),
 )
 def page():

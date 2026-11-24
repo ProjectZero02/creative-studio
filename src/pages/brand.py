@@ -262,7 +262,7 @@ def _media_url(uri: str) -> str:
     return create_display_url(uri)
 
 
-@me.page(path="/brand", title="Brands | GenMedia Studio", on_load=on_load)
+@me.page(path="/brand", title="Brands | Creative Studio", on_load=on_load)
 def page():
     with page_scaffold(page_name="brand"):  # pylint: disable=not-context-manager
         brand_content()

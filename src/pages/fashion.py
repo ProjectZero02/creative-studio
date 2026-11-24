@@ -127,7 +127,7 @@ def on_load_shop_the_look(e: me.LoadEvent):  # pylint: disable=unused-argument
 
 @me.page(
     path="/fashion",
-    title="Fashion - GenMedia Studio",
+    title="Fashion - Creative Studio",
     on_load=on_load,
     stylesheets=DEMO_STYLESHEETS,
 )
@@ -138,7 +138,7 @@ def page():
 
 @me.page(
     path="/vto",
-    title="Fashion - GenMedia Studio",
+    title="Fashion - Creative Studio",
     on_load=on_load_try_on,
     stylesheets=DEMO_STYLESHEETS,
 )
@@ -149,7 +149,7 @@ def vto_page():
 
 @me.page(
     path="/shop_the_look",
-    title="Fashion - GenMedia Studio",
+    title="Fashion - Creative Studio",
     on_load=on_load_shop_the_look,
     stylesheets=DEMO_STYLESHEETS,
 )
