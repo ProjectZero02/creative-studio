@@ -1071,13 +1071,13 @@ def test_arabic_clips_chain_from_each_other_with_continuity(local_store):
     try:
         scenes = [
             Scene(narration="One.", spoken=True, frame_uri="local://f0"),
-            Scene(narration="Two.", spoken=True, frame_uri="local://f1"),
+            # A cut picked on the join: a new clip, not the same take.
+            Scene(narration="Two.", spoken=True, frame_uri="local://f1", transition="cut"),
         ]
         s = local_store.save(
             Story(
                 approved=True,
                 continuity=True,
-                continuous_takes=False,
                 second_on=True,
                 scenes=scenes,
             ),

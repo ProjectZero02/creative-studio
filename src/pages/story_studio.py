@@ -11,7 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Story Studio (/story): Stories -> Setup -> Director's Desk -> Timeline & Export.
+"""Film Studio (/story): Films -> Setup -> Script -> Set -> Frames -> Takes ->
+Music -> Edit & Export.
 
 The page only edits small state (ids, text, URIs). Generation runs in
 background jobs (services/story_jobs.py); a ticker polls them once a second so
@@ -64,7 +65,9 @@ from services.story_models import (
     CAMERA_IDS,
     PACING_IDS,
     SHOT_SIZE_IDS,
+    DESK_STEPS,
     STEP_IDS,
+    STEPS,
     STORY_VIDEO_ENGINES,
     STYLE_BY_ID,
     SPEECH_MODES,
@@ -245,7 +248,7 @@ def story_studio_content():
             stories_step()
         elif step == "create":
             create_step(story)
-        elif step in ("scenario", "set", "storyboard", "editor") and story:
+        elif step in DESK_STEPS and story:
             director_desk(story)
         elif step == "video" and story:
             video_step(story)
@@ -328,6 +331,7 @@ def _load_form(story: Story) -> None:
     s.idea = story.idea
     s.character = story.character
     s.language = story.language
+    s.second_on = story.second_on
     s.speech_mode = story.speech_mode
     s.brand_id = story.brand_id or ("none" if not story.brand_json else "")
     s.duration_text = (
@@ -442,56 +446,31 @@ def _scene_task(kind: str, index: int) -> dict | None:
 
 
 def _stepper_steps(story: Story | None) -> list[dict]:
-    """4-stage visual stepper: Stories -> Setup -> Director's Desk -> Timeline & Export."""
+    """One pill per step: Films, Setup, Script, Set, Frames, Takes, Music,
+    Edit & Export. A step is done once a later one is open, and every step
+    is done once the film is made."""
     s = me.state(StoryState)
     reach = reachable_steps(story)
     current = s.step if s.step in STEP_IDS else "stories"
-    desk_active = current in ("scenario", "set", "storyboard", "editor")
-    desk_enabled = any(
-        sid in reach for sid in ("scenario", "set", "storyboard", "editor")
-    )
-    video_enabled = "video" in reach
+    at = STEP_IDS.index(current)
     has_film = bool(story and story.final_uri)
-
-    return [
-        {
-            "id": "stories",
-            "label": "Films",
-            "state": "current"
-            if current == "stories"
-            else ("done" if story is not None or current != "stories" else "upcoming"),
-            "enabled": True,
-        },
-        {
-            "id": "create",
-            "label": "Setup",
-            "state": "current"
-            if current == "create"
-            else (
-                "done"
-                if (desk_active or current == "video" or desk_enabled)
-                and current != "stories"
-                else "upcoming"
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "editor",
-            "label": "Director's Desk",
-            "state": "current"
-            if desk_active
-            else ("done" if (current == "video" or has_film) and desk_enabled else "upcoming"),
-            "enabled": desk_enabled,
-        },
-        {
-            "id": "video",
-            "label": "Timeline & Export",
-            "state": "current"
-            if current == "video"
-            else ("done" if has_film else "upcoming"),
-            "enabled": video_enabled,
-        },
-    ]
+    out = []
+    for pos, (sid, label, _icon) in enumerate(STEPS):
+        if sid == current:
+            state = "current"
+        elif story is not None and (pos < at or has_film):
+            state = "done"
+        else:
+            state = "upcoming"
+        out.append(
+            {
+                "id": sid,
+                "label": label,
+                "state": state,
+                "enabled": sid in ("stories", "create") or sid in reach,
+            }
+        )
+    return out
 
 
 def _section_title(title: str, subtitle: str = "") -> None:
@@ -532,16 +511,12 @@ def on_step_select(e: me.WebEvent):
         s.step = "stories"
     elif target == "create":
         s.step = "create"
-    elif target == "editor":
-        for cand in ("editor", "storyboard", "set", "scenario"):
-            if can_enter(cand, story):
-                s.step = cand
-                s.desk_tab = "set" if cand == "set" else "shots"
-                break
     elif can_enter(target, story):
         s.step = target
-        if target in ("scenario", "set", "storyboard"):
+        if target in DESK_STEPS:
             s.desk_tab = "set" if target == "set" else "shots"
+        if target == "set":
+            _load_set(story)
     yield
 
 
@@ -609,8 +584,12 @@ def on_tick(e: me.WebEvent):
         if snap["kind"] in ("set", "scenario"):
             _load_set(story)
     if snap["status"] != "running" and snap.get("next_job"):
-        # Setup's guided flow: the breakdown is written, frames paint now.
+        # Setup's guided flow: the breakdown is written, then the set is
+        # built and the frames paint. The page follows each job to its step.
         _watch(snap["next_job"])
+        nxt = story_jobs.job_snapshot(snap["next_job"], _owner()) or {}
+        if s.step in DESK_STEPS and nxt.get("kind") in _JOB_STEP:
+            s.step = _JOB_STEP[nxt["kind"]]
         s.selected_shot = 0
         _reload_story()
         return
@@ -979,6 +958,7 @@ def _setup_handlers() -> setup_view.SetupHandlers:
             on_video_model=on_video_model,
             on_aspect=on_aspect,
             on_language=on_language,
+            on_second=on_second_setup,
             on_resolution=on_resolution,
             on_style_chip=on_style_chip,
             on_style_blur=on_style_blur,
@@ -1159,6 +1139,11 @@ def on_pick_set(e: me.SelectSelectionChangeEvent):
 def on_language(e: me.SelectSelectionChangeEvent):
     me.state(StoryState).language = e.value
     _pin("language")
+
+
+def on_second_setup(e: me.SlideToggleChangeEvent):
+    s = me.state(StoryState)
+    s.second_on = not s.second_on
 
 
 def on_aspect(e: me.SelectSelectionChangeEvent):
@@ -1401,6 +1386,7 @@ def on_generate_scenario(e: me.ClickEvent):
         story.idea = idea
         story.character = ""
         story.language = s.language
+        story.second_on = s.second_on
         # Who speaks and the camera move come from the idea (read while
         # typing, story_autoset); the director reads the idea text too.
         story.speech_mode = s.speech_mode if s.speech_mode in SPEECH_MODES else "auto"
@@ -1464,9 +1450,7 @@ def _desk_handlers() -> desk_view.DeskHandlers:
             on_brief_blur=on_brief_blur,
             on_visual_grammar_blur=on_visual_grammar_blur,
             on_select_shot=on_select_shot,
-            on_toggle_refs=on_toggle_refs,
             on_toggle_preview=on_toggle_preview,
-            on_toggle_soundtrack=on_toggle_soundtrack,
             on_make_set=on_make_set,
             on_paint_all_frames=on_paint_all_frames,
             on_render=on_render,
@@ -1477,6 +1461,7 @@ def _desk_handlers() -> desk_view.DeskHandlers:
             on_redo_note=on_redo_note,
             on_redo_frame=on_redo_frame,
             on_redo_clip=on_redo_clip,
+            on_redo_turn=on_redo_turn,
             on_add_shot=on_add_shot,
             on_move_up=on_move_up,
             on_move_down=on_move_down,
@@ -1494,12 +1479,6 @@ def _desk_handlers() -> desk_view.DeskHandlers:
             on_toggle_voice=on_toggle_voice,
             on_voice=on_voice,
             on_speaker_voice=on_speaker_voice,
-            on_toggle_continuous_takes=on_toggle_continuous_takes,
-            on_toggle_second=on_toggle_second,
-            on_translate_again=on_translate_again,
-            on_toggle_continuity=on_toggle_continuity,
-            on_toggle_seamless_joins=on_toggle_seamless_joins,
-            on_toggle_color_match=on_toggle_color_match,
             on_update_set=on_update_set,
             on_save_set_as_new=on_save_set_as_new,
             on_add_asset=on_add_asset,
@@ -1525,10 +1504,15 @@ def _desk_handlers() -> desk_view.DeskHandlers:
 
 def director_desk(story: Story) -> None:
     s = me.state(StoryState)
+    story_set = _set()
+    if story.set_id and (story_set is None or story_set.id != story.set_id):
+        # Opened straight on a step (a saved story, the guided flow): read the
+        # story's set without touching the page's working copy.
+        story_set = get_set_store().get(story.set_id, _owner())
     desk_view.render_desk(
         s,
         story,
-        _set(),
+        story_set,
         is_demo=is_mock_mode(),
         h=_desk_handlers(),
     )
@@ -1570,7 +1554,9 @@ def _line_fields(story: Story, sc, prefix: str, disabled: bool) -> None:
     me.textarea(
         label="Line spoken on camera" if sc.spoken else "Narration (voiceover)",
         value=sc.narration,
-        rows=2,
+        autosize=True,
+        min_rows=4 if sc.duration > 10 else 2,
+        max_rows=14,
         appearance="outline",
         disabled=disabled,
         on_blur=on_scene_narration,
@@ -1621,13 +1607,6 @@ def on_select_shot(e: me.ClickEvent):
         s.redo_note = ""
     s.selected_shot = max(0, idx)
     s.animatic_index = s.selected_shot
-
-
-def on_toggle_refs(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.refs_open = not s.refs_open
-    if s.refs_open:
-        _load_set(_story())
 
 
 def on_toggle_preview(e: me.ClickEvent):
@@ -1711,14 +1690,26 @@ def on_redo_clip(e: me.ClickEvent):
     _watch(job.id)
 
 
+def on_redo_turn(e: me.ClickEvent):
+    """Make one turn of a take again (key redoturn-<scene>-<turn>)."""
+    s = me.state(StoryState)
+    s.error = ""
+    try:
+        _, index, turn = (e.key or "").split("-")
+        index, turn = int(index), int(turn)
+    except ValueError:
+        return
+    try:
+        job = story_jobs.start_turn_redo(s.story_id, _owner(), index, turn)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
+
+
 def on_seq_filter(e: me.ClickEvent):
     val = (e.key or "").split("|", 1)[1] if "|" in (e.key or "") else "all"
     me.state(StoryState).seq_filter = val or "all"
-
-
-def on_toggle_soundtrack(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.soundtrack_open = not s.soundtrack_open
 
 
 def on_brief_blur(e: me.InputBlurEvent):
@@ -2579,11 +2570,6 @@ def _set_story_field(field: str, value) -> None:
     _edit(apply)
 
 
-def on_toggle_continuous_takes(e: me.SlideToggleChangeEvent):
-    story = _story()
-    _set_story_field("continuous_takes", not (story and story.continuous_takes))
-
-
 def on_toggle_music(e: me.SlideToggleChangeEvent):
     story = _story()
     _set_story_field("music_on", not (story and story.music_on))
@@ -2592,21 +2578,6 @@ def on_toggle_music(e: me.SlideToggleChangeEvent):
 def on_toggle_voice(e: me.SlideToggleChangeEvent):
     story = _story()
     _set_story_field("voice_on", not (story and story.voice_on))
-
-
-def on_toggle_continuity(e: me.SlideToggleChangeEvent):
-    story = _story()
-    _set_story_field("continuity", not (story and story.continuity))
-
-
-def on_toggle_seamless_joins(e: me.SlideToggleChangeEvent):
-    story = _story()
-    _set_story_field("seamless_joins", not (story and story.seamless_joins))
-
-
-def on_toggle_color_match(e: me.SlideToggleChangeEvent):
-    story = _story()
-    _set_story_field("color_match", not (story and story.color_match))
 
 
 def _start_translation(force: bool) -> None:
@@ -2660,6 +2631,33 @@ def on_render(e: me.ClickEvent):
     s.step = "video"
 
 
+def _alt_cost(story: Story) -> float:
+    """What the second-language film adds (see setup_view.alt_cost)."""
+    bp = story_director.setup_blueprint(
+        sum(sc.duration for sc in story.scenes) or 30,
+        video_model=story.video_model,
+        resolution=story.resolution,
+        one_take=story.one_take,
+    )
+    spoken = any(sc.spoken and sc.narration.strip() for sc in story.scenes)
+    return round((bp["cost"]["video"] if spoken else 0.0) + bp["cost"]["voice"], 2)
+
+
+def on_make_alt(e: me.ClickEvent):
+    """Export: make the second-language film (spoken takes are made again
+    saying the translated lines; narration gets a new voiceover)."""
+    s = me.state(StoryState)
+    s.error = ""
+    if _edit(lambda st: setattr(st, "second_on", True)) is None:
+        return
+    try:
+        job = story_jobs.start_video(s.story_id, _owner())
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
+
+
 def on_to_video(e: me.ClickEvent):
     me.state(StoryState).step = "video"
 
@@ -2695,6 +2693,8 @@ def _timeline_handlers() -> timeline_view.TimelineHandlers:
             on_fix_point=on_fix_point,
             render_fix_panel=fix_panel,
             render_alt_film=_alt_film,
+            on_make_alt=on_make_alt,
+            alt_cost=_alt_cost,
             render_versions_panel=versions_panel,
             render_progress_panel=progress_panel,
             media_map=_media_map,

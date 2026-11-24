@@ -206,3 +206,21 @@ def test_a_cut_is_located_in_its_scene_clip():
     assert story_timeline.locate(tl, 3.0) == (0, 3.0)
     assert story_timeline.locate(tl, 20.0) == (1, 14.0)
     assert story_timeline.locate(tl, 99.0) == (-1, 0.0)
+
+
+def test_a_small_change_in_a_still_shot_is_not_a_cut(tmp_path):
+    """A caption appearing over a near-still picture: huge next to the
+    median, but most of the picture stays the same."""
+    out = os.path.join(tmp_path, "caption.mp4")
+    subprocess.run(
+        [
+            _ffmpeg(), "-v", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=3",
+            "-vf", "trim=end_frame=1,loop=loop=71:size=1,"
+            "drawbox=x=20:y=150:w=120:h=20:color=white:t=fill:enable='gte(t,1.5)'",
+            "-pix_fmt", "yuv420p", out,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    assert story_timeline.take_cuts(out) == []

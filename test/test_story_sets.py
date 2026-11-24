@@ -833,6 +833,7 @@ def test_set_step_sits_between_scenario_and_storyboard():
         "set",
         "storyboard",
         "editor",
+        "music",
         "video",
     ]
     story = Story(scenes=[Scene(visual="v")])

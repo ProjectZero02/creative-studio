@@ -52,6 +52,8 @@ class TimelineHandlers:
     on_fix_point: Callable
     render_fix_panel: Callable
     render_alt_film: Callable
+    on_make_alt: Callable
+    alt_cost: Callable[[Story], float]
     render_versions_panel: Callable
     render_progress_panel: Callable
     media_map: Callable[[Story], dict[str, str]]
@@ -121,12 +123,27 @@ def render_timeline(
                         if not is_demo:
                             me.markdown("[Open library](/library)")
                         me.button(
-                            "Director's Desk",
+                            "Takes",
                             type="stroked",
                             on_click=h.on_back_editor,
                         )
                 if story.final_alt_uri:
                     h.render_alt_film(story)
+                elif any(sc.narration.strip() for sc in story.scenes):
+                    with me.box(classes="ss-alt-offer"):
+                        me.button(
+                            f"Make {story.alt_language} version",
+                            type="stroked",
+                            disabled=h.job_active_for("video", "clips", "translate"),
+                            on_click=h.on_make_alt,
+                            key="ss-make-alt",
+                        )
+                        me.text(
+                            f"About {h.alt_cost(story):.2f} USD",
+                            style=me.Style(
+                                font_size=13, color=me.theme_var("on-surface-variant")
+                            ),
+                        )
             else:
                 with me.box(classes="ss-media ss-ar-169 ss-player-wait"):
                     if rendering:
@@ -256,7 +273,7 @@ def _render_edit_view(
                     )
             with me.box(classes="ss-edit-tools"):
                 me.button(
-                    "Director's Desk",
+                    "Takes",
                     type="stroked",
                     disabled=busy,
                     on_click=h.on_back_editor,

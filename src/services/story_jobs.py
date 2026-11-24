@@ -1271,6 +1271,15 @@ def start_video(story_id: str, owner: str) -> Job:
             s.step = "video"
             if made.get("timeline"):
                 s.timeline_json = json.dumps(made["timeline"])
+            # What the cut scan found, shown on each take.
+            cuts = (made.get("timeline") or {}).get("cuts") or []
+            for i, sc in enumerate(s.scenes):
+                mine = [
+                    {"t": c.get("t", 0), "turn": c.get("turn", -1)}
+                    for c in cuts
+                    if c.get("scene") == i
+                ]
+                sc.cuts_json = json.dumps(mine) if mine else ""
             story_versions.remember(s, "render")
 
         mutate_story(story_id, owner, apply)

@@ -35,16 +35,19 @@ from config.veo_models import get_veo_model_config
 # ---------------------------------------------------------------------------
 
 STEPS: list[tuple[str, str, str]] = [
-    # (id, label, Material icon)
-    ("stories", "Stories", "collections_bookmark"),
-    ("create", "Create", "edit_note"),
-    ("scenario", "Scenario", "description"),
+    # (id, label, Material icon). Ids are stored on saved stories: keep them.
+    ("stories", "Films", "collections_bookmark"),
+    ("create", "Setup", "edit_note"),
+    ("scenario", "Script", "description"),
     ("set", "Set", "groups"),
-    ("storyboard", "Storyboard", "view_carousel"),
-    ("editor", "Scenes", "tune"),
-    ("video", "Edit", "movie"),
+    ("storyboard", "Frames", "view_carousel"),
+    ("editor", "Takes", "tune"),
+    ("music", "Music", "music_note"),
+    ("video", "Edit & Export", "movie"),
 ]
 STEP_IDS = [s[0] for s in STEPS]
+# Steps drawn by the director desk (one view each).
+DESK_STEPS = ("scenario", "set", "storyboard", "editor", "music")
 
 STYLES: list[dict[str, str]] = [
     {
@@ -430,16 +433,27 @@ class Scene:
     # One record per Omni turn of this clip (see `record_turns`): seconds,
     # start offset, lines, interaction ID and the prompt sent.
     turns_json: str = ""
+    # Cuts the last render found inside this clip: [{"t": film seconds,
+    # "turn": turn index}].
+    cuts_json: str = ""
 
     def clear_clip(self) -> None:
         """Forget the clip and everything made from it (take, Omni thread)."""
         self.clip_uri = self.extends_from = self.interaction_id = ""
         self.bridged_to = self.video_model_used = self.turns_json = ""
+        self.cuts_json = ""
         self.clip_in = 0.0
 
     def turns(self) -> list[dict]:
         try:
             data = json.loads(self.turns_json or "[]")
+        except ValueError:
+            return []
+        return data if isinstance(data, list) else []
+
+    def cuts(self) -> list[dict]:
+        try:
+            data = json.loads(self.cuts_json or "[]")
         except ValueError:
             return []
         return data if isinstance(data, list) else []
@@ -684,6 +698,8 @@ class Story:
             if isinstance(sc, dict)
         ]
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        # These were switches; the engine now picks the join (v5 plan, M3).
+        known.update(FIXED_JOIN_SETTINGS)
         story = cls(**known)
         story.scenes = scenes
         return story
@@ -2415,6 +2431,15 @@ def parse_translation(text: str, count: int) -> tuple[str, list[str]]:
 # ---------------------------------------------------------------------------
 
 
+# Former switches that are now always on. Continuity and straight cuts keep
+# their stored value (new films start with the defaults); each join can still
+# be picked per shot.
+FIXED_JOIN_SETTINGS = {
+    "continuous_takes": True,
+    "color_match": True,
+}
+
+
 def reachable_steps(story: Story | None) -> set[str]:
     """Steps the user may open for this story."""
     reach = {"stories", "create"}
@@ -2422,13 +2447,20 @@ def reachable_steps(story: Story | None) -> set[str]:
         return reach
     if story.scenes:
         reach.add("scenario")
-    if story.approved and story.scenes:
+    # The guided flow builds the set and frames before the script is
+    # approved: anything already made opens its step.
+    started = story.approved or bool(story.set_id) or any(
+        sc.frame_uri for sc in story.scenes
+    )
+    if started and story.scenes:
         reach.add("set")
         reach.add("storyboard")
         if all(s.frame_uri for s in story.scenes):
             reach.add("editor")
+            reach.add("music")
             reach.add("video")
     if story.final_uri:
+        reach.add("music")
         reach.add("video")
     return reach
 
@@ -2440,7 +2472,7 @@ def can_enter(step: str, story: Story | None) -> bool:
 def furthest_step(story: Story | None) -> str:
     reach = reachable_steps(story)
     for sid in reversed(STEP_IDS):
-        if sid in reach and sid != "stories":
+        if sid in reach and sid not in ("stories", "music"):
             if sid == "video" and story is not None and not story.final_uri:
                 continue
             return sid
