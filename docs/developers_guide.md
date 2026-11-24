@@ -1,6 +1,6 @@
 # Developer's Guide
 
-Welcome to the GenMedia Creative Studio application! This guide provides an overview of the application's architecture, key development patterns, and a step-by-step tutorial for adding new pages. Its purpose is to help you understand the project's structure and contribute effectively.
+Welcome to the Creative Studio application! This guide provides an overview of the application's architecture, key development patterns, and a step-by-step tutorial for adding new pages. Its purpose is to help you understand the project's structure and contribute effectively.
 
 ## Application Architecture
 
@@ -237,7 +237,7 @@ def my_new_page_content():
 
 @me.page(
     path="/my_new_page",
-    title="My New Page - GenMedia Creative Studio",
+    title="My New Page - Creative Studio",
 )
 def page():
     with page_scaffold(page_name="my_new_page"):

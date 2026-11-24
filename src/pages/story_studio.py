@@ -198,7 +198,7 @@ def _prefill_idea() -> bool:
 
 @me.page(
     path="/story",
-    title="Story Studio · GenMedia Studio",
+    title="Film Studio · Creative Studio",
     security_policy=me.SecurityPolicy(dangerously_disable_trusted_types=True),
     stylesheets=["/ui/story.css"],
     on_load=on_load,
@@ -206,7 +206,7 @@ def _prefill_idea() -> bool:
 def page():
     with page_scaffold(page_name="story"):
         with page_frame():
-            header("Story Studio", "auto_stories", centered=True)
+            header("Film Studio", "auto_stories", centered=True)
             story_studio_content()
 
 
@@ -298,7 +298,7 @@ def _refresh_stories() -> None:
         rows = get_store().list(_owner())
     except Exception as exc:
         logger.exception("Story Studio: could not list stories")
-        s.error = f"Could not load your stories: {exc}"
+        s.error = f"Could not load your films: {exc}"
         rows = []
     s.stories_json = json.dumps(
         [
@@ -306,7 +306,7 @@ def _refresh_stories() -> None:
                 "id": r.id,
                 "title": r.title
                 or (r.idea[:48] + ("…" if len(r.idea) > 48 else ""))
-                or "Untitled story",
+                or "Untitled film",
                 "style": r.style,
                 "scenes": len(r.scenes) or r.scene_count,
                 "updated": r.updated_at,
@@ -353,7 +353,7 @@ def _open_story(story_id: str) -> None:
     s = me.state(StoryState)
     story = get_store().get(story_id, _owner())
     if story is None:
-        s.error = "That story was not found."
+        s.error = "That film was not found."
         return
     try:
         story = story_jobs.ensure_set(story_id, _owner()) or story
@@ -456,7 +456,7 @@ def _stepper_steps(story: Story | None) -> list[dict]:
     return [
         {
             "id": "stories",
-            "label": "Stories",
+            "label": "Films",
             "state": "current"
             if current == "stories"
             else ("done" if story is not None or current != "stories" else "upcoming"),
@@ -638,9 +638,9 @@ def on_tick(e: me.WebEvent):
             _refresh_sets()
         if snap["kind"] in NOTIFY_KINDS:
             if snap["status"] == "done":
-                notify("Story Studio", s.notice or "Your story step is done.")
+                notify("Film Studio", s.notice or "Your film step is done.")
             elif snap["status"] == "failed":
-                notify("Story Studio", "Something went wrong. Open the story to retry.")
+                notify("Film Studio", "Something went wrong. Open the film to retry.")
 
 
 def on_dismiss_error(e: me.ClickEvent):
@@ -797,16 +797,16 @@ def stories_step() -> None:
     s = me.state(StoryState)
     rows = json.loads(s.stories_json or "[]")
     _section_title(
-        "Your stories",
+        "Your films",
         "Pick up where you left off, or start a new film from an idea or script.",
     )
     with me.box(classes="ss-stories"):
         with me.box(classes="ss-new", on_click=on_new_story):
             with me.box(classes="ss-new-icon"):
                 me.icon("add", style=me.Style(font_size=28, width=28, height=28))
-            me.text("Create new story", style=me.Style(font_weight=600, font_size=17))
+            me.text("Create new film", style=me.Style(font_weight=600, font_size=17))
             me.text(
-                "Start a fresh story",
+                "Start a fresh film",
                 style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
             )
             me.button(
@@ -820,7 +820,7 @@ def stories_step() -> None:
             story_card(r)
     if not rows:
         me.text(
-            "No stories yet. Your stories are saved here as you work.",
+            "No films yet. Your films are saved here as you work.",
             style=me.Style(color=me.theme_var("on-surface-variant"), font_size=14),
         )
     sets_library()
@@ -862,7 +862,7 @@ def story_card(r: dict) -> None:
             with me.box(classes="ss-story-actions"):
                 if s.confirm_delete_id == r["id"]:
                     me.text(
-                        "Delete this story?", style=me.Style(font_size=14, flex_grow=1)
+                        "Delete this film?", style=me.Style(font_size=14, flex_grow=1)
                     )
                     me.button(
                         "Cancel",
@@ -879,7 +879,7 @@ def story_card(r: dict) -> None:
                     )
                 else:
                     me.button(
-                        "Continue story",
+                        "Continue film",
                         type="stroked",
                         on_click=on_continue_story,
                         key=f"open-{r['id']}",
@@ -950,7 +950,7 @@ def on_confirm_delete(e: me.ClickEvent):
     s = me.state(StoryState)
     story_id = e.key.split("-", 1)[1]
     if not get_store().delete(story_id, _owner()):
-        s.error = "Could not delete that story."
+        s.error = "Could not delete that film."
     if s.story_id == story_id:
         _set_story(None)
     s.confirm_delete_id = ""
@@ -2271,7 +2271,7 @@ def on_save_set_as_new(e: me.ClickEvent):
     _reload_story()
     _put_set(made)
     _refresh_sets()
-    s.notice = f"Saved as “{made.name}”. This story now uses it."
+    s.notice = f"Saved as “{made.name}”. This film now uses it."
 
 
 def on_to_storyboard(e: me.ClickEvent):
@@ -2307,7 +2307,7 @@ def sets_library() -> None:
     rows = _sets_rows()
     if not rows:
         return
-    _section_title("Your sets", "Reuse the same cast and places in any story.")
+    _section_title("Your sets", "Reuse the same cast and places in any film.")
     with me.box(classes="ss-stories ss-sets"):
         for r in rows:
             with me.box(classes="ss-story ss-set-row"):
@@ -2372,7 +2372,7 @@ def sets_library() -> None:
             style=me.Style(margin=me.Margin(bottom=8)),
         )
         me.text(
-            "Stories that use it keep their films, but new renders won't use it.",
+            "Films that use it keep their renders, but new renders won't use it.",
             style=me.Style(font_size=14, color=me.theme_var("on-surface-variant")),
         )
         with dialog_actions():  # pylint: disable=not-context-manager
@@ -2741,7 +2741,7 @@ def versions_panel(story: Story, busy: bool) -> None:
         with me.box(classes="ss-dl-title"):
             me.text("Versions", style=me.Style(font_size=16, font_weight=600))
             me.text(
-                "Earlier films of this story. Compare one with the current film, or "
+                "Earlier cuts of this film. Compare one with the current film, or "
                 "bring it back with its edit (scenes and pictures stay as they are).",
                 style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )

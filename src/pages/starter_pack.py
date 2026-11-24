@@ -83,7 +83,7 @@ class BrandKitState:
 
 @me.page(
     path="/starter-pack",
-    title="Brand kit - GenMedia Studio",
+    title="Brand kit - Creative Studio",
     stylesheets=DEMO_STYLESHEETS,
 )
 def page():

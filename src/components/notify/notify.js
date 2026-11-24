@@ -2,7 +2,7 @@
  * <gm-notify>: shows a system notification when a generation finishes.
  *
  * The server bumps `seq` with a title and body (common/notify.py). A notice
- * shows only when the person switched notifications on in the avatar menu
+ * shows only when the person switched notifications on in Settings > General
  * (localStorage "gm-notify" = "on"), the browser allowed them, and the tab is
  * in the background: in a visible tab the page already shows the result.
  * The last seq shown is kept per tab so a re-render or a page change never
@@ -37,7 +37,7 @@ class GmNotify extends LitElement {
     if (!on || !('Notification' in window) || Notification.permission !== 'granted') return;
     if (!document.hidden) return;
     try {
-      const n = new Notification(this.title || 'GenMedia Studio', {
+      const n = new Notification(this.title || 'Creative Studio', {
         body: this.body || '',
         tag: 'gm-done',
       });

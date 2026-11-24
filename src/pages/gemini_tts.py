@@ -97,7 +97,7 @@ class GeminiTtsState:
 
 @me.page(
     path="/gemini-tts",
-    title="Voice - GenMedia Creative Studio",
+    title="Voice - Creative Studio",
     on_load=legacy_on_load(DEFAULT_GEMINI_TTS_MODEL),
     stylesheets=["/ui/audio-studio.css"],
 )

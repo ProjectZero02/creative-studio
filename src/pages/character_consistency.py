@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 @me.page(
     path="/character_consistency",
-    title="GenMedia Creative Studio - Character Consistency",
+    title="Character Consistency - Creative Studio",
 )
 def page():
     with page_scaffold(page_name="character_consistency"):

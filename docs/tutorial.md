@@ -1,4 +1,4 @@
-# GenMedia Creative Studio: Quick Start Tutorial
+# Creative Studio: Quick Start Tutorial
 
 ## Welcome!
 

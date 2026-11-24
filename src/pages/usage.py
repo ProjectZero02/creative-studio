@@ -116,7 +116,7 @@ def on_scope(e: me.ButtonToggleChangeEvent):
     _load(s)
 
 
-@me.page(path="/usage", title="Usage | GenMedia Studio", on_load=on_load)
+@me.page(path="/usage", title="Usage | Creative Studio", on_load=on_load)
 def page():
     with page_scaffold(page_name="usage"):  # pylint: disable=not-context-manager
         usage_content()

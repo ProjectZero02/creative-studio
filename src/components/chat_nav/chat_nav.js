@@ -58,7 +58,7 @@ const ICON = {
     'M17.4 3.85a1.9 1.9 0 0 1 2.7 2.7l-7.6 7.6-3.5.8.8-3.5z'],
   library: ['M7.25 3.75h10a3 3 0 0 1 3 3v10', 'M3.75 9.25a2.5 2.5 0 0 1 2.5-2.5h8.5a2.5 2.5 0 0 1 2.5 2.5v8.5a2.5 2.5 0 0 1-2.5 2.5h-8.5a2.5 2.5 0 0 1-2.5-2.5z',
     'm3.9 17 3.6-3.6 3 3 2-2 4.6 4.6'],
-  search: 'M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 14 15.5l.3.3v.8l5 5 1.5-1.5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z',
+  search: ['M10.75 4.25a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13z', 'm15.5 15.5 4.25 4.25'],
   folder: 'M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z',
   folderOpen: 'M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 12H4V8h16z',
   add: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z',
@@ -228,6 +228,12 @@ class GmChatNav extends LitElement {
 
   _pickKind(kind) {
     this._menu = null;
+    // Film has its own screen. Open it directly: going through
+    // /home?mode=film drew the home page for a second and then jumped on.
+    if (kind === 'film' && !this._home()) {
+      if (window.location.pathname !== '/story') this._go('/story');
+      return;
+    }
     if (this._home()) window.dispatchEvent(new CustomEvent('gm-pick-kind', { detail: { kind } }));
     else this._go('/home', { mode: kind });
   }
@@ -462,6 +468,8 @@ class GmChatNav extends LitElement {
       background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface-variant, #9aa0a6); }
     .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--sys-on-surface, #e8eaed); font: inherit; font-size: 13.5px; }
     .search input::-webkit-search-cancel-button { filter: grayscale(1); }
+    .search input::-webkit-search-decoration { display: none; -webkit-appearance: none; }
+    .search svg { flex: none; }
     .search:focus-within { outline: 2px solid var(--sys-primary, #8ab4f8); outline-offset: -2px; }
 
     .head { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 10px 6px 0 12px;

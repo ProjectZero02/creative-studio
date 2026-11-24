@@ -2657,7 +2657,7 @@ class VertexStoryBackend:
             reference_image=story.cover_uri or None,
             captions=[s.narration for s in story.scenes],
             source_uris=[s.clip_uri for s in story.scenes if s.clip_uri],
-            comment=f"Story Studio: {story.title} ({STYLE_BY_ID.get(story.style, {}).get('label', story.style)})",
+            comment=f"Film Studio: {story.title} ({STYLE_BY_ID.get(story.style, {}).get('label', story.style)})",
             status="complete",
         )
         add_media_item_to_firestore(item)

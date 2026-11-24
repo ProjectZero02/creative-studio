@@ -67,6 +67,8 @@ class Default:
     VERSION: str = "1.26.0"  # Fallback if package metadata is missing
     BUILD_COMMIT: str = ""
     BUILD_DATE: str = ""
+    # Product name shown in the UI (sidebar, page titles, sign-in).
+    APP_NAME: str = os.environ.get("APP_NAME", "Creative Studio")
 
     APP_ENV: str = os.environ.get("APP_ENV", "")
     REQUIRE_AUTHENTICATED_USER: bool = require_authenticated_user(APP_ENV)

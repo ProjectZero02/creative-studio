@@ -98,7 +98,7 @@ def on_lyria_load(e: me.LoadEvent):  # pylint: disable=unused-argument
 
 @me.page(
     path="/lyria",
-    title="Music - GenMedia Creative Studio",
+    title="Music - Creative Studio",
     stylesheets=["/ui/audio-studio.css"],
     on_load=on_lyria_load,
 )

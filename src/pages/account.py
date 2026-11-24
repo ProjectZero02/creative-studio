@@ -189,59 +189,6 @@ def dismiss_notice(e: me.ClickEvent):  # pylint: disable=unused-argument
 # --------------------------------------------------------------------------- #
 # Rendering (mirrors pages/admin_users.py)                                    #
 # --------------------------------------------------------------------------- #
-_COLS = "minmax(140px,1fr) minmax(240px,2fr) 220px"
-
-
-def _cell_text(text: str, *, muted: bool = False, strong: bool = False):
-    me.text(
-        text,
-        style=me.Style(
-            font_size=14,
-            font_weight=600 if strong else 400,
-            color=me.theme_var("on-surface-variant" if muted else "on-surface"),
-        ),
-    )
-
-
-def _header_row():
-    with me.box(
-        style=me.Style(
-            display="grid",
-            grid_template_columns=_COLS,
-            gap=12,
-            padding=me.Padding.symmetric(vertical=10, horizontal=16),
-            background=me.theme_var("surface-container"),
-        ),
-    ):
-        for key in ("account.col_setting", "account.col_details", "admin.col_actions"):
-            me.text(
-                t(key),
-                style=me.Style(
-                    font_size=12,
-                    font_weight=600,
-                    letter_spacing="0.04em",
-                    text_transform="uppercase",
-                    color=me.theme_var("on-surface-variant"),
-                ),
-            )
-
-
-def _password_row():
-    with me.box(
-        style=me.Style(
-            display="grid",
-            grid_template_columns=_COLS,
-            gap=12,
-            align_items="center",
-            padding=me.Padding.symmetric(vertical=12, horizontal=16),
-        ),
-    ):
-        _cell_text(t("account.password"), strong=True)
-        _cell_text(t("account.password_details"), muted=True)
-        with me.box(style=me.Style(display="flex", gap=4, flex_wrap="wrap")):
-            me.button(t("admin.reset_password"), on_click=open_reset, type="stroked")
-
-
 def _banner(text: str, *, error: bool):
     with me.box(
         style=me.Style(
@@ -331,27 +278,25 @@ def account_content(embedded: bool = False):
         elif state.notice:
             _banner(state.notice, error=False)
 
-        with me.box(
-            style=me.Style(
-                border=me.Border.all(
-                    me.BorderSide(
-                        width=1, style="solid", color=me.theme_var("outline-variant"),
-                    ),
-                ),
-                border_radius=16,
-                overflow_x="auto",
-                background=me.theme_var("surface"),
-            ),
-        ), me.box(style=me.Style(min_width=640)):
-            _header_row()
-            _password_row()
+        # Same card and row as every other Settings section (gm-set-*,
+        # studio.src.css). The old three-column table did not fit the
+        # Settings column: its ACTIONS header ran into the Password label.
+        with me.box(classes="gm-set-card"), me.box(classes="gm-set-row"):
+            with me.box(classes="gm-set-row-icon"):
+                me.icon("lock")
+            with me.box(classes="gm-set-row-text"):
+                with me.box(classes="gm-set-row-title"):
+                    me.text(t("account.password"))
+                with me.box(classes="gm-set-row-desc"):
+                    me.text(t("account.password_details"))
+            me.button(t("admin.reset_password"), on_click=open_reset, type="stroked")
 
         _reset_dialog(state)
         if state.renew_token:
             session_renew(token=state.renew_token, key="session-renew")
 
 
-@me.page(path="/account", title="Account settings | GenMedia Studio", on_load=on_load)
+@me.page(path="/account", title="Account settings | Creative Studio", on_load=on_load)
 def page():
     with page_scaffold(page_name="account"):  # pylint: disable=not-context-manager
         account_content()

@@ -210,7 +210,7 @@ STEPS = ["Upload product photo", "Get four views", "Make the 360 video"]
 
 @me.page(
     path="/object-rotation",
-    title="Product 360 - GenMedia Studio",
+    title="Product 360 - Creative Studio",
     on_load=on_load,
     stylesheets=DEMO_STYLESHEETS,
 )

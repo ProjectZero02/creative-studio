@@ -31,7 +31,7 @@ from state.state import AppState
 
 @me.page(
     path="/brand_adherence",
-    title="Brand Adherence - GenMedia Creative Studio",
+    title="Brand Adherence - Creative Studio",
 )
 def page():
     with page_scaffold(page_name="brand_adherence"):

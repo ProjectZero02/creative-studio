@@ -112,7 +112,7 @@ def on_voice_load(e: me.LoadEvent):  # pylint: disable=unused-argument
 
 @me.page(
     path="/voice",
-    title="Voice - GenMedia Creative Studio",
+    title="Voice - Creative Studio",
     on_load=on_voice_load,
     stylesheets=["/ui/audio-studio.css"],
 )

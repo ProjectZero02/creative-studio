@@ -32,6 +32,7 @@ from common.identity import ANONYMOUS_USER_EMAIL
 from common.verified_identity import AUTH_MODE_SESSION, auth_mode
 from components.demo_flow.demo_flow import demo_mode_switch, mode_switch_value
 from components.header import header
+from components.notify.notify import notify_toggle
 from components.page_scaffold import page_frame, page_scaffold
 from state.state import AppState
 
@@ -43,6 +44,7 @@ class Section:
     icon: str
     admin: bool = False
     signed_in: bool = False
+    session: bool = False  # only with session sign-in (user accounts)
 
 
 SECTIONS = [
@@ -50,7 +52,9 @@ SECTIONS = [
     Section("brand", "My brand", "palette"),
     Section("usage", "Usage", "monitoring"),
     Section("account", "Account", "lock", signed_in=True),
+    Section("users", "Users", "group", admin=True, session=True),
     Section("admin", "Admin", "admin_panel_settings", admin=True),
+    Section("about", "About", "info"),
 ]
 
 
@@ -78,7 +82,9 @@ def visible_sections() -> list[Section]:
     return [
         s
         for s in SECTIONS
-        if (not s.admin or _is_admin()) and (not s.signed_in or _signed_in())
+        if (not s.admin or _is_admin())
+        and (not s.signed_in or _signed_in())
+        and (not s.session or _session())
     ]
 
 
@@ -108,6 +114,11 @@ def _open(key: str):
         from pages import account
 
         for _ in account.on_load(None):
+            pass
+    elif key == "users":
+        from pages import admin_users
+
+        for _ in admin_users.on_load(None):
             pass
     yield
 
@@ -142,7 +153,7 @@ def on_auto_enhance(e: me.SlideToggleChangeEvent):  # pylint: disable=unused-arg
 
 @me.page(
     path="/settings",
-    title="Settings | GenMedia Studio",
+    title="Settings | Creative Studio",
     on_load=on_load,
     security_policy=me.SecurityPolicy(dangerously_disable_trusted_types=True),
 )
@@ -196,16 +207,23 @@ def _general() -> None:
                 on_change=on_auto_enhance,
                 key="settings-enhance",
             )
+        with me.box(classes="gm-set-row"):
+            with me.box(classes="gm-set-row-text"):
+                _text(tr("menu.notify", "Notify me when done"), "gm-set-row-title")
+                _text(
+                    tr(
+                        "settings.notify_desc",
+                        "Shows a browser notice when a job finishes in another tab.",
+                    ),
+                    "gm-set-row-desc",
+                )
+            notify_toggle(
+                label=tr("menu.notify", "Notify me when done"), key="settings-notify"
+            )
 
 
 def _admin() -> None:
     links = [
-        (
-            "/admin/users",
-            "group",
-            tr("settings.users", "Users"),
-            tr("settings.users_desc", "Add people, set roles and reset passwords."),
-        ),
         (
             "/config",
             "dns",
@@ -236,8 +254,6 @@ def _admin() -> None:
                 key="settings-demos",
             )
         for route, icon, title, desc in links:
-            if route == "/admin/users" and not _session():
-                continue
             with me.box(classes="gm-set-row"):
                 with me.box(classes="gm-set-row-icon"):
                     me.icon(icon)
@@ -296,7 +312,10 @@ def settings_content() -> None:
                         ):
                             me.icon(s.icon)
                             me.text(label)
-            with me.box(classes="gm-set-body"):
+            # A key per section, so Mesop builds each body fresh. Without it
+            # Mesop reused the last section's elements and kept their classes:
+            # Account showed an empty icon box and overlapping labels.
+            with me.box(classes="gm-set-body", key=f"settings-body-{current}"):
                 label = next(x.label for x in sections if x.key == current)
                 _text(tr(f"settings.nav.{current}", label), "gm-set-heading")
                 if current == "brand":
@@ -307,6 +326,14 @@ def settings_content() -> None:
                     from pages.usage import usage_content
 
                     usage_content(embedded=True)
+                elif current == "users":
+                    from pages.admin_users import admin_users_content
+
+                    admin_users_content(embedded=True)
+                elif current == "about":
+                    from pages.about import about_page_content
+
+                    about_page_content(embedded=True)
                 elif current == "account":
                     from pages.account import account_content
 

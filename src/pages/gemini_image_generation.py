@@ -1608,12 +1608,12 @@ def on_load(e: me.LoadEvent):
 
 @me.page(
     path="/gemini_image_generation",
-    title="Image Studio - GenMedia Creative Studio",
+    title="Image Studio - Creative Studio",
     on_load=on_load,
 )
 @me.page(
     path="/nano-banana",
-    title="Image Studio - GenMedia Creative Studio",
+    title="Image Studio - Creative Studio",
     on_load=on_load,
 )
 def page():

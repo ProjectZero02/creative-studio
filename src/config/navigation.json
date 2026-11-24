@@ -89,7 +89,7 @@
     },
     {
       "id": 12,
-      "display": "Story Studio",
+      "display": "Film Studio",
       "icon": "auto_stories",
       "route": "/story",
       "group": "foundation",
@@ -245,7 +245,7 @@
       "route": "/about",
       "align": "bottom",
       "group": "studio",
-      "description": "Information about GenMedia Creative Studio.",
+      "description": "Information about Creative Studio.",
       "feature_flag": "SHOW_LEGACY_PAGES"
     },
     {

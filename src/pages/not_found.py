@@ -27,7 +27,7 @@ def on_library(e: me.ClickEvent) -> None:  # pylint: disable=unused-argument
     me.navigate("/library_v2")
 
 
-@me.page(path=NOT_FOUND_PATH, title="Page not found | GenMedia Studio")
+@me.page(path=NOT_FOUND_PATH, title="Page not found | Creative Studio")
 def page() -> None:
     with page_scaffold(page_name="not_found"):  # pylint: disable=not-context-manager
         with page_frame():  # pylint: disable=not-context-manager

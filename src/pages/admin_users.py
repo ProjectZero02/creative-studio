@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from contextlib import nullcontext
 
 import mesop as me
 from flask import request
@@ -564,16 +565,19 @@ def _reset_dialog(state: AdminUsersState):
             me.button(t("admin.reset_password"), on_click=submit_reset, type="flat")
 
 
-def admin_users_content():
+def admin_users_content(embedded: bool = False):
+    """The users table; `embedded` drops the frame and title (Settings)."""
     state = me.state(AdminUsersState)
     admin = current_admin_email()
-    with page_frame():  # pylint: disable=not-context-manager
-        header(
-            "Users",
-            "group",
-            description="Add people, set their role and reset passwords. Only admins see this page.",
-            centered=True,
-        )
+    frame = nullcontext() if embedded else page_frame()
+    with frame:  # pylint: disable=not-context-manager
+        if not embedded:
+            header(
+                "Users",
+                "group",
+                description="Add people, set their role and reset passwords. Only admins see this page.",
+                centered=True,
+            )
         if admin is None:
             _banner(t("admin.only_admins"), error=True)
             return
@@ -648,7 +652,7 @@ def admin_users_content():
         _reset_dialog(state)
 
 
-@me.page(path="/admin/users", title="Users | GenMedia Studio", on_load=on_load)
+@me.page(path="/admin/users", title="Users | Creative Studio", on_load=on_load)
 def page():
     with page_scaffold(page_name="admin_users"):  # pylint: disable=not-context-manager
         admin_users_content()

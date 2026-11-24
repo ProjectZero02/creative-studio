@@ -212,12 +212,12 @@ def get_config_table(app_state: AppState):
     config_data = {
         "Config": [
             "Username",
-            "Vertex AI Enabled",
+            "Gemini Enterprise Agent Platform enabled",
             "Project ID",
             "Location",
             "Default Model ID",
-            "GenMedia Bucket",
-            "GenMedia Firestore DB / Collection",
+            "Media bucket",
+            "Firestore DB / Collection",
             "Veo Project ID",
             "Veo Model ID",
             "Veo Experimental Model ID",

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
+
 import mesop as me
 
 from components.header import header
@@ -30,7 +32,9 @@ def render_section(section_data: dict):
             align_items="center",
             margin=me.Margin(top=24, bottom=24),
             border=me.Border.all(
-                me.BorderSide(style="solid", width=1, color=me.theme_var("outline"))
+                me.BorderSide(
+                    style="solid", width=1, color=me.theme_var("outline-variant")
+                )
             ),
             padding=me.Padding.all(16),
             border_radius=12,
@@ -64,16 +68,20 @@ def render_section(section_data: dict):
                 )
 
 
-def about_page_content():
-    """About page."""
-    with page_frame():  # pylint: disable=E1129:not-context-manager
-        header("About This Application", "info")
+def about_page_content(embedded: bool = False):
+    """About page; `embedded` drops the frame and title (Settings > About)."""
+    frame = nullcontext() if embedded else page_frame()
+    with frame:  # pylint: disable=E1129:not-context-manager
+        if not embedded:
+            header("About This Application", "info")
 
         if ABOUT_PAGE_CONTENT:
-            # Render header
-            me.text(ABOUT_PAGE_CONTENT["header"]["title"], type="headline-4")
+            # Render header (in Settings the section heading already says About)
+            if not embedded:
+                me.text(ABOUT_PAGE_CONTENT["header"]["title"], type="headline-4")
             me.markdown(ABOUT_PAGE_CONTENT["header"]["introduction"])
-            me.divider()
+            if not embedded:
+                me.divider()
 
             # Render each section
             for section in ABOUT_PAGE_CONTENT.get("sections", []):
@@ -86,7 +94,7 @@ def about_page_content():
 
 @me.page(
     path="/about",
-    title="About - GenMedia Creative Studio",
+    title="About - Creative Studio",
 )
 def page():
     with page_scaffold(page_name="about"):  # pylint: disable=E1129:not-context-manager
