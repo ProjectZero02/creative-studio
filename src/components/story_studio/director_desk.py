@@ -11,12 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Director's Desk for Story Studio (/story): one canvas.
+"""The film's working steps for Film Studio (/story), one view each:
 
-A strip of takes and their shots runs on top. Selecting a shot opens it in
-the side panel: its frame or clip, prompt, camera, length and a "Redo with
-note" box. References (cast and set), Soundtrack and Preview (the animatic)
-open as panels from the header, whose main button names the next step.
+- Script: the brief, then one card per take with its lines (split into the
+  turns Omni makes) and its camera, prompt, action and sound.
+- Set: the cast and places the takes are made from.
+- Frames: each take's start frame, with redo.
+- Takes: each take's clip, its turns, any cut found in one, and a redo per
+  turn.
+- Music: music and voice.
+
+The header's main button names the next thing to make.
 """
 
 from __future__ import annotations
@@ -33,10 +38,14 @@ from services.story_models import (
     SHOT_SIZE_IDS,
     SHOT_SIZES,
     VOICES,
+    DESK_STEPS,
     Story,
+    clip_parts,
     default_music_prompt,
     frame_for,
     frames_ready,
+    single_clip_max,
+    split_narration_parts,
     supported_durations,
     take_groups,
 )
@@ -61,9 +70,7 @@ class DeskHandlers:
     on_brief_blur: Callable
     on_visual_grammar_blur: Callable
     on_select_shot: Callable
-    on_toggle_refs: Callable
     on_toggle_preview: Callable
-    on_toggle_soundtrack: Callable
     on_make_set: Callable
     on_paint_all_frames: Callable
     on_render: Callable
@@ -74,6 +81,7 @@ class DeskHandlers:
     on_redo_note: Callable
     on_redo_frame: Callable
     on_redo_clip: Callable
+    on_redo_turn: Callable
     on_add_shot: Callable
     on_move_up: Callable
     on_move_down: Callable
@@ -91,12 +99,6 @@ class DeskHandlers:
     on_toggle_voice: Callable
     on_voice: Callable
     on_speaker_voice: Callable
-    on_toggle_continuous_takes: Callable
-    on_toggle_second: Callable
-    on_translate_again: Callable
-    on_toggle_continuity: Callable
-    on_toggle_seamless_joins: Callable
-    on_toggle_color_match: Callable
     on_update_set: Callable
     on_save_set_as_new: Callable
     on_add_asset: Callable
@@ -154,7 +156,8 @@ def render_desk(
     is_demo: bool,
     h: DeskHandlers,
 ) -> None:
-    """Render the Director's Desk canvas."""
+    """Render one desk step: Script, Set, Frames, Takes or Music."""
+    view = s.step if s.step in DESK_STEPS else "editor"
     busy_scenario = h.job_active_for("scenario")
     busy_any = h.job_active_for(*BUSY_KINDS)
     groups = take_groups(story)
@@ -177,28 +180,21 @@ def render_desk(
                             key=f"title-{story.id}",
                         )
                     _t(
-                        f"{len(story.scenes)} shots · {len(groups)} "
-                        f"take{'s' if len(groups) != 1 else ''} · ≈ {h.fmt_secs(total_secs)}",
+                        f"{len(groups)} take{'s' if len(groups) != 1 else ''}"
+                        f" · {h.fmt_secs(total_secs)}",
                         "ss-desk-title-meta",
                     )
                 with me.box(classes="ss-desk-actions"):
-                    for text, on, click, key in (
-                        ("References", s.refs_open, h.on_toggle_refs, "ss-desk-refs"),
-                        (
-                            "Soundtrack",
-                            s.soundtrack_open,
-                            h.on_toggle_soundtrack,
-                            "ss-desk-soundtrack",
-                        ),
-                        (
-                            "Preview",
-                            s.preview_open,
-                            h.on_toggle_preview,
-                            "ss-desk-preview",
-                        ),
-                    ):
-                        with me.box(classes="ss-pill" + (" is-on" if on else "")):
-                            me.button(text, type="stroked", on_click=click, key=key)
+                    if view in ("storyboard", "editor") and story.scenes:
+                        with me.box(
+                            classes="ss-pill" + (" is-on" if s.preview_open else "")
+                        ):
+                            me.button(
+                                "Preview",
+                                type="stroked",
+                                on_click=h.on_toggle_preview,
+                                key="ss-desk-preview",
+                            )
                     if s.job_running:
                         me.button(
                             "Cancel",
@@ -215,24 +211,145 @@ def render_desk(
                         key="ss-desk-next",
                     )
 
-        if s.soundtrack_open:
-            _render_soundtrack_drawer(story, busy_any, h)
-        if s.refs_open:
-            _render_set_tab(s, story, story_set, busy_any, is_demo, h)
-        if s.preview_open and story.scenes:
-            _render_animatic(s, story, h)
-
         h.render_progress_panel("Working on your film", BUSY_KINDS)
 
+        if view == "set":
+            _render_set_tab(s, story, story_set, busy_any, is_demo, h)
+            return
+        if view == "music":
+            _render_sound(story, busy_any, h)
+            return
+        if view == "scenario":
+            _render_brief(story, busy_any, h)
         if busy_scenario or not story.scenes:
             _skeleton(story)
             return
-
+        if view == "scenario":
+            _render_script(story, groups, busy_any, h)
+            return
+        if s.preview_open:
+            _render_animatic(s, story, h)
         _render_strip(story, groups, sel, h)
         with me.box(classes="ss-canvas"):
-            _render_stage(s, story, groups, sel, busy_any, h)
-            _render_panel(story, groups, sel, busy_any, h)
-        _render_brief(story, busy_any, h)
+            _render_stage(s, story, groups, sel, busy_any, h, takes=view == "editor")
+            if view == "editor":
+                _render_turns(story, sel, busy_any, h)
+            else:
+                _render_take_facts(story, groups, sel, h)
+
+
+def _render_script(
+    story: Story, groups: list[list[int]], busy: bool, h: DeskHandlers
+) -> None:
+    """One card per take: each shot's line in a large box, with the turns it
+    is split into, then its camera, prompt, action and sound."""
+    for k, group in enumerate(groups):
+        secs = sum(story.scenes[i].duration for i in group)
+        with me.box(classes="ss-script-take"):
+            _t(
+                f"Take {k + 1} · {secs}s"
+                + (f" · {len(group)} shots" if len(group) > 1 else ""),
+                "ss-script-take-head",
+            )
+            for i in group:
+                _render_panel(story, groups, i, busy, h)
+
+
+def turn_rows(story: Story, index: int) -> list[dict]:
+    """The turns of scene `index`: what was made (turn records) or, before
+    that, the plan. Each: start, end, lines, and the cuts found in it."""
+    sc = story.scenes[index]
+    made = sc.turns()
+    if made:
+        rows = [
+            {
+                "start": int(t.get("start", 0)),
+                "end": int(t.get("start", 0)) + int(t.get("seconds", 0)),
+                "lines": t.get("lines", ""),
+            }
+            for t in made
+        ]
+    else:
+        parts = clip_parts(sc.duration, single_clip_max(story.video_model))
+        lines = (
+            split_narration_parts(sc.narration, parts)
+            if len(parts) > 1 and sc.spoken
+            else [sc.narration] + [""] * (len(parts) - 1)
+        )
+        rows, start = [], 0
+        for p, line in zip(parts, lines, strict=False):
+            rows.append({"start": start, "end": start + p, "lines": line})
+            start += p
+    cuts = sc.cuts()
+    for k, row in enumerate(rows):
+        row["cuts"] = [c for c in cuts if int(c.get("turn", -1)) == k]
+    return rows
+
+
+def _render_turn_split(story: Story, index: int) -> None:
+    rows = turn_rows(story, index)
+    if len(rows) < 2:
+        return
+    with me.box(classes="ss-turn-split"):
+        for row in rows:
+            with me.box(classes="ss-turn-split-row"):
+                _t(f"{row['start']}–{row['end']}s", "ss-turn-time")
+                _t(row["lines"] or "No line", "ss-turn-lines")
+
+
+def _render_turns(story: Story, sel: int, busy: bool, h: DeskHandlers) -> None:
+    """The take's turns as Omni made them, any cut found in one, and a redo
+    per turn."""
+    sc = story.scenes[sel]
+    rows = turn_rows(story, sel)
+    with me.box(classes="ss-card ss-turns"):
+        me.text("Turns", style=me.Style(font_size=16, font_weight=600))
+        cuts = sc.cuts()
+        if sc.clip_uri:
+            _t(
+                f"Cut found in turn {int(cuts[0].get('turn', 0)) + 1}"
+                if cuts
+                else "No cuts found",
+                "ss-turn-status" + (" is-bad" if cuts else ""),
+            )
+        if len(rows) < 2:
+            # One turn: "Redo clip" makes it again.
+            return
+        for k, row in enumerate(rows):
+            with me.box(classes="ss-turn" + (" has-cut" if row["cuts"] else "")):
+                with me.box(classes="ss-turn-head"):
+                    _t(f"Turn {k + 1} · {row['start']}–{row['end']}s", "ss-turn-name")
+                    me.button(
+                        "Redo",
+                        type="stroked",
+                        disabled=busy or not sc.clip_uri,
+                        on_click=h.on_redo_turn,
+                        key=f"redoturn-{sel}-{k}",
+                    )
+                if row["lines"]:
+                    _t(row["lines"], "ss-turn-lines")
+
+
+def _render_take_facts(
+    story: Story, groups: list[list[int]], sel: int, h: DeskHandlers
+) -> None:
+    """Frames step: what the selected take will be."""
+    sc = story.scenes[sel]
+    k = take_of(groups, sel)
+    group = groups[k]
+    with me.box(classes="ss-card ss-take-facts"):
+        me.text(f"Take {k + 1}", style=me.Style(font_size=16, font_weight=600))
+        _t(
+            f"{sum(story.scenes[i].duration for i in group)}s · "
+            f"{SHOT_SIZES.get(sc.shot_size, 'Medium shot')} · "
+            f"{CAMERA_PRESETS.get(sc.camera, CAMERA_PRESETS['static'])['label']}",
+            "ss-muted ss-small",
+        )
+        if sc.narration.strip():
+            me.text(
+                ("On camera: " if sc.spoken else "Voiceover: ") + sc.narration.strip(),
+                style=me.Style(font_size=14),
+            )
 
 
 def _skeleton(story: Story) -> None:
@@ -301,7 +418,9 @@ def _render_stage(
     sel: int,
     busy: bool,
     h: DeskHandlers,
+    takes: bool = True,
 ) -> None:
+    """The selected take: its clip (Takes) or start frame (Frames)."""
     sc = story.scenes[sel]
     k = take_of(groups, sel)
     start = groups[k][0]
@@ -316,9 +435,15 @@ def _render_stage(
         ),
         None,
     )
-    show_video = bool(sc.clip_uri) and not (
+    show_video = takes and bool(sc.clip_uri) and not (
         clip_task and clip_task.get("status") in ("running", "queued")
     )
+    if not takes:
+        task = (
+            frame_task
+            if frame_task and frame_task.get("status") in ("running", "queued", "failed")
+            else None
+        )
     with me.box(classes="ss-card ss-stage"):
         h.render_media_box(
             sc.clip_uri if show_video else frame_for(story, sel),
@@ -345,20 +470,22 @@ def _render_stage(
             key=f"redo-note-{sel}",
         )
         with me.box(classes="ss-redo-row"):
-            me.button(
-                "Redo frame",
-                type="stroked",
-                disabled=busy,
-                on_click=h.on_redo_frame,
-                key=f"redof-{sel}",
-            )
-            me.button(
-                "Redo clip",
-                type="stroked",
-                disabled=busy or not frame_for(story, sel),
-                on_click=h.on_redo_clip,
-                key=f"redoc-{sel}",
-            )
+            if takes:
+                me.button(
+                    "Redo clip",
+                    type="stroked",
+                    disabled=busy or not frame_for(story, sel),
+                    on_click=h.on_redo_clip,
+                    key=f"redoc-{sel}",
+                )
+            else:
+                me.button(
+                    "Redo frame",
+                    type="stroked",
+                    disabled=busy,
+                    on_click=h.on_redo_frame,
+                    key=f"redof-{sel}",
+                )
 
 
 def _render_panel(
@@ -449,6 +576,7 @@ def _render_panel(
                 key=f"dur-{sc.id}",
             )
         h.render_line_fields(story, sc, "e", disabled=busy)
+        _render_turn_split(story, i)
         if story.makes_alt and sc.narration.strip():
             with me.box(classes=h.dir_class(alt)):
                 me.textarea(
@@ -509,6 +637,7 @@ def _render_panel(
 
 
 def _render_brief(story: Story, busy: bool, h: DeskHandlers) -> None:
+    """The brief, on top of the script, in a box that grows to 8 lines."""
     if not (story.brief or story.visual_grammar):
         return
     with me.box(classes="ss-card ss-desk-brief"):
@@ -525,7 +654,9 @@ def _render_brief(story: Story, busy: bool, h: DeskHandlers) -> None:
             me.textarea(
                 label="Film brief",
                 value=story.brief,
-                rows=2,
+                autosize=True,
+                min_rows=2,
+                max_rows=8,
                 appearance="outline",
                 disabled=busy,
                 on_blur=h.on_brief_blur,
@@ -544,8 +675,8 @@ def _render_brief(story: Story, busy: bool, h: DeskHandlers) -> None:
             )
 
 
-def _render_soundtrack_drawer(story: Story, busy: bool, h: DeskHandlers) -> None:
-    alt = story.alt_language
+def _render_sound(story: Story, busy: bool, h: DeskHandlers) -> None:
+    """Music step: the film's music and voices."""
     with me.box(classes="ss-card ss-sound-drawer"):
         with me.box(classes="ss-sound-grid"):
             with me.box(classes="ss-sound-col"):
@@ -601,54 +732,6 @@ def _render_soundtrack_drawer(story: Story, busy: bool, h: DeskHandlers) -> None
                         style=me.Style(width="100%"),
                         key="ss-speaker-voice",
                     )
-            with me.box(classes="ss-sound-col"):
-                me.slide_toggle(
-                    "Continuous takes",
-                    checked=story.continuous_takes,
-                    disabled=busy,
-                    on_change=h.on_toggle_continuous_takes,
-                    key="ss-takes",
-                )
-                me.slide_toggle(
-                    "Match colour at cuts",
-                    checked=story.color_match,
-                    disabled=busy,
-                    on_change=h.on_toggle_color_match,
-                    key="ss-color-match",
-                )
-                me.slide_toggle(
-                    "Start each cut from the last frame",
-                    checked=story.continuity,
-                    disabled=busy,
-                    on_change=h.on_toggle_continuity,
-                    key="ss-continuity",
-                )
-                if story.continuity:
-                    me.slide_toggle(
-                        "Straight cuts between matching shots",
-                        checked=story.seamless_joins,
-                        disabled=busy,
-                        on_change=h.on_toggle_seamless_joins,
-                        key="ss-seamless-joins",
-                    )
-                if story.voice_on or story.has_spoken:
-                    me.slide_toggle(
-                        f"Also make an {alt} version",
-                        checked=story.second_on,
-                        disabled=busy,
-                        on_change=h.on_toggle_second,
-                        key="ss-second-on",
-                    )
-                    if story.second_on:
-                        me.button(
-                            "Translating…"
-                            if h.job_active_for("translate")
-                            else f"Translate into {alt}",
-                            type="stroked",
-                            disabled=busy,
-                            on_click=h.on_translate_again,
-                            key="ss-translate",
-                        )
 
 
 def _render_set_tab(
@@ -662,7 +745,7 @@ def _render_set_tab(
     """The References tray: the story's cast, places and props."""
     if st is None:
         with me.box(classes="ss-card ss-set-empty"):
-            me.text("References", style=me.Style(font_size=18, font_weight=600))
+            me.text("Set", style=me.Style(font_size=18, font_weight=600))
             with me.box(classes="ss-set-tools"):
                 me.button(
                     "Making…" if h.job_active_for("set") else "Make cast and set",

@@ -42,6 +42,7 @@ from services.story_models import (
     STYLES,
     VOICES,
     Story,
+    other_language,
     resolution_options,
     voice_label,
 )
@@ -66,6 +67,7 @@ class SetupHandlers:
     on_video_model: Callable
     on_aspect: Callable
     on_language: Callable
+    on_second: Callable
     on_resolution: Callable
     on_style_chip: Callable
     on_style_blur: Callable
@@ -135,6 +137,13 @@ def blueprint(s: StoryState) -> dict:
     )
     bp["source"] = source
     return bp
+
+
+def alt_cost(bp: dict) -> float:
+    """What a second-language film adds: on-camera speech is in the video,
+    so it is a second full render; voiceover is a new narration track."""
+    cost = bp["cost"]
+    return round(cost["video"] + cost["voice"], 2)
 
 
 def picked_brand(s: StoryState) -> dict | None:
@@ -449,6 +458,14 @@ def render_setup(
                     on_selection_change=h.on_language,
                     key="ss-lang",
                 )
+            alt = other_language(s.language)
+            with me.box(classes="ss-second-row"):
+                me.slide_toggle(
+                    f"{alt} version (+{_money(alt_cost(bp))})",
+                    checked=s.second_on,
+                    on_change=h.on_second,
+                    key="ss-second",
+                )
             if s.duration_text.strip() and bp["source"] != "box":
                 _t(
                     'Write a length like "30s", "2 min" or "1:30".',
@@ -513,6 +530,11 @@ def _blueprint_card(
                 *plan_rows,
                 ("Picture", f"{RESOLUTION_LABELS.get(res, res)} · {s.aspect_ratio}"),
                 ("Brand", brand_kit.label(brand) if brand else "None"),
+                *(
+                    (("Second version", other_language(s.language)),)
+                    if s.second_on
+                    else ()
+                ),
                 ("Time", story_director.time_line(bp["time_seconds"])),
             ):
                 with me.box(classes="ss-bp-row"):
@@ -521,10 +543,19 @@ def _blueprint_card(
         with me.box(classes="ss-bp-cost"):
             with me.box(classes="ss-bp-row"):
                 _t("Estimated cost", "ss-muted")
-                me.text(_money(cost["total"]), style=me.Style(font_weight=700))
+                extra = alt_cost(bp) if s.second_on else 0.0
+                me.text(
+                    _money(round(cost["total"] + extra, 2)),
+                    style=me.Style(font_weight=700),
+                )
             _t(
                 f"Video {_money(cost['video'])} · Frames {_money(cost['frames'])} · "
-                f"Voice {_money(cost['voice'])} · Music {_money(cost['music'])}",
+                f"Voice {_money(cost['voice'])} · Music {_money(cost['music'])}"
+                + (
+                    f" · {other_language(s.language)} {_money(extra)}"
+                    if s.second_on
+                    else ""
+                ),
                 "ss-muted ss-small",
             )
 

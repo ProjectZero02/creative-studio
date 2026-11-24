@@ -15,8 +15,8 @@
  */
 
 /**
- * <story-stepper>: 4-stage quiet tonal pill stepper:
- *   Stories -> Setup -> Director's Desk -> Timeline & Export.
+ * <story-stepper>: quiet tonal pill stepper, one pill per step:
+ *   Films, Setup, Script, Set, Frames, Takes, Music, Edit & Export.
  */
 import { LitElement, css, html, svg } from '/ui/vendor/lit-3.2.1.js';
 
@@ -26,7 +26,8 @@ const ICONS = {
   scenario: svg`<path d="M6 3h9l4 4v14H6z"/><path d="M14.5 3v4.5H19"/><path d="M9 12h7M9 16h7"/>`,
   set: svg`<circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c.6-3.3 3-5.2 6-5.2s5.4 1.9 6 5.2"/><circle cx="17" cy="9" r="2.4"/><path d="M16.2 14.4c2.4.1 4.2 1.6 4.8 4.4"/>`,
   storyboard: svg`<rect x="2.5" y="5" width="8.5" height="6.5" rx="1.5"/><rect x="13" y="5" width="8.5" height="6.5" rx="1.5"/><rect x="2.5" y="13.5" width="8.5" height="6.5" rx="1.5"/><rect x="13" y="13.5" width="8.5" height="6.5" rx="1.5"/>`,
-  editor: svg`<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>`,
+  editor: svg`<rect x="2.5" y="6" width="13" height="12" rx="2.5"/><path d="M15.5 10.5l6-3.5v10l-6-3.5"/>`,
+  music: svg`<path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>`,
   video: svg`<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.2v5.6l4.6-2.8z" fill="currentColor"/>`,
   done: svg`<path d="M5 12.5l4.5 4.5L19 7.5"/>`,
 };
@@ -41,15 +42,15 @@ class StoryStepper extends LitElement {
     :host { display: block; width: 100%; font-family: var(--gm-font, inherit); }
     ol {
       list-style: none; margin: 0; padding: 0;
-      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px; width: 100%; align-items: center;
+      display: grid; grid-template-columns: repeat(var(--steps, 4), minmax(0, 1fr));
+      gap: 6px; width: 100%; align-items: center;
     }
     li { display: flex; min-width: 0; }
     button {
       all: unset; box-sizing: border-box; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
       width: 100%; height: var(--gm-control-h, 40px); min-width: 0;
-      padding: 0 14px; border-radius: 999px; border: 0;
+      padding: 0 10px; border-radius: 999px; border: 0;
       background: var(--gm-tonal, rgba(127, 127, 127, 0.08));
       color: var(--sys-on-surface-variant, #555);
       font-size: 13.5px; font-weight: 500;
@@ -89,7 +90,7 @@ class StoryStepper extends LitElement {
       color: var(--sys-on-primary-container, #0a2a66);
       font-weight: 600;
     }
-    @media (max-width: 640px) {
+    @media (max-width: 1100px) {
       ol { display: flex; gap: 6px; }
       li { flex: 0 0 auto; }
       li.is-current { flex: 1 1 auto; min-width: 0; }
@@ -99,7 +100,13 @@ class StoryStepper extends LitElement {
         position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
       }
     }
-    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    @media (max-width: 520px) {
+      ol { gap: 4px; overflow-x: auto; scrollbar-width: none; }
+      ol::-webkit-scrollbar { display: none; }
+      button { width: 38px; }
+      li.is-current { flex: 1 0 auto; }
+    }
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   `;
 
   constructor() {
@@ -118,7 +125,7 @@ class StoryStepper extends LitElement {
 
   render() {
     const steps = this._steps();
-    return html`<nav aria-label="Story steps"><ol>
+    return html`<nav aria-label="Film steps"><ol style="--steps: ${steps.length}">
       ${steps.map((s, i) => {
         const icon = s.state === 'done' ? ICONS.done : (ICONS[s.id] || ICONS.stories);
         return html`<li class="${s.state === 'current' ? 'is-current' : ''}">

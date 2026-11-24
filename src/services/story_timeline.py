@@ -1496,6 +1496,9 @@ def frame_changes(path: str) -> list[tuple[float, float]]:
 # A frame change this many times a film's median is a hard cut (a jump to a
 # new framing), wherever it falls; a continuous take should have none.
 CUT_RATIO = 30.0
+# ...and a real cut changes most of the picture: the cuts Omni made scored
+# 0.34 to 0.44, caption swaps and soft joins about 0.02.
+CUT_MIN_SCORE = 0.12
 
 
 def locate(timeline: dict, t: float) -> tuple[int, float]:
@@ -1509,9 +1512,16 @@ def locate(timeline: dict, t: float) -> tuple[int, float]:
     return -1, 0.0
 
 
-def take_cuts(path: str, ratio: float = CUT_RATIO, skip: float = 0.25) -> list[dict]:
+def take_cuts(
+    path: str,
+    ratio: float = CUT_RATIO,
+    skip: float = 0.25,
+    min_score: float = CUT_MIN_SCORE,
+) -> list[dict]:
     """Hard cuts anywhere in a rendered film: every frame whose change is at
-    least `ratio` times the median (ignoring the first `skip` seconds).
+    least `ratio` times the median and at least `min_score` (a new picture,
+    not a caption swap in a near-still shot), ignoring the first `skip`
+    seconds.
     Unlike seam_check, which only looks next to planned joins, this finds a
     cut the video model made inside one generated take."""
     changes = frame_changes(path)
@@ -1521,7 +1531,7 @@ def take_cuts(path: str, ratio: float = CUT_RATIO, skip: float = 0.25) -> list[d
     median = max(scores[len(scores) // 2], 1e-4)
     found = []
     for t_, s in changes:
-        if t_ >= skip and s / median >= ratio:
+        if t_ >= skip and s >= min_score and s / median >= ratio:
             if found and t_ - found[-1]["t"] < 0.2:  # one cut, several frames
                 if s > found[-1]["score"]:
                     found[-1].update(t=round(t_, 3), score=round(s, 4),

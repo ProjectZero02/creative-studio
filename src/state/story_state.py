@@ -42,6 +42,9 @@ class StoryState:
     idea: str = ""
     character: str = ""
     language: str = "English"
+    # Setup: also make the film in the second language (Arabic, or English
+    # for an Arabic film).
+    second_on: bool = False
     speech_mode: str = "auto"
     # Brand picked in Setup: a brand id, "none", or "" (not picked yet: the
     # owner's default brand). The brand is copied onto the story at Create.
