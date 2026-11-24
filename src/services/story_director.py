@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
+    NARRATOR_WPS,
     NOT_FAMOUS,
     PACING_MODES,
     SCENE_LENGTHS,
@@ -442,14 +443,18 @@ def _snap_beat_seconds(raw_seconds: float, max_beat: int) -> int:
     return choices[-1]
 
 
-def _split_text_to_beats(text: str, max_beat: int) -> list[tuple[str, int]]:
-    """Split narration or dialogue at sentence boundaries into timed beats."""
+def _split_text_to_beats(
+    text: str, max_beat: int, wps: float = _SCRIPT_WPS
+) -> list[tuple[str, int]]:
+    """Split narration or dialogue at sentence boundaries into timed beats.
+    `wps`: the pace the lines are spoken at (on camera, or the narrator's
+    slower NARRATOR_WPS)."""
     cleaned = re.sub(r"\s+", " ", (text or "").strip())
     if not cleaned:
         return []
     max_words_per_beat = max(
         _MIN_BEAT_SECONDS,
-        int((max_beat - _PAUSE_SECONDS) * _SCRIPT_WPS),
+        int((max_beat - _PAUSE_SECONDS) * wps),
     )
     sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(cleaned) if s.strip()]
     if not sentences:
@@ -470,7 +475,7 @@ def _split_text_to_beats(text: str, max_beat: int) -> list[tuple[str, int]]:
     buf: list[str] = []
     for part in expanded:
         candidate = " ".join([*buf, part]).strip()
-        cand_secs = len(candidate.split()) / _SCRIPT_WPS + _PAUSE_SECONDS
+        cand_secs = len(candidate.split()) / wps + _PAUSE_SECONDS
         if buf and cand_secs > max_beat:
             chunks.append(" ".join(buf))
             buf = [part]
@@ -480,7 +485,7 @@ def _split_text_to_beats(text: str, max_beat: int) -> list[tuple[str, int]]:
         chunks.append(" ".join(buf))
 
     return [
-        (chunk, _snap_beat_seconds(len(chunk.split()) / _SCRIPT_WPS + _PAUSE_SECONDS, max_beat))
+        (chunk, _snap_beat_seconds(len(chunk.split()) / wps + _PAUSE_SECONDS, max_beat))
         for chunk in chunks
     ]
 
@@ -824,7 +829,7 @@ def _parse_voiceover_paragraphs(body: str, builder: _ScriptBuilder) -> None:
                     },
                 )
             continue
-        beats = _split_text_to_beats(narration_text, max_beat)
+        beats = _split_text_to_beats(narration_text, max_beat, NARRATOR_WPS)
         for b_idx, (beat_text, beat_secs) in enumerate(beats):
             vis = (
                 vis_tags[b_idx]
@@ -1117,7 +1122,7 @@ Cast in sequence: {", ".join(seq.get("cast") or []) or "as needed"}{tail_block}
 
 Rules:
 - Write narration in {story.language}; write visual, motion_prompt, and audio_cue in English.
-- Narration fits within each shot's "seconds" at about {WORDS_PER_SECOND:g} words/sec.
+- A line said on camera fits within its shot's "seconds" at about {WORDS_PER_SECOND:g} words/sec; narrator lines follow the limits below.
 {_speech_rules(story)}
 - "visual": static keyframe composition ONLY (subject, pose, expression, framing, setting, lighting). Every person is {NOT_FAMOUS}. Do NOT describe camera motion or temporal progression in "visual".
 - "motion_prompt": describe temporal action, blocking, and camera movement during the shot.

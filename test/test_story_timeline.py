@@ -23,6 +23,14 @@ from services import story_jobs, story_service, story_store
 from services import story_timeline as T
 from services.story_models import Scene, Story, build_stitch_plan
 
+
+@pytest.fixture
+def no_end_hold(monkeypatch):
+    """These clips have a loud tone to their last frame, which a film would
+    hold for a breath (story_timeline.end_hold); these tests are not about that."""
+    monkeypatch.setattr(T, "end_hold", lambda *a, **k: 0.0)
+
+
 OWNER = "owner@example.com"
 
 
@@ -375,7 +383,7 @@ def test_continues_take_needs_two_spoken_scenes():
 # -- rendering --------------------------------------------------------------------
 
 
-def test_render_timeline_mixes_ducks_and_normalizes(tmp_path):
+def test_render_timeline_mixes_ducks_and_normalizes(tmp_path, no_end_hold):
     a, b = _clip(tmp_path / "a.mp4", "red", 440), _clip(tmp_path / "b.mp4", "blue", 660)
     music = tmp_path / "m.wav"
     subprocess.run(
@@ -725,7 +733,7 @@ def test_build_timeline_trims_frozen_heads_and_tails():
     assert (second["in"], second["out"]) == (0.0, 3.5)
 
 
-def test_a_clip_shorter_than_its_slot_holds_its_last_frame(tmp_path):
+def test_a_clip_shorter_than_its_slot_holds_its_last_frame(tmp_path, no_end_hold):
     # Picture 1.5 s, sound 2.5 s: the slot asks for 2.5 s of picture. The
     # gap must hold the last frame, not show the black canvas.
     a = _still_then_moving(tmp_path / "a.mp4", still=0.5, moving=1.0, sound=2.5)

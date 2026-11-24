@@ -83,7 +83,7 @@ from services.story_models import (
     furthest_step,
     frame_scenes,
     frames_ready,
-    max_words,
+    scene_words,
     reachable_steps,
     resolution_options,
     take_groups,
@@ -1569,10 +1569,12 @@ def _line_fields(story: Story, sc, prefix: str, disabled: bool) -> None:
         style=me.Style(width="100%"),
         key=f"{prefix}nar-{sc.id}",
     )
-    fit = max_words(sc.duration)
-    if sc.narration.strip() and sc.line_too_long():
+    index = next((n for n, x in enumerate(story.scenes) if x.id == sc.id), None)
+    fit = scene_words(sc, story, index)
+    if sc.narration.strip() and sc.line_too_long(story, index):
         me.text(
-            f"Too long for {sc.duration}s: about {fit} words fit, the rest may be cut off.",
+            f"Too long for {sc.duration}s: about {fit} words fit."
+            + ("" if sc.spoken else " It will be shortened when voiced."),
             style=me.Style(font_size=13, color=me.theme_var("error")),
         )
     else:

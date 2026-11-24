@@ -26,6 +26,14 @@ from services import story_jobs, story_service, story_store
 from services import story_timeline as T
 from services.story_models import Scene, Story
 
+
+@pytest.fixture
+def no_end_hold(monkeypatch):
+    """These clips have a loud tone to their last frame, which a film would
+    hold for a breath (story_timeline.end_hold); these tests are not about that."""
+    monkeypatch.setattr(T, "end_hold", lambda *a, **k: 0.0)
+
+
 OWNER = "me@example.com"
 TL = T.normalize(
     {
@@ -181,7 +189,7 @@ def _clip(path, seconds=2.0, size="320x180"):
 
 
 @pytest.mark.parametrize("fmt", ["webm", "mov", "mp3", "wav"])
-def test_render_timeline_writes_each_format(tmp_path, fmt):
+def test_render_timeline_writes_each_format(tmp_path, fmt, no_end_hold):
     import shutil
 
     src = _clip(tmp_path / "a.mp4")

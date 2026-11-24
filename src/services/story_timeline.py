@@ -100,6 +100,18 @@ EDGE_FADE = 0.04
 # A little longer on a clip's own sound, so a level change at a cut is
 # eased rather than a jump.
 JOIN_FADE = 0.08
+# Silence (seconds) added after the music before ducking it; see render_args.
+DUCK_PAD = 2.0
+# The film's ending: the music that runs to the end fades over MUSIC_OUTRO
+# seconds, the last clip's own sound over END_SOUND_FADE. When speech still
+# runs within END_SPEECH_GAP of the end, the last frame is held END_HOLD
+# seconds and fades to black, so the film never stops on the last word.
+MUSIC_OUTRO = 3.0
+END_SOUND_FADE = 0.5
+END_SPEECH_GAP = 0.8
+END_HOLD = 1.0
+# A 50 ms slice louder than this (dBFS) counts as speech.
+SPEECH_DB = -35.0
 # Frozen picture at a clip's start or end (models often hold the first or
 # last frame): shorter holds are left, longer ones trimmed up to the cap,
 # and a clip always keeps at least MIN_KEEP seconds.
@@ -397,6 +409,136 @@ def follow_scenes(prev: dict, cur: dict) -> dict:
 
 VOICE_GAP = 0.05
 MIN_LEN = 0.3  # the editor's shortest clip
+# Narrator lines: each starts VOICE_LEAD into its scene and should end
+# VOICE_BREATH before the next scene. Every line of a film plays at one
+# speed, sped up by at most MAX_FILM_TEMPO when some line is too long. A
+# line still too long may run VOICE_SPILL into a next scene that has no
+# line of its own, and is otherwise ended at its last pause (never
+# mid-word), fading out over VOICE_CUT_FADE.
+VOICE_LEAD = 0.25
+VOICE_BREATH = 0.5
+MAX_FILM_TEMPO = 1.08
+VOICE_SPILL = 0.5
+VOICE_CUT_FADE = 0.12
+# A voice slice quieter than this (dBFS) is silence; a run of at least
+# VOICE_PAUSE seconds of it inside a line is a pause between words.
+VOICE_SILENCE_DB = -40.0
+VOICE_PAUSE = 0.15
+
+
+def voice_shape(path: str) -> dict:
+    """A narrator line's shape: {"length", "lead" (silence before the first
+    word), "end" (where the last word stops), "pauses" (middle of each pause
+    inside the line)}, all in seconds of the file."""
+    window = 0.02
+    levels = audio_levels(path, window)
+    length = len(levels) * window
+    loud = [i for i, v in enumerate(levels) if v > VOICE_SILENCE_DB]
+    if not loud:
+        return {"length": round(length, 3), "lead": 0.0, "end": round(length, 3), "pauses": []}
+    pauses, run = [], 0
+    for i in range(loud[0], loud[-1] + 1):
+        if levels[i] <= VOICE_SILENCE_DB:
+            run += 1
+            continue
+        if run * window >= VOICE_PAUSE:
+            pauses.append(round((i - run / 2) * window, 3))
+        run = 0
+    return {
+        "length": round(length, 3),
+        "lead": round(loud[0] * window, 3),
+        "end": round((loud[-1] + 1) * window, 3),
+        "pauses": pauses,
+    }
+
+
+def film_tempo(needs: list[tuple[float, float]]) -> float:
+    """One speed for every narrator line of a film: 1.0 when every line's
+    speech (seconds) fits its room, else just enough for the longest, up
+    to MAX_FILM_TEMPO."""
+    worst = max([need / room for need, room in needs if room > 0] or [1.0])
+    return round(min(MAX_FILM_TEMPO, max(1.0, worst)), 4)
+
+
+def _place_voices(vids, segs, voices, voice_uris, voice_lengths, voice_info) -> None:
+    """Lay the narrator lines under their scenes (see VOICE_LEAD and the
+    constants after it): the leading silence trimmed, one speed for the
+    film, a breath before the next scene, never cut mid-word."""
+    voice_uris = voice_uris or {}
+    plan: list[dict] = []
+    for k, (seg, vclip) in enumerate(zip(segs, vids, strict=True)):
+        vuri = voice_uris.get(seg.index, "")
+        if not vuri:
+            continue
+        length = clip_length(vclip)
+        vlen = float((voice_lengths or {}).get(seg.index, length))
+        shape = (voice_info or {}).get(seg.index) or {}
+        lead = min(float(shape.get("lead", 0.0)), max(0.0, vlen - 0.1))
+        cin = round(max(0.0, lead - 0.05), 3)
+        end = min(vlen, float(shape.get("end", vlen)) + 0.1)
+        need = max(0.1, end - cin)
+        begin = min(vclip["fade_in"] + VOICE_LEAD, length / 3)
+        room = max(0.3, length - begin - VOICE_BREATH)
+        if need > room:
+            # A clip with spare picture after it grows to fit the line.
+            next_seg = segs[k + 1] if k + 1 < len(segs) else None
+            src_max = float(vclip.get("src_max", vclip["out"]))
+            next_seamless = next_seg is not None and getattr(next_seg, "join", "") in (
+                "bridge",
+                "extend",
+            )
+            if src_max > vclip["out"] and not next_seamless:
+                vclip["out"] = round(min(src_max, vclip["out"] + (need - room)), 3)
+                _layout_video(vids)
+                length = clip_length(vclip)
+                begin = min(vclip["fade_in"] + VOICE_LEAD, length / 3)
+                room = max(0.3, length - begin - VOICE_BREATH)
+        plan.append(
+            {
+                "k": k,
+                "seg": seg,
+                "vuri": vuri,
+                "cin": cin,
+                "need": need,
+                "room": room,
+                "begin": begin,
+                "shape": shape,
+            }
+        )
+    tempo = film_tempo([(p["need"], p["room"]) for p in plan])
+    voiced = {p["k"] for p in plan}
+    for p in plan:
+        k, vclip = p["k"], vids[p["k"]]
+        start = vclip["start"] + p["begin"]
+        nxt = vids[k + 1] if k + 1 < len(vids) else None
+        if nxt is None:
+            limit = clip_end(vclip)
+        elif k + 1 in voiced:
+            nbegin = min(nxt["fade_in"] + VOICE_LEAD, clip_length(nxt) / 3)
+            limit = nxt["start"] + nbegin - VOICE_GAP
+        else:
+            limit = min(clip_end(vclip) + VOICE_SPILL, clip_end(nxt))
+        out = p["cin"] + p["need"]
+        cut = False
+        if start + p["need"] / tempo > limit:
+            # Too long even so: end at the last pause that fits.
+            latest = p["cin"] + (limit - start) * tempo
+            gaps = [t for t in p["shape"].get("pauses", []) if p["cin"] < t <= latest]
+            out = gaps[-1] if gaps else latest
+            cut = True
+        line = {
+            "id": new_clip_id(),
+            "src": p["vuri"],
+            "start": round(start, 3),
+            "in": p["cin"],
+            "out": round(max(p["cin"] + 0.1, out), 3),
+            "gain": 1.0,
+            "tempo": tempo,
+            "scene": p["seg"].index,
+        }
+        if cut:
+            line["cut"] = True
+        voices.append(line)
 
 
 def no_overlap(lines: list[dict]) -> list[dict]:
@@ -545,6 +687,7 @@ def build_timeline(
     clip_stills: dict[int, tuple[float, float]] | None = None,
     music_uri: str = "",
     music_length: float = 0.0,
+    voice_info: dict[int, dict] | None = None,
 ) -> dict:
     """The film as a timeline, from a stitch plan and the made media.
 
@@ -554,6 +697,8 @@ def build_timeline(
     narrator (see :func:`clip_gain`). Narration starts just after each
     crossfade. ``clip_stills[index]`` is the frozen (head, tail) of a clip
     (see :func:`clip_edges`), trimmed off so cuts land on movement.
+    ``voice_info[index]`` is a narrator line's shape (see
+    :func:`voice_shape`), used to fit it (see :func:`_place_voices`).
     """
     tl = empty_timeline(width, height, fps)
     tl["color_match"] = bool(getattr(story, "color_match", True))
@@ -605,45 +750,7 @@ def build_timeline(
             clip["ambient"] = True
         vids.append(clip)
     _layout_video(vids)
-    for k, (seg, vclip) in enumerate(zip(segs, vids, strict=True)):
-        vuri = voice_uris.get(seg.index, "")
-        if not vuri:
-            continue
-        length = clip_length(vclip)
-        vlen = float((voice_lengths or {}).get(seg.index, length))
-        begin = min(vclip["fade_in"] + 0.25, length / 3)
-        room = max(0.3, length - begin - 0.05)
-        next_seg = segs[k + 1] if k + 1 < len(segs) else None
-        if vlen > room:
-            src_max = float(vclip.get("src_max", vclip["out"]))
-            next_seamless = (
-                next_seg is not None
-                and getattr(next_seg, "join", "") in ("bridge", "extend")
-            )
-            if src_max > vclip["out"] and not next_seamless:
-                vclip["out"] = round(min(src_max, vclip["out"] + (vlen - room)), 3)
-                _layout_video(vids)
-                length = clip_length(vclip)
-                begin = min(vclip["fade_in"] + 0.25, length / 3)
-                room = max(0.3, length - begin - 0.05)
-        if vlen > room and vlen / room <= 1.18:
-            tempo = round(vlen / room, 4)
-            vout = round(vlen, 3)
-        else:
-            tempo = 1.0
-            vout = round(min(vlen, room), 3)
-        voices.append(
-            {
-                "id": new_clip_id(),
-                "src": vuri,
-                "start": round(vclip["start"] + begin, 3),
-                "in": 0.0,
-                "out": vout,
-                "gain": 1.0,
-                "tempo": tempo,
-                "scene": seg.index,
-            }
-        )
+    _place_voices(vids, segs, voices, voice_uris, voice_lengths, voice_info)
     asked = float(getattr(story, "target_seconds", 0) or 0)
     if getattr(story, "one_take", False) and 0 < asked < duration(tl):
         trim_to(tl, asked)
@@ -1051,6 +1158,7 @@ def render_args(
     logo_png: str = "",
     crf: int = 20,
     fmt: str = "mp4",
+    end_hold: float = 0.0,
 ) -> list[str]:
     """ffmpeg argv that renders `timeline` (already normalized).
 
@@ -1058,9 +1166,12 @@ def render_args(
     files have sound, ``overlays`` maps text clip ids to full-frame RGBA PNGs.
     ``logo_png`` is a full-frame PNG shown for the whole film (brand logo).
     ``fmt`` is a key of EXPORT_FORMATS; the audio formats skip the picture.
+    ``end_hold``: seconds the last frame is held (fading to black) after
+    the last clip; music that reaches the end must already cover it.
     """
     w, h, fps = timeline["width"], timeline["height"], timeline["fps"]
-    total = max(0.1, duration(timeline))
+    end_hold = max(0.0, float(end_hold or 0.0))
+    total = max(0.1, duration(timeline)) + end_hold
     video = EXPORT_FORMATS.get(fmt, EXPORT_FORMATS["mp4"])["video"]
     args = [_ffmpeg(), "-v", "error", "-y"]
     filters: list[str] = []
@@ -1091,8 +1202,10 @@ def render_args(
         # 11.958 belonged to neither clip and showed the black canvas.
         f0 = round(c["start"] * fps)
         frames = max(1, round((c["start"] + length) * fps) - f0)
-        start, slot = f0 / fps, frames / fps
         next_c = vclips[k + 1] if k + 1 < len(vclips) else None
+        hold_frames = round(end_hold * fps) if next_c is None else 0
+        frames += hold_frames
+        start, slot = f0 / fps, frames / fps
         prev_c = vclips[k - 1] if k > 0 else None
         eq_b = 0.0
         if video and color_match and prev_c is not None and c.get("join") == "bridge":
@@ -1120,6 +1233,9 @@ def render_args(
                 chain += f",fade=t=in:st=0:d={c['fade_in']:.3f}"
             else:
                 chain += f",fade=t=in:st=0:d={c['fade_in']:.3f}:alpha=1"
+        if hold_frames:
+            hold = hold_frames / fps
+            chain += f",fade=t=out:st={max(0.0, slot - hold):.3f}:d={hold:.3f}"
         if (
             next_c is not None
             and next_c.get("join") == "fade_black"
@@ -1149,7 +1265,16 @@ def render_args(
                 aclip = {**c, "out": round(c["out"] + tail, 3)}
                 alen = clip_length(aclip)
             bucket.append(
-                _audio_chain(filters, idx, aclip, alen, f"d{k}", fade=JOIN_FADE)
+                _audio_chain(
+                    filters,
+                    idx,
+                    aclip,
+                    alen,
+                    f"d{k}",
+                    fade=JOIN_FADE,
+                    # The film's last sound eases out instead of stopping.
+                    fade_out=END_SOUND_FADE if next_c is None else None,
+                )
             )
     for k, c in enumerate(track(timeline, "text")["clips"] if video else []):
         png = overlays.get(c["id"])
@@ -1171,7 +1296,12 @@ def render_args(
         if not has_audio.get(c["src"], True):
             continue
         idx = add_input(paths[c["src"]])
-        dialogue.append(_audio_chain(filters, idx, c, clip_length(c), f"s{k}"))
+        # A line ended early (see _place_voices) eases out, never clicks.
+        dialogue.append(
+            _audio_chain(
+                filters, idx, c, clip_length(c), f"s{k}", fade_out=VOICE_CUT_FADE
+            )
+        )
 
     music_track = track(timeline, "music")
     music: list[str] = []
@@ -1182,7 +1312,12 @@ def render_args(
             idx = add_input(paths[c["src"]])
         else:
             idx = add_input(paths[c["src"]], "-stream_loop", "-1")
-        music.append(_audio_chain(filters, idx, c, clip_length(c), f"m{k}", fade=1.0))
+        mlen = clip_length(c)
+        # The music that runs to the end of the film fades out slowly.
+        outro = MUSIC_OUTRO if c["start"] + mlen >= total - 0.05 else None
+        music.append(
+            _audio_chain(filters, idx, c, mlen, f"m{k}", fade=1.0, fade_out=outro)
+        )
 
     audio_out = ""
     if dialogue or music or beds:
@@ -1202,10 +1337,21 @@ def render_args(
             )
         if dlg and mus and music_track.get("duck", True):
             # Music dips under speech and comes back up between lines.
-            filters.append(f"[{dlg}]asplit=2[dlg1][dlg2]")
+            # Dialogue that ends before the film (a held ending) stalled the
+            # compressor now and then: it runs to the film's end first.
+            filters.append(f"[{dlg}]apad=whole_dur={total:.3f},asplit=2[dlg1][dlg2]")
+            # sidechaincompress drops what it still holds when an input
+            # ends, at a point that varies between runs: unpadded, the music
+            # stopped dead anywhere up to a second before the film's end.
+            # Both inputs run on past the end (silence) and the result is
+            # trimmed back, so whatever it drops is after the film. Both pads
+            # end at a fixed time: an endless pad made held endings hang.
+            padded = total + DUCK_PAD
             filters.append(
-                f"[{mus}][dlg2]sidechaincompress=threshold=0.02:ratio=8:attack=20:"
-                "release=450:makeup=1[mducked]"
+                f"[{mus}]apad=whole_dur={padded:.3f}[mus_p];"
+                f"[dlg2]apad=whole_dur={padded:.3f}[dlg2_p];"
+                "[mus_p][dlg2_p]sidechaincompress=threshold=0.02:ratio=8:attack=20:"
+                f"release=450:makeup=1,atrim=0:{total:.3f}[mducked]"
             )
             parts = ["dlg1", "mducked"]
         else:
@@ -1316,17 +1462,24 @@ def scaled_size(width: int, height: int, short: int) -> tuple[int, int]:
 
 
 def _audio_chain(
-    filters: list[str], idx: int, c: dict, length: float, label: str, fade: float = EDGE_FADE
+    filters: list[str],
+    idx: int,
+    c: dict,
+    length: float,
+    label: str,
+    fade: float = EDGE_FADE,
+    fade_out: float | None = None,
 ) -> str:
     tempo = float(c.get("tempo") or 1.0)
     chain = f"[{idx}:a]atrim=start={c['in']:.3f}:end={c['out']:.3f},asetpts=PTS-STARTPTS"
     if abs(tempo - 1.0) > 0.005:
         chain += "," + _atempo(tempo)
     f = min(fade, length / 3)
+    fo = min(fade if fade_out is None else fade_out, length / 2)
     chain += (
         f",aformat=sample_rates=48000:channel_layouts=stereo,volume={c.get('gain', 1.0):.3f},"
         f"afade=t=in:st=0:d={f:.3f}:curve=qsin,"
-        f"afade=t=out:st={max(0.0, length - f):.3f}:d={f:.3f}:curve=qsin,"
+        f"afade=t=out:st={max(0.0, length - fo):.3f}:d={fo:.3f}:curve=qsin,"
         f"adelay={int(round(c['start'] * 1000))}:all=1[{label}]"
     )
     filters.append(chain)
@@ -1477,6 +1630,13 @@ def render_timeline(
                 dur, aud = probe(local)
                 src_durations[src] = dur
                 has_audio[src] = aud
+        hold = end_hold(tl, paths, has_audio)
+        if hold:
+            # The music that reaches the end plays on under the held frame.
+            end = duration(tl)
+            for c in track(tl, "music")["clips"]:
+                if clip_end(c) >= end - 0.05:
+                    c["out"] = round(float(c["out"]) + hold, 3)
         for k, c in enumerate(track(tl, "music")["clips"]):
             src = c.get("src", "")
             if not src or not has_audio.get(src, True):
@@ -1519,7 +1679,16 @@ def render_timeline(
                 get_logger(__name__).warning("Brand logo skipped", exc_info=True)
                 logo_png = ""
         args = render_args(
-            tl, paths, has_audio, overlays, out_path, preset, logo_png, crf=crf, fmt=fmt
+            tl,
+            paths,
+            has_audio,
+            overlays,
+            out_path,
+            preset,
+            logo_png,
+            crf=crf,
+            fmt=fmt,
+            end_hold=hold,
         )
         result = subprocess.run(args, capture_output=True, text=True, check=False)
         if result.returncode != 0:
@@ -1549,6 +1718,39 @@ def render_timeline(
 
             get_logger(__name__).warning("Seam check skipped", exc_info=True)
     return out_path
+
+
+def speech_end(path: str, start: float, end: float) -> float:
+    """Seconds into `path` where its last speech (a slice above SPEECH_DB)
+    between `start` and `end` stops; `start` when there is none."""
+    window = 0.05
+    levels = audio_levels(path, window)
+    a, b = int(start / window), min(len(levels), int(end / window))
+    loud = [i for i in range(a, b) if levels[i] > SPEECH_DB]
+    return (loud[-1] + 1) * window if loud else start
+
+
+def end_hold(tl: dict, paths: dict[str, str], has_audio: dict[str, bool]) -> float:
+    """END_HOLD when speech (the last clip's own, or the last voice line)
+    runs within END_SPEECH_GAP of the film's end, else 0."""
+    total = duration(tl)
+    last = 0.0
+    vclips = track(tl, "video")["clips"]
+    candidates = []
+    if vclips:
+        c = max(vclips, key=clip_end)
+        if not c.get("ambient") and float(c.get("gain", 0)) > 0:
+            candidates.append(c)
+    candidates += track(tl, "voice")["clips"][-1:]
+    for c in candidates:
+        path = paths.get(c.get("src", ""))
+        if not path or not has_audio.get(c["src"], True):
+            continue
+        tempo = float(c.get("tempo") or 1.0) or 1.0
+        t = speech_end(path, float(c["in"]), float(c["out"]))
+        if t > float(c["in"]):
+            last = max(last, float(c["start"]) + (t - float(c["in"])) / tempo)
+    return END_HOLD if last and total - last < END_SPEECH_GAP else 0.0
 
 
 # A join whose picture change is this many times the film's typical
