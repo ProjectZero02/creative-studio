@@ -911,4 +911,4 @@ const TRACK_ICON = {
   text: ICON.title,
 };
 
-customElements.define('story-timeline', StoryTimeline);
+if (!customElements.get('story-timeline')) customElements.define('story-timeline', StoryTimeline);

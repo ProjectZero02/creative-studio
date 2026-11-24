@@ -120,4 +120,4 @@ export class BananaButton extends LitElement {
   }
 }
 
-customElements.define('banana-button', BananaButton);
+if (!customElements.get('banana-button')) customElements.define('banana-button', BananaButton);

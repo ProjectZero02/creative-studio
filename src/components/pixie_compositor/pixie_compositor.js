@@ -182,4 +182,4 @@ class PixieCompositor extends LitElement {
   }
 }
 
-customElements.define('pixie-compositor', PixieCompositor);
+if (!customElements.get('pixie-compositor')) customElements.define('pixie-compositor', PixieCompositor);

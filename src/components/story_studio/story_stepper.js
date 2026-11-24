@@ -142,4 +142,4 @@ class StoryStepper extends LitElement {
   }
 }
 
-customElements.define('story-stepper', StoryStepper);
+if (!customElements.get('story-stepper')) customElements.define('story-stepper', StoryStepper);

@@ -162,4 +162,4 @@ class WelcomeHero extends LitElement {
   }
 }
 
-customElements.define('welcome-hero', WelcomeHero);
+if (!customElements.get('welcome-hero')) customElements.define('welcome-hero', WelcomeHero);

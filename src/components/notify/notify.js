@@ -52,4 +52,4 @@ class GmNotify extends LitElement {
   }
 }
 
-customElements.define('gm-notify', GmNotify);
+if (!customElements.get('gm-notify')) customElements.define('gm-notify', GmNotify);

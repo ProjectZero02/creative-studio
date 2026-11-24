@@ -54,4 +54,4 @@ class SessionRenew extends LitElement {
   }
 }
 
-customElements.define('session-renew', SessionRenew);
+if (!customElements.get('session-renew')) customElements.define('session-renew', SessionRenew);

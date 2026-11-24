@@ -102,4 +102,4 @@ class InfiniteScrollLibrary extends LitElement {
   }
 }
 
-customElements.define('infinite-scroll-library', InfiniteScrollLibrary);
+if (!customElements.get('infinite-scroll-library')) customElements.define('infinite-scroll-library', InfiniteScrollLibrary);

@@ -323,4 +323,4 @@ class GmGenerationProgress extends LitElement {
   `;
 }
 
-customElements.define('gm-generation-progress', GmGenerationProgress);
+if (!customElements.get('gm-generation-progress')) customElements.define('gm-generation-progress', GmGenerationProgress);

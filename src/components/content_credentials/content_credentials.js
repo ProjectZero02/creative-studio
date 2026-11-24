@@ -192,4 +192,4 @@ export class ContentCredentialsViewer extends LitElement {
   }
 }
 
-customElements.define('content-credentials-viewer', ContentCredentialsViewer);
+if (!customElements.get('content-credentials-viewer')) customElements.define('content-credentials-viewer', ContentCredentialsViewer);

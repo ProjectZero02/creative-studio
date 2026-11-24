@@ -91,4 +91,7 @@ export class SvgIcon extends LitElement {
   }
 }
 
-customElements.define('svg-icon', SvgIcon);
+// Other components import this file by a relative path (no ?v= tag), while
+// Mesop loads it as svg_icon.js?v=<hash>, so the browser can run it twice.
+// A second define would throw and make Mesop drop the whole render.
+if (!customElements.get('svg-icon')) customElements.define('svg-icon', SvgIcon);

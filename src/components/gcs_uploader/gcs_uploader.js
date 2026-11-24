@@ -221,4 +221,4 @@ export class GcsUploader extends LitElement {
   }
 }
 
-customElements.define('gcs-uploader', GcsUploader);
+if (!customElements.get('gcs-uploader')) customElements.define('gcs-uploader', GcsUploader);

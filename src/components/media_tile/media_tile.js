@@ -171,4 +171,4 @@ class MediaTile extends LitElement {
   }
 }
 
-customElements.define("media-tile", MediaTile);
+if (!customElements.get("media-tile")) customElements.define("media-tile", MediaTile);

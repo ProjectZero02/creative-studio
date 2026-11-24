@@ -67,4 +67,4 @@ class StoryIdeaWatch extends LitElement {
   render() { return null; }
 }
 
-customElements.define('story-idea-watch', StoryIdeaWatch);
+if (!customElements.get('story-idea-watch')) customElements.define('story-idea-watch', StoryIdeaWatch);

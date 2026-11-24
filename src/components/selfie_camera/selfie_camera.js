@@ -108,4 +108,4 @@ class SelfieCamera extends LitElement {
   }
 }
 
-customElements.define("selfie-camera", SelfieCamera);
+if (!customElements.get("selfie-camera")) customElements.define("selfie-camera", SelfieCamera);

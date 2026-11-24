@@ -182,4 +182,4 @@ class WorsfoldEncoder extends LitElement {
   }
 }
 
-customElements.define('worsfold-encoder', WorsfoldEncoder);
+if (!customElements.get('worsfold-encoder')) customElements.define('worsfold-encoder', WorsfoldEncoder);

@@ -75,4 +75,4 @@ class ScrollSentinel extends LitElement {
   }
 }
 
-customElements.define("scroll-sentinel", ScrollSentinel);
+if (!customElements.get("scroll-sentinel")) customElements.define("scroll-sentinel", ScrollSentinel);

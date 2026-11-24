@@ -94,4 +94,4 @@ class SearchEntryPoint extends LitElement {
   }
 }
 
-customElements.define('search-entry-point', SearchEntryPoint);
+if (!customElements.get('search-entry-point')) customElements.define('search-entry-point', SearchEntryPoint);
