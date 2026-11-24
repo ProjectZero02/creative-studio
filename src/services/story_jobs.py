@@ -859,6 +859,11 @@ def start_video(story_id: str, owner: str) -> Job:
         for i, sc in enumerate(story.scenes)
         if _needs_voice(story, sc)
     }
+    fit_task = (
+        _add_task(job, "Fitting the narration to its scenes", "voice")
+        if any(not _is_spoken(story.scenes[i]) for i in voice_tasks)
+        else None
+    )
     stitch_task = _add_task(job, "Stitching the film · crossfades and mix", "stitch")
     library_task = _add_task(job, "Saving to your library", "library")
     # Second-language film: same clips and music, translated voiceover.
@@ -1137,6 +1142,12 @@ def start_video(story_id: str, owner: str) -> Job:
                     f.result()
         if job.cancel_event.is_set():
             return
+        if fit_task:
+            _run_task(
+                fit_task,
+                lambda: _fit_voice_lines(story_id, owner, backend, voice_uris),
+                job.cancel_event,
+            )
         if music_task and music_task.status == DONE:
             music_uri = music_task.result_uri
             mutate_story(story_id, owner, lambda s: setattr(s, "music_uri", music_uri))
@@ -1881,6 +1892,93 @@ def start_music(story_id: str, owner: str) -> Job:
 
 def _takes_label(track: dict) -> str:
     return ", ".join(str(int(k) + 1) for k in sorted(track.get("takes") or []))
+
+
+def _fit_voice_lines(story_id: str, owner: str, backend, voice_uris: dict[int, str]) -> str:
+    """Fit the narrator's lines to their scenes, so none is cut off and all
+    play at one speed: measure every voiced line, store the narrator's pace
+    (Story.narrator_wps, which sets the word limits from now on), then
+    rewrite each line too long for its scene to the scene's word limit at
+    that pace and voice it again, once. Updates `voice_uris` in place.
+    Returns "" (the task has no file); the result is logged."""
+    import os
+    import tempfile
+
+    from services import story_timeline as tl_mod
+    from services.story_models import (
+        VO_BREATH,
+        VO_LEAD,
+        line_pace,
+        narrator_words,
+        voice_room,
+    )
+    from services.story_service import fetch_media
+
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    narrated = [
+        i
+        for i, uri in sorted(voice_uris.items())
+        if uri and i < len(story.scenes) and not _is_spoken(story.scenes[i])
+    ]
+    if not narrated:
+        return ""
+    with tempfile.TemporaryDirectory() as tmp:
+
+        def speech_of(uri: str) -> float | None:
+            """Seconds of speech in a voice line; None when it can't be read."""
+            path = os.path.join(tmp, f"v{uuid.uuid4().hex[:8]}.wav")
+            try:
+                fetch_media(uri, path)
+                shape = tl_mod.voice_shape(path)
+            except Exception:
+                logger.warning("Could not measure voice line %s", uri, exc_info=True)
+                return None
+            if shape["length"] <= 0:
+                return None
+            return max(0.0, shape["end"] - shape["lead"])
+
+        speech = {i: speech_of(voice_uris[i]) for i in narrated}
+        narrated = [i for i in narrated if speech[i] is not None]
+        pace = line_pace([(story.scenes[i].narration, speech[i]) for i in narrated])
+        if pace:
+            mutate_story(story_id, owner, lambda s: setattr(s, "narrator_wps", pace))
+            story.narrator_wps = pace
+        redone = 0
+        for i in narrated:
+            sc = story.scenes[i]
+            room = voice_room(story, i)
+            if speech[i] <= room:
+                continue
+            words = len(sc.narration.split())
+            seconds = room + VO_LEAD + VO_BREATH
+            budget = min(words - 1, narrator_words(seconds, pace))
+            if budget < 1:
+                continue
+            try:
+                line = backend.shorten_line(story, i, sc.narration, budget)
+            except Exception:  # a failed rewrite leaves the line as it was
+                logger.exception("Shortening the line of scene %s failed", i + 1)
+                continue
+            if not line or len(line.split()) >= words:
+                continue
+            scene_id = sc.id
+            sc.narration = line
+            uri = backend.generate_voiceover(story, i, line)
+            voice_uris[i] = uri
+            redone += 1
+
+            def save(s: Story, scene_id=scene_id, line=line) -> None:
+                for x in s.scenes:
+                    if x.id == scene_id:
+                        x.narration = line
+
+            mutate_story(story_id, owner, save)
+    logger.info(
+        "Story %s: narrator pace %s words/s, %d line(s) shortened", story_id, pace, redone
+    )
+    return ""
 
 
 def _make_track(story_id: str, owner: str, backend, track_id: str) -> str:

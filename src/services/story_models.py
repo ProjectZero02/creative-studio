@@ -238,6 +238,85 @@ def max_words(duration: int | float) -> int:
     return max(1, int(float(duration) * WORDS_PER_SECOND))
 
 
+# The narrator (text-to-speech) speaks slower than people on camera: 25
+# narrator lines of live films measured a median of 1.75 words a second
+# (2026-11-24). A film's own measured pace (Story.narrator_wps) replaces it.
+NARRATOR_WPS = 1.8
+# A narrator line starts VO_LEAD into its scene and leaves VO_BREATH of quiet
+# before the next one; VO_FIT keeps a little room for a slower take.
+VO_LEAD = 0.25
+VO_BREATH = 0.5
+VO_FIT = 0.95
+
+
+def narrator_words(seconds: int | float, wps: float = 0.0) -> int:
+    """How many narrator words fit a scene of `seconds` at `wps` words a
+    second (NARRATOR_WPS when 0), with the lead-in and breath around it."""
+    pace = wps if wps and wps > 0 else NARRATOR_WPS
+    return max(1, int((float(seconds) - VO_LEAD - VO_BREATH) * pace * VO_FIT))
+
+
+def scene_words(scene, story=None, index: int | None = None) -> int:
+    """Words that fit a scene's line: the narrator's pace for a voiceover,
+    the on-camera pace for a spoken line. The film's last scene keeps
+    END_BREATH of quiet at the end."""
+    seconds = float(scene.duration)
+    if story is not None and index is not None and ends_film(story, index):
+        seconds = max(1.0, seconds - END_BREATH)
+    if getattr(scene, "spoken", False):
+        return max_words(seconds)
+    return narrator_words(seconds, float(getattr(story, "narrator_wps", 0) or 0))
+
+
+def narrator_limits(wps: float = 0.0) -> str:
+    """The narrator word limits for every scene length, for the writer."""
+    lengths = [d for d in SCENE_LENGTHS if d <= 15] or list(SCENE_LENGTHS)
+    pace = wps if wps and wps > 0 else NARRATOR_WPS
+    table = ", ".join(f"{narrator_words(d, wps)} for {d}s" for d in lengths)
+    return (
+        f"- A narrator line (\"spoken\" false) is read at a calm pace of about "
+        f"{pace:.1f} words a second and must end before its scene does: at most "
+        f"{table}. Fewer words are better than more; a longer line is cut off."
+    )
+
+
+def voice_room(story, index: int) -> float:
+    """Seconds a narrator line has to be spoken in scene `index`: from its
+    lead-in to a breath before the scene ends (END_BREATH more for the
+    film's last scene)."""
+    seconds = float(story.scenes[index].duration) - VO_LEAD - VO_BREATH
+    if ends_film(story, index):
+        seconds -= END_BREATH
+    return max(0.3, seconds)
+
+
+def line_pace(lines: list[tuple[str, float]]) -> float:
+    """The narrator's pace (words a second): the median over voiced lines of
+    (text, seconds of speech); 0 with no line of three words or more."""
+    rates = sorted(
+        len(text.split()) / secs for text, secs in lines if secs > 0.3 and len(text.split()) >= 3
+    )
+    if not rates:
+        return 0.0
+    mid = len(rates) // 2
+    rate = rates[mid] if len(rates) % 2 else (rates[mid - 1] + rates[mid]) / 2
+    return round(rate, 2)
+
+
+def shorten_prompt(story, index: int, text: str, words: int) -> str:
+    """Ask for a shorter narrator line that keeps the meaning."""
+    scene = story.scenes[index]
+    return (
+        f"This narrator line of scene {index + 1} of the film "
+        f'"{story.title}" is too long to be spoken in its {scene.duration:g} '
+        f"seconds. Rewrite it in {story.language} in at most {words} words. "
+        "Keep what it says and its tone, and keep it a natural, complete "
+        "sentence that flows from the scene before.\n"
+        f'Line: "{text.strip()}"\n'
+        'Return only JSON: {"line": str}'
+    )
+
+
 # Scene lengths offered (seconds). Up to the model's single-clip limit a
 # scene is one clip; longer scenes are extended (see clip_parts).
 SCENE_LENGTHS = (4, 6, 8, 10, 12, 15, 20, 25, 30)
@@ -284,11 +363,25 @@ def supported_durations(model_id: str | None = None) -> list[int]:
     return [d for d in SCENE_LENGTHS if model.min_duration <= d <= top]
 
 
-def split_narration_parts(text: str, parts: list[int]) -> list[str]:
+# Seconds of silence after the film's last spoken word, so it ends on a
+# breath (a nod, a smile) instead of mid-sentence.
+END_BREATH = 1.5
+
+
+def ends_film(story, index: int, last_part: bool = True) -> bool:
+    """The clip (or the last turn of it) that ends the film."""
+    return last_part and index == len(getattr(story, "scenes", []) or []) - 1
+
+
+def split_narration_parts(
+    text: str, parts: list[int], end_breath: float = 0.0
+) -> list[str]:
     """Split `text` across `parts` durations proportionally without repeating words.
 
     Prefers sentence and clause boundaries so multi-part Omni/Veo extensions
     deliver continuous dialogue instead of repeating the full line on every turn.
+    `end_breath`: seconds at the end of the last part kept free of speech
+    (the film's ending), so that part gets fewer words.
     """
     cleaned = re.sub(r"\s+", " ", (text or "").strip())
     if len(parts) <= 1:
@@ -298,7 +391,7 @@ def split_narration_parts(text: str, parts: list[int]) -> list[str]:
         return ["" for _ in parts]
     out: list[str] = []
     idx = 0
-    for k, sec in enumerate(parts):
+    for k in range(len(parts)):
         if k == len(parts) - 1:
             out.append(" ".join(words[idx:]).strip())
             break
@@ -306,8 +399,9 @@ def split_narration_parts(text: str, parts: list[int]) -> list[str]:
         if remaining_words <= 0:
             out.append("")
             continue
-        rem_sec = sum(max(1, int(p)) for p in parts[k:])
-        target = max(1, round(remaining_words * max(1, int(sec)) / max(1, rem_sec)))
+        rem = [max(1.0, float(p)) for p in parts[k:]]
+        rem[-1] = max(1.0, rem[-1] - end_breath)
+        target = max(1, round(remaining_words * rem[0] / sum(rem)))
         end = min(len(words), idx + target)
         # Prefer landing on a sentence or clause boundary within +/- 3 words.
         best = end
@@ -483,8 +577,8 @@ class Scene:
     def has_alt_clip(self) -> bool:
         return bool(self.clip_alt_uri) and self.clip_alt_key == self.alt_clip_key()
 
-    def line_too_long(self) -> bool:
-        return len(self.narration.split()) > max_words(self.duration)
+    def line_too_long(self, story=None, index: int | None = None) -> bool:
+        return len(self.narration.split()) > scene_words(self, story, index)
 
 
 @dataclass
@@ -575,6 +669,9 @@ class Story:
     # Extra music tracks, each under chosen takes (see music_tracks); the
     # film's own music plays wherever no track does.
     music_tracks_json: str = ""
+    # The narrator's pace (words a second) measured on this film's voiced
+    # lines; 0 until measured (NARRATOR_WPS is used). Sets the word limits.
+    narrator_wps: float = 0.0
     # One seed for every clip of the film (0: pick one on first render).
     seed: int = 0
     # Music made for the film (kept for the editor and re-exports).
@@ -972,6 +1069,8 @@ def _fit_lengths(scenes: list[Scene]) -> list[int]:
             fits = [d for d in lengths if d >= sc.duration and fits_narration(words, d)]
             sc.duration = min(fits) if fits else max([sc.duration, *lengths])
             continue
+        if words <= narrator_words(sc.duration) + 1:
+            continue  # within the on-camera slack and the narrator's pace
         long.append(n)
     return long
 
@@ -1529,10 +1628,11 @@ def _speech_rules(story: Story) -> str:
         f"fits at about {WORDS_PER_SECOND:g} words a second, and write the line to "
         "fill it. Back-to-back spoken scenes are filmed as one continuous take."
     )
+    limits = narrator_limits(float(getattr(story, "narrator_wps", 0) or 0))
     if story.speech_mode == "narrator":
         return (
             '- Every line is a narrator voiceover: "spoken" is false for every '
-            'scene and nobody on screen talks. "voice" is "".'
+            'scene and nobody on screen talks. "voice" is "".\n' + limits
         )
     if story.speech_mode == "on_camera":
         return (
@@ -1554,6 +1654,8 @@ def _speech_rules(story: Story) -> str:
         + voice
         + "\n"
         + takes
+        + "\n"
+        + limits
     )
 
 
@@ -2245,6 +2347,7 @@ def clip_prompt(
     start_frame: bool = False,
     part_narration: str | None = None,
     bridge_to_next: bool = False,
+    ends_film: bool = False,
 ) -> str:
     """Video prompt for a scene. ``continuing``: the clip continues the
     previous one (a continuous take), so it carries on the same person and
@@ -2252,6 +2355,8 @@ def clip_prompt(
     clip opens on it. ``part_narration`` overrides the spoken text for a
     multi-part extension (empty string produces an ambient-only prompt).
     ``bridge_to_next`` appends first-to-last frame transition guidance.
+    ``ends_film``: this clip (turn) ends the film, so the speaker finishes
+    END_BREATH seconds early and holds.
 
     Every clip has its own sound. Narrated scenes ask for natural ambient
     sound only, because the narrator's voiceover and the music go on top.
@@ -2362,7 +2467,19 @@ def clip_prompt(
         "voice: no narrator, no other speakers, no voice-over. Clear, natural, "
         "lip-synced speech over quiet room tone. No music, applause, crowd "
         "noise or hiss; no subtitles, no "
-        f"on-screen text.{bridge_note}"
+        f"on-screen text.{bridge_note}{_end_note(ends_film)}"
+    )
+
+
+def _end_note(ends_film: bool) -> str:
+    """The film's last spoken clip: finish early and hold, so the film ends
+    on a breath, not on the last word."""
+    if not ends_film:
+        return ""
+    return (
+        f" This is the end of the film: finish the line about {END_BREATH:g} "
+        "seconds before the clip ends, then hold for a moment without "
+        "speaking (a small nod or a smile to the audience)."
     )
 
 

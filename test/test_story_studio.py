@@ -956,8 +956,12 @@ def test_clip_prompt_carries_the_spoken_line():
 
 
 def test_line_too_long_uses_scene_length():
-    assert not Scene(narration=" ".join(["w"] * 15), duration=6).line_too_long()
-    assert Scene(narration=" ".join(["w"] * 16), duration=6).line_too_long()
+    # On camera: 2.5 words a second. Narrator: slower (1.8, less the breaths).
+    on_camera = {"spoken": True, "duration": 6}
+    assert not Scene(narration=" ".join(["w"] * 15), **on_camera).line_too_long()
+    assert Scene(narration=" ".join(["w"] * 16), **on_camera).line_too_long()
+    assert not Scene(narration=" ".join(["w"] * 8), duration=6).line_too_long()
+    assert Scene(narration=" ".join(["w"] * 9), duration=6).line_too_long()
 
 
 def test_alt_clip_only_valid_for_its_clip_and_line():
@@ -1003,7 +1007,8 @@ def test_spoken_scene_gets_no_voiceover(speech, local_store):
     s = _spoken_story(local_store)
     job = _run(story_jobs.start_video(s.id, OWNER))
     assert job.status == "done", [(t.label, t.error) for t in job.tasks]
-    assert [t.scene_index for t in job.tasks if t.kind == "voice"] == [1]
+    voiced = [t.scene_index for t in job.tasks if t.kind == "voice" and t.scene_index >= 0]
+    assert voiced == [1]
     english_voices = speech.films[0][1]
     assert english_voices[0] == "" and english_voices[1]
 

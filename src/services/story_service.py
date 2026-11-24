@@ -47,6 +47,8 @@ from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
     CASTING_SYSTEM,
+    END_BREATH,
+    NARRATOR_WPS,
     FRAME_MAX_REFERENCES,
     LANGUAGES,
     SAME_TAKE_REF,
@@ -67,9 +69,11 @@ from services.story_models import (
     scenario_prompt,
     scenario_schema,
     scene_regen_prompt,
+    shorten_prompt,
     scene_schema,
     set_build_prompt,
     set_schema,
+    ends_film,
     single_clip_max,
     split_narration_parts,
     story_resolution,
@@ -161,6 +165,7 @@ class StoryBackend(Protocol):
     ) -> str: ...
     def voice_sample(self, story_set, character) -> str: ...
     def rewrite_scene(self, story: Story, index: int) -> str: ...
+    def shorten_line(self, story: Story, index: int, text: str, words: int) -> str: ...
     def plan_fix(
         self, story: Story, request: str, scene: int, seconds: float | None
     ) -> str: ...
@@ -400,6 +405,7 @@ def make_film(
         stills: dict[int, tuple[float, float]] = {}
         gains: dict[int, float] = {}
         voice_lengths: dict[int, float] = {}
+        voice_info: dict[int, dict] = {}
         voices = {
             seg.index: v for seg, v in zip(plan.segments, voice_uris or [], strict=False) if v
         }
@@ -428,6 +434,7 @@ def make_film(
             vuri = voices.get(seg.index)
             if vuri:
                 voice_lengths[seg.index] = tl_mod.probe(local(vuri))[0]
+                voice_info[seg.index] = tl_mod.voice_shape(local(vuri))
         width, height = size or frame_size(story.aspect_ratio, 1280)
         music_len = tl_mod.probe(local(music_uri))[0] if music_uri else 0.0
         timeline = tl_mod.build_timeline(
@@ -442,6 +449,7 @@ def make_film(
             clip_stills=stills,
             music_uri=music_uri,
             music_length=music_len,
+            voice_info=voice_info,
         )
         timeline = tl_mod.keep_edits(timeline, story.timeline_json)
         tl_mod.render_timeline(
@@ -824,6 +832,12 @@ class MockStoryBackend:
         from services.story_autoset import infer_settings
 
         return infer_settings(idea)
+
+    def shorten_line(self, story: Story, index: int, text: str, words: int) -> str:
+        """Demo stand-in: the first `words` words, as one sentence."""
+        self._sleep(0.3, 0.6)
+        kept = text.split()[: max(1, words)]
+        return " ".join(kept).rstrip(",;:.") + "."
 
     def rewrite_scene(self, story: Story, index: int) -> str:
         self._sleep(1.0, 1.8)
@@ -1315,7 +1329,9 @@ class MockStoryBackend:
         self._sleep(0.8, 1.6)
         rate = 24000
         words = max(1, len(text.split()))
-        dur = min(story.scenes[index].duration - 1.0, 0.33 * words + 0.4)
+        # Speech at the narrator's measured pace, with the silence real
+        # text-to-speech puts before and after it.
+        dur = words / NARRATOR_WPS
         n = int(rate * max(0.8, dur))
         t = np.arange(n) / rate
         syll = 0.5 + 0.5 * np.sin(2 * math.pi * 3.2 * t) ** 2
@@ -1324,6 +1340,8 @@ class MockStoryBackend:
             * syll
             * np.sin(2 * math.pi * (180 + 25 * np.sin(2 * math.pi * 0.7 * t)) * t)
         )
+        quiet = np.zeros(int(rate * MOCK_VOICE_LEAD))
+        tone = np.concatenate([quiet, tone, quiet[: int(rate * 0.1)]])
         uri, path = self._new_uri(story, f"voice{index + 1}")
         _write_wav(path + ".wav", tone, rate)
         return uri + ".wav"
@@ -1450,6 +1468,21 @@ def _image_mime(uri: str) -> str:
 
 
 NARRATOR_STYLE = "Narrate warmly and clearly, like a short film voiceover."
+# Every narrator line gets the same pace direction, so the lines of a film
+# sound like one read, not each at its own speed.
+STEADY_PACE = "Keep a steady, even, unhurried pace, the same in every line."
+# Silence the demo voice puts before a line (real TTS: about 0.26 s).
+MOCK_VOICE_LEAD = 0.25
+
+
+def fetch_media(uri: str, path: str) -> None:
+    """Copy a stored file (gs:// or the demo's local://) to `path`."""
+    if uri.startswith(LOCAL_SCHEME):
+        import shutil
+
+        shutil.copyfile(local_path(uri), path)
+    else:
+        _gcs_fetch(uri, path)
 
 
 def _tts_style(voice) -> str:
@@ -2068,6 +2101,23 @@ class VertexStoryBackend:
             audio,
         )
 
+    def shorten_line(self, story: Story, index: int, text: str, words: int) -> str:
+        """A shorter narrator line (Gemini), at most `words` words."""
+        raw = self._json_text(
+            shorten_prompt(story, index, text, words),
+            schema={
+                "type": "object",
+                "properties": {"line": {"type": "string"}},
+                "required": ["line"],
+            },
+            temperature=0.3,
+            task="story_shorten",
+        )
+        try:
+            return str(json.loads(raw).get("line", "")).strip()
+        except (ValueError, AttributeError):
+            return ""
+
     def rewrite_scene(self, story: Story, index: int) -> str:
         story_set = self._set(story)
         return self._json_text(
@@ -2199,6 +2249,7 @@ class VertexStoryBackend:
         }
         if start_frame_uri and end_frame_uri:
             prompt_kw["bridge_to_next"] = True
+        prompt_kw["ends_film"] = ends_film(story, index)
         prompt = clip_prompt(story, scene, **prompt_kw)
 
         req_kwargs: dict = {
@@ -2285,7 +2336,11 @@ class VertexStoryBackend:
         labels = extra.pop("ref_labels", None)
         parts = clip_parts(scene.duration, single_clip_max(engine))
         part_lines = (
-            split_narration_parts(scene.narration, parts)
+            split_narration_parts(
+                scene.narration,
+                parts,
+                end_breath=END_BREATH if ends_film(story, index) else 0.0,
+            )
             if len(parts) > 1 and scene.spoken
             else None
         )
@@ -2297,6 +2352,7 @@ class VertexStoryBackend:
             prompt_kw["part_narration"] = part_lines[0]
         if end_frame_uri:
             prompt_kw["bridge_to_next"] = True
+        prompt_kw["ends_film"] = ends_film(story, index, last_part=len(parts) == 1)
         prompt = clip_prompt(story, scene, **prompt_kw)
         try:
             uri, interaction_id = generate_omni_video(
@@ -2368,7 +2424,13 @@ class VertexStoryBackend:
             raise GenerationError(refusal)
         logger.info("Omni refused scene %s's frame; retrying from the set", index + 1)
         labels = [r.label for r in refs]
-        prompt = clip_prompt(story, scene, story_set=story_set, ref_labels=labels)
+        prompt = clip_prompt(
+            story,
+            scene,
+            story_set=story_set,
+            ref_labels=labels,
+            ends_film=ends_film(story, index, last_part=scene.duration <= single_clip_max()),
+        )
         try:
             uri, interaction_id = generate_omni_video(
                 self._omni_request(
@@ -2421,6 +2483,9 @@ class VertexStoryBackend:
             more_kw: dict = {"continuing": True, "story_set": story_set}
             if part_lines is not None and k < len(part_lines):
                 more_kw["part_narration"] = part_lines[k]
+            more_kw["ends_film"] = ends_film(
+                story, index, last_part=k == len(prior) + len(rest)
+            )
             more = clip_prompt(story, scene, **more_kw)
             req_kw: dict = {
                 "omni_mode": "t2v",
@@ -2613,7 +2678,7 @@ class VertexStoryBackend:
         audio = _retry_transient(
             lambda: synthesize_speech(
                 text=text,
-                prompt=_tts_style(voice),
+                prompt=f"{_tts_style(voice)} {STEADY_PACE}",
                 model_name=self.cfg.STORY_TTS_MODEL,
                 voice_name=voice.tts_voice if voice else story.voice_name,
                 language_code=LANGUAGES.get(story.language, "en-US"),
