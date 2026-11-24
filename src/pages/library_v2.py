@@ -141,12 +141,22 @@ def on_load(e: me.LoadEvent):
         # This will also run every time the user navigates back to the page,
         # ensuring the view is fresh.
         _ensure_marks(pagestate)
-        yield from _load_media(pagestate, is_filter_change=True)
+        # No interim "Loading..." render on page load: Mesop's client applies
+        # renders once their JS modules import, without waiting for the
+        # previous one. The interim render needs scroll_sentinel.js (fetched),
+        # an empty result needs nothing, so the stale "Loading..." could land
+        # last and stick. is_loading starts True, so the page still says
+        # "Loading..." until the result arrives.
+        yield from _load_media(pagestate, is_filter_change=True, show_loading=False)
 
     yield
 
 
-def _load_media(pagestate: PageState, is_filter_change: bool = False):
+def _load_media(
+    pagestate: PageState,
+    is_filter_change: bool = False,
+    show_loading: bool = True,
+):
     """Central function to load media based on current filters and pagination."""
     app_state = me.state(AppState)
     if not cfg().SHARED_LIBRARY:
@@ -163,7 +173,8 @@ def _load_media(pagestate: PageState, is_filter_change: bool = False):
         pagestate.all_items_loaded = False
 
     pagestate.is_loading = True
-    yield
+    if show_loading:
+        yield
 
     if pagestate.mark_view:
         # Stars and collections are small: load them in one go.
