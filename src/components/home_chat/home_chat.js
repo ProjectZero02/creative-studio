@@ -705,9 +705,29 @@ class GmHomeChat extends LitElement {
   }
 
   async _newChat(projectId = '') {
+    // Repeated clicks while a reset is running are one reset.
+    if (this._resetting) return;
+    this._resetting = true;
     clearTimeout(this._timer);
-    if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
-    else if (this._saving) { try { await this._saving; } catch (_) { /* ignore */ } }
+    // Clear the box at once, so the click shows straight away: the text,
+    // files, open menus and the mode (a new chat always starts in Auto).
+    this._hist = -1;
+    if (this._ta) { this._ta.value = ''; this._fit(); }
+    this._hasText = false;
+    this._sug = '';
+    this._undo = null;
+    this._files = [];
+    this._lock = '';
+    this._auto = null;
+    this._dismissed = '';
+    this._menu = null;
+    this._adv = false;
+    try {
+      if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; await this._persist(); }
+      else if (this._saving) { try { await this._saving; } catch (_) { /* ignore */ } }
+    } finally {
+      this._resetting = false;
+    }
     this._loading = true;
     this._msgs = [];
     this._jobs = {};
@@ -1035,6 +1055,11 @@ class GmHomeChat extends LitElement {
   _openFull(k) {
     const prompt = (this._ta?.value || '').trim();
     const params = prompt ? { prompt } : {};
+    // Fade out at once while the next page loads (about a second).
+    this.toggleAttribute('leaving', true);
+    clearTimeout(this._leaveTimer);
+    // Back in view if the page did not change (offline, an error).
+    this._leaveTimer = setTimeout(() => this.removeAttribute('leaving'), 4000);
     if (this.navEvent) this.dispatchEvent(new MesopEvent(this.navEvent, { route: k.href, params }));
     else window.location.assign(k.href + (prompt ? `?prompt=${encodeURIComponent(prompt)}` : ''));
   }
@@ -1495,7 +1520,7 @@ class GmHomeChat extends LitElement {
           ${j.status === 'done' && j.display_url && !isStory ? html`<a class="act" href=${j.display_url} download target="_blank" rel="noopener">${svg(ICON.download, 18)}${S.download || 'Download'}</a>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._prefill(`${S.edit_prefix || 'Edit'} ${j.handle}: `)}>${svg(ICON.edit, 18)}${S.edit || 'Edit'}</button>` : nothing}
           ${j.status === 'done' && j.kind === 'image' ? html`<button class="act" type="button" @click=${() => this._animate(j)}>${svg(ICON.spark, 18)}${S.animate || 'Animate'}</button>` : nothing}
-          ${j.status === 'done' ? (() => { const href = this._studio(j); return html`<a class="act" href=${href} @click=${(e) => this._openStudio(e, href)}>${svg(ICON.open, 18)}${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}</a>`; })() : nothing}
+          ${j.status === 'done' ? (() => { const href = this._studio(j); return html`<a class="act" href=${href} @click=${(e) => this._openStudio(e, href)}>${svg(ICON.open, 18)}${isStory ? (S.open_film || 'Open in Film Studio') : (S.open || 'Open in Library')}</a>`; })() : nothing}
           ${j.status === 'failed' ? html`<button class="act" type="button" @click=${() => this._retry(j)}>${svg(ICON.retry, 18)}${S.retry || 'Try again'}</button>` : nothing}
         </div>` : nothing}
       </div>`;
@@ -1619,8 +1644,8 @@ class GmHomeChat extends LitElement {
             <button class="pa" type="button" @click=${() => this._useRef(j)} title=${S.reference_tip || 'Use as a reference in your next message'}>${svg(ICON.plus, 16)}${S.reference || 'Reference'}</button>` : nothing}
           ${done && j.display_url && !isStory ? html`<a class="pa icon" href=${j.display_url} download target="_blank" rel="noopener" aria-label=${S.download || 'Download'} title=${S.download || 'Download'}>${svg(ICON.download, 18)}</a>` : nothing}
           ${done ? html`<a class="pa ${isStory ? '' : 'icon'}" href=${href} @click=${(e) => this._openStudio(e, href)}
-              aria-label=${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}
-              title=${isStory ? (S.open_film || 'Open in Story Studio') : (S.open || 'Open in Library')}>${svg(ICON.open, 18)}${isStory ? (S.open_short || 'Open') : nothing}</a>` : nothing}
+              aria-label=${isStory ? (S.open_film || 'Open in Film Studio') : (S.open || 'Open in Library')}
+              title=${isStory ? (S.open_film || 'Open in Film Studio') : (S.open || 'Open in Library')}>${svg(ICON.open, 18)}${isStory ? (S.open_short || 'Open') : nothing}</a>` : nothing}
           ${j.status === 'failed' ? html`<button class="pa" type="button" @click=${() => this._retry(j)}>${svg(ICON.retry, 16)}${S.retry || 'Try again'}</button>` : nothing}
         </div>` : nothing}
       </li>`;
@@ -1783,6 +1808,9 @@ class GmHomeChat extends LitElement {
     :host { display: block; font-family: var(--gm-font, 'Google Sans', system-ui, sans-serif); color: var(--sys-on-surface, #15171c); }
     * { box-sizing: border-box; }
     .wrap { display: flex; flex-direction: column; align-items: center; width: 100%; margin: 0 auto; }
+    /* Opening Film Studio: fade out at once while the next page loads. */
+    :host([leaving]) .wrap { opacity: 0; transform: translateY(-6px); transition: opacity 160ms ease, transform 160ms ease; pointer-events: none; }
+    @media (prefers-reduced-motion: reduce) { :host([leaving]) .wrap { transform: none; transition: none; } }
     /* Empty: everything centred on the screen (topbar 60px, frame padding). */
     .wrap.empty { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: center; gap: clamp(28px, 5vh, 48px); padding-bottom: 8vh; }
     .wrap.chat { min-height: var(--gm-home-fit, calc(100dvh - 84px)); justify-content: flex-end; max-width: 820px; }
@@ -1941,7 +1969,11 @@ class GmHomeChat extends LitElement {
 
     /* Under the box, like Claude's row: quiet pills that open our own menus.
        Mode first, the type's main settings, Model at the end. */
-    .under { width: 100%; display: flex; align-items: center; gap: 6px; padding: 0 6px; min-height: 34px; }
+    /* The settings under the box stay inside its width: centred on it, and
+       a second centred line when they do not fit (Voice has six). */
+    .under { width: 100%; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+      gap: 4px 6px; padding: 0 6px; min-height: 34px; }
+    .under > .grow { display: none; }
     .pill {
       display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 12px; border: 0; border-radius: 999px; flex: none;
       background: transparent; color: var(--sys-on-surface-variant, #5f6368); font-size: 13px; cursor: pointer; white-space: nowrap; max-width: 260px;
@@ -2157,7 +2189,7 @@ class GmHomeChat extends LitElement {
     .avatar.busy { animation: pulse 900ms ease-in-out infinite alternate; }
 
     @media (max-width: 600px) {
-      .under { overflow-x: auto; scrollbar-width: none; padding: 0 2px; }
+      .under { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; padding: 0 2px; }
       .under::-webkit-scrollbar { display: none; }
       .note { margin-inline-start: 8px; }
       .adv-row:not(.wide) .field { width: 96px; }
