@@ -102,4 +102,4 @@ class VideoInfiniteScrollLibrary extends LitElement {
   }
 }
 
-customElements.define('video-infinite-scroll-library', VideoInfiniteScrollLibrary);
+if (!customElements.get('video-infinite-scroll-library')) customElements.define('video-infinite-scroll-library', VideoInfiniteScrollLibrary);

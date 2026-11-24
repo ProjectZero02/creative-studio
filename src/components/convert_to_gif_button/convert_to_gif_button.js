@@ -111,4 +111,4 @@ class ConvertToGifButton extends LitElement {
   }
 }
 
-customElements.define('convert-to-gif-button', ConvertToGifButton);
+if (!customElements.get('convert-to-gif-button')) customElements.define('convert-to-gif-button', ConvertToGifButton);

@@ -171,4 +171,4 @@ class InteractiveTile extends LitElement {
   }
 }
 
-customElements.define('interactive-tile', InteractiveTile);
+if (!customElements.get('interactive-tile')) customElements.define('interactive-tile', InteractiveTile);

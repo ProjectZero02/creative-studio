@@ -144,4 +144,4 @@ class LangManager extends LitElement {
   }
 }
 
-customElements.define('lang-manager', LangManager);
+if (!customElements.get('lang-manager')) customElements.define('lang-manager', LangManager);

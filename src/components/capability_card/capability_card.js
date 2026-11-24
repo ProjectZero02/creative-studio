@@ -332,4 +332,4 @@ class CapabilityCard extends LitElement {
   }
 }
 
-customElements.define('capability-card', CapabilityCard);
+if (!customElements.get('capability-card')) customElements.define('capability-card', CapabilityCard);

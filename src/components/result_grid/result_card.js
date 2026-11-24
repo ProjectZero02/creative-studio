@@ -245,4 +245,4 @@ class GmResultCard extends LitElement {
   `;
 }
 
-customElements.define('gm-result-card', GmResultCard);
+if (!customElements.get('gm-result-card')) customElements.define('gm-result-card', GmResultCard);

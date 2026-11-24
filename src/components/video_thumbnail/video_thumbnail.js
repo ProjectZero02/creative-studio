@@ -68,4 +68,4 @@ class VideoThumbnail extends LitElement {
   }
 }
 
-customElements.define('video-thumbnail', VideoThumbnail);
+if (!customElements.get('video-thumbnail')) customElements.define('video-thumbnail', VideoThumbnail);

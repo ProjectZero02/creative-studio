@@ -481,4 +481,4 @@ class UserMenu extends LitElement {
   }
 }
 
-customElements.define('user-menu', UserMenu);
+if (!customElements.get('user-menu')) customElements.define('user-menu', UserMenu);

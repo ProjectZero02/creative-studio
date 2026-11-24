@@ -406,4 +406,4 @@ class GmChipMenu extends LitElement {
   `;
 }
 
-customElements.define('gm-chip-menu', GmChipMenu);
+if (!customElements.get('gm-chip-menu')) customElements.define('gm-chip-menu', GmChipMenu);

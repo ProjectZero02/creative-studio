@@ -53,4 +53,4 @@ class StoryTicker extends LitElement {
   render() { return null; }
 }
 
-customElements.define('story-ticker', StoryTicker);
+if (!customElements.get('story-ticker')) customElements.define('story-ticker', StoryTicker);

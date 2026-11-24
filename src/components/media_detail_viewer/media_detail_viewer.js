@@ -364,4 +364,4 @@ class MediaDetailViewer extends LitElement {
   }
 }
 
-customElements.define("media-detail-viewer", MediaDetailViewer);
+if (!customElements.get("media-detail-viewer")) customElements.define("media-detail-viewer", MediaDetailViewer);

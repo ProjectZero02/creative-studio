@@ -73,4 +73,4 @@ class CopyButton extends LitElement {
   }
 }
 
-customElements.define("copy-button", CopyButton);
+if (!customElements.get("copy-button")) customElements.define("copy-button", CopyButton);

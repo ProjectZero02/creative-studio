@@ -104,4 +104,4 @@ class StoryStylePicker extends LitElement {
   }
 }
 
-customElements.define('story-style-picker', StoryStylePicker);
+if (!customElements.get('story-style-picker')) customElements.define('story-style-picker', StoryStylePicker);

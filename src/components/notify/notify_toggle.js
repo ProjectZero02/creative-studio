@@ -84,4 +84,4 @@ class GmNotifyToggle extends LitElement {
   }
 }
 
-customElements.define('gm-notify-toggle', GmNotifyToggle);
+if (!customElements.get('gm-notify-toggle')) customElements.define('gm-notify-toggle', GmNotifyToggle);

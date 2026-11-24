@@ -375,4 +375,4 @@ class HomePrompt extends LitElement {
   }
 }
 
-customElements.define('home-prompt', HomePrompt);
+if (!customElements.get('home-prompt')) customElements.define('home-prompt', HomePrompt);
