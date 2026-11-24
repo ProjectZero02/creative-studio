@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import uuid
 
 import mesop as me
 
@@ -1476,6 +1477,11 @@ def _desk_handlers() -> desk_view.DeskHandlers:
             on_scene_narration_alt=on_scene_narration_alt,
             on_toggle_music=on_toggle_music,
             on_music_prompt=on_music_prompt,
+            on_make_music=on_make_music,
+            on_add_track=on_add_track,
+            on_track_take=on_track_take,
+            on_track_prompt=on_track_prompt,
+            on_remove_track=on_remove_track,
             on_toggle_voice=on_toggle_voice,
             on_voice=on_voice,
             on_speaker_voice=on_speaker_voice,
@@ -2612,6 +2618,72 @@ def on_music_prompt(e: me.InputBlurEvent):
     _set_story_field("music_prompt", e.value.strip())
 
 
+def _edit_tracks(fn) -> None:
+    """Change the story's music tracks (a list of dicts) and save."""
+
+    def apply(st: Story) -> None:
+        tracks = st.music_tracks() if st.music_tracks_json else []
+        fn(st, tracks)
+        st.music_tracks_json = json.dumps(tracks) if tracks else ""
+
+    _edit(apply)
+
+
+def on_add_track(e: me.ClickEvent):
+    """Music step: a new track, under the last take no track has yet."""
+
+    def add(st: Story, tracks: list) -> None:
+        used = {k for t in tracks for k in t.get("takes", [])}
+        free = [k for k in range(len(take_groups(st))) if k not in used]
+        if not free:
+            return  # every take has a track
+        take = free[-1]
+        tracks.append({"id": uuid.uuid4().hex[:8], "takes": [take], "prompt": "", "uri": ""})
+
+    _edit_tracks(add)
+
+
+def on_track_take(e: me.ClickEvent):
+    """Music step: put a track under a take, or take it off (trtake|id|k).
+    A take has one track: picking it here takes it off the others."""
+    try:
+        _, tid, k = (e.key or "").split("|")
+        k = int(k)
+    except ValueError:
+        return
+
+    def toggle(st: Story, tracks: list) -> None:
+        for t in tracks:
+            takes = [x for x in t.get("takes", []) if x != k]
+            if t.get("id") == tid and k not in t.get("takes", []):
+                takes.append(k)
+            if takes != t.get("takes", []):
+                t["takes"] = sorted(takes)
+                t["uri"] = ""  # a new length: make it again
+        tracks[:] = [t for t in tracks if t.get("takes")]
+
+    _edit_tracks(toggle)
+
+
+def on_track_prompt(e: me.InputBlurEvent):
+    tid = (e.key or "").split("|", 1)[-1]
+    value = (e.value or "").strip()[:600]
+
+    def set_prompt(st: Story, tracks: list) -> None:
+        for t in tracks:
+            if t.get("id") == tid and t.get("prompt", "") != value:
+                t["prompt"], t["uri"] = value, ""
+
+    _edit_tracks(set_prompt)
+
+
+def on_remove_track(e: me.ClickEvent):
+    tid = (e.key or "").split("|", 1)[-1]
+    _edit_tracks(lambda st, tracks: tracks.__setitem__(
+        slice(None), [t for t in tracks if t.get("id") != tid]
+    ))
+
+
 def on_voice(e: me.SelectSelectionChangeEvent):
     _set_story_field("voice_name", e.value)
 
@@ -2641,6 +2713,46 @@ def _alt_cost(story: Story) -> float:
     )
     spoken = any(sc.spoken and sc.narration.strip() for sc in story.scenes)
     return round((bp["cost"]["video"] if spoken else 0.0) + bp["cost"]["voice"], 2)
+
+
+# Final-quality targets for a draft film, sharpest last.
+UPSCALE_TARGETS = ("720p", "1080p")
+
+
+def _upscale_options(story: Story) -> list[tuple[str, float]]:
+    """(resolution, about how much it costs) for each sharper version Omni
+    can upscale this film's clips to."""
+    from services.story_models import resolution_options, story_resolution
+
+    order = ("360p", "720p", "1080p", "4k")
+    current = story_resolution(story)
+    have = order.index(current) if current in order else len(order)
+    seconds = sum(sc.duration for sc in story.scenes) or 30
+    out = []
+    for res in UPSCALE_TARGETS:
+        if order.index(res) <= have or res not in resolution_options(story.video_model):
+            continue
+        bp = story_director.setup_blueprint(
+            seconds, video_model=story.video_model, resolution=res, one_take=story.one_take
+        )
+        out.append((res, bp["cost"]["video"]))
+    return out
+
+
+def on_upscale(e: me.ClickEvent):
+    """Export: upscale the draft's clips (key ss-upscale-<resolution>) and
+    make the film again from them."""
+    s = me.state(StoryState)
+    s.error = ""
+    resolution = (e.key or "").rsplit("-", 1)[-1]
+    if resolution not in UPSCALE_TARGETS:
+        return
+    try:
+        job = story_jobs.start_upscale(s.story_id, _owner(), resolution)
+    except Exception as exc:
+        s.error = story_jobs.friendly_error(exc)
+        return
+    _watch(job.id)
 
 
 def on_make_alt(e: me.ClickEvent):
@@ -2695,6 +2807,8 @@ def _timeline_handlers() -> timeline_view.TimelineHandlers:
             render_alt_film=_alt_film,
             on_make_alt=on_make_alt,
             alt_cost=_alt_cost,
+            on_upscale=on_upscale,
+            upscale_options=_upscale_options,
             render_versions_panel=versions_panel,
             render_progress_panel=progress_panel,
             media_map=_media_map,

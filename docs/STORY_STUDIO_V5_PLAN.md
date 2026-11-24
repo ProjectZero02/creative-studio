@@ -1,7 +1,15 @@
 # Story Studio v5 plan: one continuous take that works
 
-Status: plan for review (2026-11-24), audited once against the code. Nothing is
-built yet.
+Status: built (2026-11-24). M1 is PR #45, M2 #46, M3 #47 and M4 the PR after
+it. M1 was tested live (30 s, one take, no cuts); M2-M4 are tested with mocks
+only. Notes from building it:
+
+- The M2 reference A/B test was skipped: the M1 thread without pictures already
+  held continuity live.
+- A turn redo continues the Omni thread from the turn before. When the thread
+  is missing (old takes, Veo), it remakes the whole clip from its frame.
+- AI upscale (Export) is not tested live yet; its cost shown is an estimate
+  from the video rate.
 
 ## Goal
 

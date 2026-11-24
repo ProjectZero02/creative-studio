@@ -647,22 +647,113 @@ def build_timeline(
     asked = float(getattr(story, "target_seconds", 0) or 0)
     if getattr(story, "one_take", False) and 0 < asked < duration(tl):
         trim_to(tl, asked)
-    if music_uri:
-        total = duration(tl) or plan.total
-        length = music_length or total
-        track(tl, "music")["clips"].append(
-            {
-                "id": new_clip_id(),
-                "src": music_uri,
-                "start": 0.0,
-                "in": 0.0,
-                # Music shorter than the film loops when rendered.
-                "out": round(total, 3),
-                "src_max": round(max(total, length), 3),
-                "gain": 0.8,
-            }
+    tracks = getattr(story, "music_tracks", None)
+    if music_uri or (callable(tracks) and any(t.get("uri") for t in tracks())):
+        place_music(
+            tl,
+            story,
+            music_uri,
+            main_length=music_length,
+            total=duration(tl) or plan.total,
         )
     return normalize(tl)
+
+
+# Music clips overlap by this much where one track hands over to another
+# (each music clip fades in and out over 1 s when rendered).
+MUSIC_OVERLAP = 1.0
+
+
+def take_spans(tl: dict, story) -> list[tuple[float, float] | None]:
+    """(start, end) of each take on the timeline, or None for a take with
+    no clip placed."""
+    from services.story_models import take_groups
+
+    groups = take_groups(story)
+    take_of = {i: k for k, g in enumerate(groups) for i in g}
+    spans: dict[int, tuple[float, float]] = {}
+    for c in track(tl, "video")["clips"]:
+        k = take_of.get(int(c.get("scene", -1)))
+        if k is None:
+            continue
+        a = float(c.get("start", 0.0))
+        b = a + clip_length(c)
+        lo, hi = spans.get(k, (a, b))
+        spans[k] = (min(lo, a), max(hi, b))
+    return [spans.get(k) for k in range(len(groups))]
+
+
+def place_music(
+    tl: dict,
+    story,
+    main_uri: str,
+    *,
+    gain: float = 0.8,
+    main_length: float = 0.0,
+    total: float = 0.0,
+) -> dict:
+    """Lay the music track out: each music track under its takes, and the
+    film's own music (`main_uri`) wherever no track plays, picking up where
+    it would be had it played all along. Neighbours overlap by MUSIC_OVERLAP
+    so their fades cross. Replaces the music track's clips."""
+    total = total or duration(tl)
+    tracks_of = getattr(story, "music_tracks", None)
+    tracks = [t for t in (tracks_of() if callable(tracks_of) else []) if t.get("uri")]
+    half = MUSIC_OVERLAP / 2
+    clips: list[dict] = []
+    covered: list[tuple[float, float]] = []
+    spans = take_spans(tl, story) if tracks else []
+    for t in tracks:
+        ranges = [
+            spans[int(k)]
+            for k in t.get("takes") or []
+            if 0 <= int(k) < len(spans) and spans[int(k)]
+        ]
+        if not ranges:
+            continue
+        a, b = min(r[0] for r in ranges), max(r[1] for r in ranges)
+        covered.append((a, b))
+        start, end = max(0.0, a - half), min(total, b + half)
+        clips.append(
+            {
+                "id": new_clip_id(),
+                "src": t["uri"],
+                "start": round(start, 3),
+                "in": 0.0,
+                "out": round(end - start, 3),
+                "src_max": round(end - start, 3),
+                "gain": gain,
+            }
+        )
+    if main_uri:
+        gaps, at = [], 0.0
+        for a, b in sorted(covered):
+            if a > at:
+                gaps.append((at, a))
+            at = max(at, b)
+        if at < total:
+            gaps.append((at, total))
+        for a, b in gaps:
+            if b - a < half:
+                continue
+            start = max(0.0, a - (half if a > 0 else 0.0))
+            end = min(total, b + (half if b < total else 0.0))
+            clips.append(
+                {
+                    "id": new_clip_id(),
+                    "src": main_uri,
+                    "start": round(start, 3),
+                    # As if it had played from the start of the film. Music
+                    # shorter than the film loops when rendered.
+                    "in": round(start, 3),
+                    "out": round(end, 3),
+                    "src_max": round(max(total, main_length or total), 3),
+                    "gain": gain,
+                }
+            )
+    clips.sort(key=lambda c: c["start"])
+    track(tl, "music")["clips"] = clips
+    return tl
 
 
 # ---------------------------------------------------------------------------
@@ -1510,6 +1601,66 @@ def locate(timeline: dict, t: float) -> tuple[int, float]:
         if start <= t < start + length:
             return int(clip.get("scene", -1)), float(clip.get("in", 0)) + t - start
     return -1, 0.0
+
+
+# A turn this many dB louder or quieter than its take's other turns is
+# flagged, and a take whose quiet moments sit above NOISE_FLOOR_DB has
+# background noise (hiss, crowd) under the speech.
+SOUND_TURN_DB = 4.0
+NOISE_FLOOR_DB = -45.0
+
+
+def audio_levels(path: str, window: float = 0.05) -> list[float]:
+    """dBFS of each `window`-second slice of a file's sound (mono, 16 kHz);
+    [] when it has none."""
+    import numpy as np
+
+    result = subprocess.run(
+        [_ffmpeg(), "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000",
+         "-f", "s16le", "-"],
+        capture_output=True,
+        check=False,
+    )
+    data = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float64) / 32768.0
+    n = int(16000 * window)
+    if result.returncode != 0 or len(data) < n:
+        return []
+    frames = data[: len(data) // n * n].reshape(-1, n)
+    rms = np.sqrt(np.mean(frames**2, axis=1))
+    return [float(v) for v in 20 * np.log10(np.maximum(rms, 1e-6))]
+
+
+def sound_flags(path: str, turns: list[dict], window: float = 0.05) -> list[dict]:
+    """Sound checks of one spoken take: a turn whose speech is SOUND_TURN_DB
+    louder or quieter than the take's other turns ({"kind": "level", "turn",
+    "db"}), and background noise ({"kind": "noise", "db"}). Speech level is
+    the mean of a turn's loudest half (its pauses don't count)."""
+    levels = audio_levels(path, window)
+    if len(levels) < 20:
+        return []
+    flags: list[dict] = []
+
+    def speech(chunk: list[float]) -> float | None:
+        if len(chunk) < 10:
+            return None
+        top = sorted(chunk)[len(chunk) // 2 :]
+        return sum(top) / len(top)
+
+    per_turn = []
+    for t in turns or []:
+        a = int(float(t.get("start", 0)) / window)
+        b = a + int(float(t.get("seconds", 0)) / window)
+        per_turn.append(speech(levels[a:b]))
+    known = sorted(v for v in per_turn if v is not None)
+    if len(known) >= 2:
+        middle = known[len(known) // 2]
+        for k, v in enumerate(per_turn):
+            if v is not None and abs(v - middle) > SOUND_TURN_DB:
+                flags.append({"kind": "level", "turn": k, "db": round(v - middle, 1)})
+    floor = sorted(levels)[len(levels) // 10]
+    if floor > NOISE_FLOOR_DB:
+        flags.append({"kind": "noise", "db": round(floor, 1)})
+    return flags
 
 
 def take_cuts(

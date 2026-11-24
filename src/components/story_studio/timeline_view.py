@@ -54,6 +54,8 @@ class TimelineHandlers:
     render_alt_film: Callable
     on_make_alt: Callable
     alt_cost: Callable[[Story], float]
+    on_upscale: Callable
+    upscale_options: Callable[[Story], list[tuple[str, float]]]
     render_versions_panel: Callable
     render_progress_panel: Callable
     media_map: Callable[[Story], dict[str, str]]
@@ -129,21 +131,7 @@ def render_timeline(
                         )
                 if story.final_alt_uri:
                     h.render_alt_film(story)
-                elif any(sc.narration.strip() for sc in story.scenes):
-                    with me.box(classes="ss-alt-offer"):
-                        me.button(
-                            f"Make {story.alt_language} version",
-                            type="stroked",
-                            disabled=h.job_active_for("video", "clips", "translate"),
-                            on_click=h.on_make_alt,
-                            key="ss-make-alt",
-                        )
-                        me.text(
-                            f"About {h.alt_cost(story):.2f} USD",
-                            style=me.Style(
-                                font_size=13, color=me.theme_var("on-surface-variant")
-                            ),
-                        )
+                _film_offers(story, h)
             else:
                 with me.box(classes="ss-media ss-ar-169 ss-player-wait"):
                     if rendering:
@@ -227,6 +215,47 @@ def render_timeline(
                             style=me.Style(font_size=12),
                         )
         h.render_progress_panel("Rendering your film", ("video",))
+
+
+def _film_offers(story: Story, h: TimelineHandlers) -> None:
+    """A sharper version (AI upscale of every take) and the second-language
+    version, each with about what it costs."""
+    upscales = h.upscale_options(story)
+    if upscales:
+        with me.box(classes="ss-alt-offer"):
+            for res, _cost in upscales:
+                me.button(
+                    f"AI upscale to {res}",
+                    type="stroked",
+                    disabled=h.job_active_for("video", "clips"),
+                    on_click=h.on_upscale,
+                    key=f"ss-upscale-{res}",
+                )
+            me.text(
+                "About "
+                + " / ".join(f"{cost:.2f}" for _, cost in upscales)
+                + " USD",
+                style=me.Style(
+                    font_size=13, color=me.theme_var("on-surface-variant")
+                ),
+            )
+    if not story.final_alt_uri and any(
+        sc.narration.strip() for sc in story.scenes
+    ):
+        with me.box(classes="ss-alt-offer"):
+            me.button(
+                f"Make {story.alt_language} version",
+                type="stroked",
+                disabled=h.job_active_for("video", "clips", "translate"),
+                on_click=h.on_make_alt,
+                key="ss-make-alt",
+            )
+            me.text(
+                f"About {h.alt_cost(story):.2f} USD",
+                style=me.Style(
+                    font_size=13, color=me.theme_var("on-surface-variant")
+                ),
+            )
 
 
 def _render_edit_view(
@@ -477,6 +506,7 @@ def _export_menu(
                     key="ss-export-style",
                 )
         _export_actions(story, tl, opts, has_logo, busy, exporting, h)
+        _film_offers(story, h)
 
 
 def _export_actions(
