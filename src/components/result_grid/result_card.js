@@ -215,6 +215,8 @@ class GmResultCard extends LitElement {
     figcaption { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 12px; }
     .prompt {
       font-size: 14px; line-height: 1.4; color: var(--sys-on-surface, #15171c);
+      /* User text: reads in its own direction (Arabic prompt in English UI and vice versa). */
+      unicode-bidi: plaintext;
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     }
     .meta { font-size: 12px; color: var(--sys-on-surface-variant, #4b515d); }

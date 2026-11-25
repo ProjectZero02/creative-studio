@@ -129,12 +129,14 @@ class GmChipMenu extends LitElement {
     this._active = idx >= 0 ? idx : 0;
     this._open = true;
     this.updateComplete.then(() => {
-      // Keep the menu on screen: flip to the chip's right edge near the edge
-      // of a narrow window, so it never causes sideways scrolling.
+      // Keep the menu on screen: flip to the chip's other edge near the edge
+      // of a narrow window, so it never causes sideways scrolling. Either side:
+      // in Arabic the menu starts at the chip's right edge and grows left.
       const menu = this.renderRoot.querySelector('.menu');
-      if (menu && menu.getBoundingClientRect().right > window.innerWidth - 8) {
-        menu.style.left = 'auto';
-        menu.style.right = '0';
+      const box = menu && menu.getBoundingClientRect();
+      if (box && (box.right > window.innerWidth - 8 || box.left < 8)) {
+        menu.style.insetInlineStart = 'auto';
+        menu.style.insetInlineEnd = '0';
       }
       if (menu) this._placeVertically(menu);
       this._focusActive();
@@ -323,7 +325,8 @@ class GmChipMenu extends LitElement {
       align-items: center;
       gap: 6px;
       height: 36px;
-      padding: 0 10px 0 12px;
+      padding-block: 0;
+      padding-inline: 12px 10px;
       border-radius: 999px;
       border: 1px solid var(--gm-border, #e1e4ea);
       background: var(--sys-surface-container-low, #f4f5f8);
@@ -340,7 +343,7 @@ class GmChipMenu extends LitElement {
     .chip:hover:not([disabled]):not(.static) { background: var(--sys-surface-container-high, #e6e9ee); }
     .chip:focus-visible { outline: 2px solid var(--gm-focus, #1a5fd8); outline-offset: 2px; }
     .chip.open { border-color: var(--sys-primary, #1a5fd8); }
-    .chip.static { cursor: default; padding-right: 12px; }
+    .chip.static { cursor: default; padding-inline-end: 12px; }
     .chip.on {
       background: var(--sys-primary-container, #dce7fd);
       color: var(--sys-on-primary-container, #0a2a66);
@@ -351,7 +354,7 @@ class GmChipMenu extends LitElement {
     .menu {
       position: absolute;
       top: calc(100% + 6px);
-      left: 0;
+      inset-inline-start: 0;
       z-index: 1000;
       min-width: max(100%, 200px);
       max-height: min(360px, 60vh);
@@ -396,7 +399,7 @@ class GmChipMenu extends LitElement {
       to { opacity: 1; transform: none; }
     }
     @media (max-width: 600px) {
-      .chip { height: 44px; padding: 0 12px 0 14px; }
+      .chip { height: 44px; padding-block: 0; padding-inline: 14px 12px; }
       .opt { min-height: 44px; }
     }
     @media (prefers-reduced-motion: reduce) {
