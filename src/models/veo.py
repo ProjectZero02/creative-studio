@@ -83,6 +83,10 @@ def generate_video(
         "duration_seconds": request.duration_seconds,
         "generate_audio": getattr(request, "generate_audio", False),
     }
+    if request.video_input_gcs:
+        # An extension's duration_seconds is the new part only (the output
+        # is longer; see services/veo_service); only those seconds bill.
+        billing_units["is_extension"] = True
 
     with track_model_call(
         model_config.model_name, billing_units=billing_units, feature=feature

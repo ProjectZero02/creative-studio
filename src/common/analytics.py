@@ -102,6 +102,13 @@ def extract_usage_metadata(response: Any) -> dict[str, int]:
             if count and modality.upper() in ("AUDIO", "IMAGE", "VIDEO"):
                 key = f"{prefix}_{modality.lower()}_tokens"
                 out[key] = out.get(key, 0) + int(count)
+    # Grounding with Google Search bills per search query (Gemini 3+).
+    queries = 0
+    for candidate in getattr(response, "candidates", None) or []:
+        grounding = getattr(candidate, "grounding_metadata", None)
+        queries += len(getattr(grounding, "web_search_queries", None) or [])
+    if queries:
+        out["web_search_queries"] = queries
     return out
 
 

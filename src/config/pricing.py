@@ -32,6 +32,15 @@ How each kind of call is billed:
 * Gemini text and Live: per token, input and output, audio at its own rate.
 * Gemini TTS: per token (text in; audio out at 25 tokens a second).
 * Chirp 3 HD: per character. Imagen, Lyria, Virtual Try-On: per item.
+* Grounding with Google Search: per search query on Gemini 3+ ($14 per
+  1,000; 5,000 a month free, not counted), per grounded prompt on 2.x.
+* Veo extension: the docs do not say which seconds an extension bills
+  (checked 2026-11-25: the extend page says only that a clip "can be
+  extended by 7 seconds"). The new seconds are billed here, from the
+  request's duration.
+* Veo safety filter: the docs do not say whether filtered videos bill. The
+  videos that came back are billed and filtered ones are not (one developer
+  report agrees; Gemini's rule is that filtered responses bill input only).
 
 Estimates are not a bill: free tiers (Chirp's first 1M characters a month),
 discounts, committed use, credits and taxes are not included.
@@ -394,6 +403,12 @@ UNIT_MODELS: dict[str, tuple[Price, str]] = {
         "character",
     ),
 }
+
+# Grounding with Google Search. Gemini 3+: $14 per 1,000 search queries
+# (5,000 a month free, not counted here); Gemini 2.x: $35 per 1,000 grounded
+# prompts. Billed only when the answer returns sources.
+GROUNDING_PER_QUERY = Price(14 / 1000, "Grounding with Google Search")
+GROUNDING_PER_PROMPT_2X = Price(35 / 1000, "")
 
 TTS_AUDIO_TOKENS_PER_SECOND = 25
 TTS_CHARS_PER_TOKEN = 4  # text input tokens when the API does not report them
@@ -994,6 +1009,8 @@ def _token_estimate(
     for sku, amount in parts:
         quote.add(sku, amount / 1e6)
     cost = sum(amount for _, amount in parts) / 1e6
+    grounding = _grounding_cost(key, units, fetch, quote)
+    cost += grounding
     details = {
         **_source(quote),
         "pricing_basis": "reported tokens" if measured else "estimated tokens",
@@ -1008,7 +1025,24 @@ def _token_estimate(
         details["video_output_price_per_million"] = r_video_out
     if audio_out:
         details["audio_output_price_per_million"] = r_audio_out
+    if grounding:
+        details["grounding_cost"] = grounding
     return cost, details
+
+
+def _grounding_cost(key: str, units: dict, fetch: bool, quote: _Quote) -> float:
+    """Grounding with Google Search: per search query on Gemini 3 and later,
+    per grounded prompt on Gemini 2.x."""
+    queries = _n(units, "web_search_queries")
+    if not queries:
+        return 0.0
+    if key.startswith("gemini-2"):
+        price, quantity = GROUNDING_PER_PROMPT_2X, 1.0
+    else:
+        price, quantity = GROUNDING_PER_QUERY, queries
+    rate, label = _unit_rate(price, fetch, quote)
+    quote.add(label or "Grounding with Google Search (list)", quantity * rate)
+    return quantity * rate
 
 
 def estimate_details(
