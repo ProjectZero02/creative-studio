@@ -31,7 +31,8 @@ import typing
 
 import mesop as me
 
-from common.i18n import current_lang, t, tl
+from common.i18n import current_lang, tl, tx_lang
+from common.i18n_ar import live as live_ar
 from config.default import Default
 from services import page_forms
 
@@ -136,12 +137,37 @@ _STRING_KEYS = (
         "live.avatar_no_support",
         "This browser cannot play the avatar, so the call is voice only.",
     ),
+    ("toolRead", "live.tool_read", "Reading the page"),
+    ("toolFill", "live.tool_fill", "Filling the page"),
+    ("toolOpen", "live.tool_open", "Opening the page"),
+    ("toolWatch", "live.tool_watch", "Watching the film"),
+    ("toolFix", "live.tool_fix", "Starting the fix"),
+    ("signin", "live.signin", "Sign in again to use the voice agent."),
+    ("disabled", "live.disabled", "The voice agent is turned off on this server."),
+    ("failed", "live.failed", "Failed"),
 )
 
 
+def _string_for(lang: str, i18n_k: str, default: str) -> str:
+    """The keyed text (common.i18n), else the English default, translated by
+    its English text (common/i18n_ar/live.py). Never the raw key."""
+    text = tl(lang, i18n_k, default)
+    if text != default:
+        return text
+    if lang == "ar" and default in live_ar.AR_TEXT:
+        # The panel's own words first: a short English word ("Speaking")
+        # can mean something else on another page.
+        return live_ar.AR_TEXT[default]
+    return tx_lang(lang, text)
+
+
 def _strings() -> dict:
+    lang = current_lang()
     return {
-        **{out_k: t(i18n_k, default) for out_k, i18n_k, default in _STRING_KEYS},
+        **{
+            out_k: _string_for(lang, i18n_k, default)
+            for out_k, i18n_k, default in _STRING_KEYS
+        },
         # Empty when the server has no avatar: the switch is then hidden.
         "avatarName": Default.LIVE_AVATAR,
     }
@@ -150,11 +176,14 @@ def _strings() -> dict:
 @functools.lru_cache(maxsize=8)
 def _strings_json_for_lang(lang: str, avatar: str) -> str:
     payload = {
-        out_k: (tl(lang, i18n_k) or default)
+        out_k: _string_for(lang, i18n_k, default)
         for out_k, i18n_k, default in _STRING_KEYS
     }
     payload["avatarName"] = avatar
-    return json.dumps(payload)
+    # The site language, so the call tells the server (?lang=) which
+    # language to fall back to when the presenter's is not clear yet.
+    payload["lang"] = lang
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _strings_json() -> str:

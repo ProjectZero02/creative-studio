@@ -49,6 +49,7 @@ import copy
 import json
 from dataclasses import asdict, dataclass, field
 
+from common.lang_detect import lang_name, resolve_lang
 from services import story_jobs, story_versions
 from services import story_timeline as tlm
 from services.story_models import (
@@ -308,6 +309,9 @@ def fix_prompt(
 ) -> str:
     """The prompt that asks Gemini for the smallest fix (see module doc)."""
     timeline = tlm.normalize(story.timeline_json)
+    # The plan's summary, reason and question are read by the person: write
+    # them in the language of their request.
+    reader = lang_name(resolve_lang(request, story.idea))
     return f"""You are the editor of a short AI-generated film. The viewer
 describes what they dislike. Fix it with the SMALLEST changes that work,
 going back in the making of the film only as far as you must.
@@ -363,6 +367,7 @@ Changes, from the smallest step back to the largest:
 Use as few changes as you can (most often one, at most {MAX_CHANGES}); never
 regenerate what a free timeline cut fixes. Scene numbers start at 1. When the
 request is unclear, make no changes and ask one short "question" back.
+Write "summary", "reason", "question" and each change's "summary" in {reader}.
 Return only JSON: {{"summary": str (one plain sentence of what will change),
 "reason": str (why it fixes the request), "question": str, "changes": [{{
 "action": str, "summary": str, "scene": int, "narration": str, "visual": str,

@@ -977,6 +977,13 @@ def parse_pronunciations(text: str) -> list[dict[str, str]]:
     return out[:50]
 
 
+def speech_language(engine: str, text: str, code: str) -> str:
+    """See models.voice.speech_language."""
+    from models.voice import speech_language as pick
+
+    return pick(engine, text, code)
+
+
 def _voice_request(job: LiveJob):
     """The VoiceRequest for a job (model, voices, dialogue, direction...)."""
     from config.voice import (
@@ -996,7 +1003,9 @@ def _voice_request(job: LiveJob):
         engine=engine,
         text=job.prompt,
         voice=voice,
-        language_code=settings.get("language") or DEFAULT_LANGUAGE,
+        language_code=speech_language(
+            engine, job.prompt, settings.get("language") or DEFAULT_LANGUAGE
+        ),
         style=settings.get("style") or "natural",
         pace=settings.get("pace") or "normal",
         style_notes="" if is_chirp(engine) else settings.get("direction", ""),

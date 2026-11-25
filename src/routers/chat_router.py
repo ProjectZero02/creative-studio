@@ -57,6 +57,14 @@ def _caller(request: Request) -> str:
     return ANONYMOUS_USER_EMAIL
 
 
+def _lang(request: Request) -> str:
+    """The site language from the gm_lang cookie ("" when unset)."""
+    from common.i18n import LANG_COOKIE, normalize_lang
+
+    raw = request.cookies.get(LANG_COOKIE)
+    return normalize_lang(raw) if raw else ""
+
+
 def _same_site(request: Request) -> None:
     origin = request.headers.get("origin")
     if not origin:
@@ -83,15 +91,17 @@ async def chat(request: Request):
     body = body if isinstance(body, dict) else {}
     message = str(body.get("message") or "")
     if not body.get("stream"):
-        return await run_in_threadpool(studio_chat.send, owner, message)
+        return await run_in_threadpool(
+            studio_chat.send, owner, message, True, None, _lang(request)
+        )
     return StreamingResponse(
-        _stream(owner, message),
+        _stream(owner, message, _lang(request)),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 
-async def _stream(owner: str, message: str):
+async def _stream(owner: str, message: str, lang: str = ""):
     """Run the chat on a worker thread and yield its steps as they happen."""
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -100,7 +110,7 @@ async def _stream(owner: str, message: str):
         loop.call_soon_threadsafe(queue.put_nowait, step)
 
     def work() -> dict:
-        return studio_chat.send(owner, message, True, on_step)
+        return studio_chat.send(owner, message, True, on_step, lang)
 
     task = loop.run_in_executor(None, work)
     task.add_done_callback(lambda _f: loop.call_soon_threadsafe(queue.put_nowait, None))
@@ -174,6 +184,7 @@ async def make_job(request: Request) -> dict:
                 body.get("settings"),
                 str(body.get("source") or ""),
                 inputs=raw_inputs if isinstance(raw_inputs, dict) else None,
+                lang=_lang(request),
             )
         )
     except JobLimitError as exc:
@@ -198,7 +209,12 @@ async def film(request: Request) -> dict:
     body = body if isinstance(body, dict) else {}
     try:
         return await run_in_threadpool(
-            studio_chat.film_next, owner, str(body.get("story_id") or ""), bool(body.get("all"))
+            studio_chat.film_next,
+            owner,
+            str(body.get("story_id") or ""),
+            bool(body.get("all")),
+            None,
+            _lang(request),
         )
     except JobLimitError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc

@@ -77,7 +77,8 @@ def test_rewriter_attaches_image_parts_when_images_present():
         contents = mock_gen.call_args.kwargs["contents"]
         assert isinstance(contents, list)
         # First element is the text prompt, followed by image parts.
-        assert contents[0] == "REWRITE: a cat"
+        # The rewriter adds a line asking for the prompt's own language.
+        assert contents[0].startswith("REWRITE: a cat")
         parts = _image_parts(contents)
         assert len(parts) == 2
         uris = {p.file_data.file_uri for p in parts}

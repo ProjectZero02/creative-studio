@@ -23,6 +23,7 @@ from google.genai import types
 
 from common.analytics import get_logger, track_model_call
 from common.error_handling import GenerationError
+from common.lang_detect import english_for_model
 from config.default import Default
 from config.veo_models import get_veo_model_config
 from models.requests import APIReferenceImage, VideoGenerationRequest  # noqa: F401
@@ -117,7 +118,7 @@ def generate_video(
             gen_config_args["generate_audio"] = request.generate_audio
 
         if request.negative_prompt:
-            gen_config_args["negative_prompt"] = request.negative_prompt
+            gen_config_args["negative_prompt"] = english_for_model(request.negative_prompt)
 
         if request.seed is not None:
             gen_config_args["seed"] = request.seed
@@ -217,7 +218,8 @@ def generate_video(
         try:
             operation = client.models.generate_videos(
                 model=model_config.model_name,
-                prompt=request.prompt,
+                # Veo reads English prompts; the page keeps the person's words.
+                prompt=english_for_model(request.prompt),
                 config=gen_config,
                 image=image_input,
                 video=video_input,
@@ -289,7 +291,7 @@ def compose_videogen_request(
     if enable_prompt_rewriting:
         enhance_prompt = "yes"
 
-    instance = {"prompt": prompt}
+    instance = {"prompt": english_for_model(prompt)}
     if image_uri:
         instance["image"] = {"gcsUri": image_uri, "mimeType": "png"}
     if last_image_uri:

@@ -18,6 +18,7 @@ shell.py      Home, nav, header, account, settings, users, projects, library,
 studios.py    Image, Video, Voice and Music studios
 film.py       Film Studio
 workflows.py  Fashion, Interiors, Product 360, Brand kit and other demos
+live.py       Live voice agent panel, its offline replies, Home chat steps
 
 These files must not import common.i18n (it imports them).
 """
@@ -26,9 +27,9 @@ from __future__ import annotations
 
 import re
 
-from common.i18n_ar import film, shell, studios, workflows
+from common.i18n_ar import film, live, shell, studios, workflows
 
-GROUPS = (shell, studios, film, workflows)
+GROUPS = (shell, studios, film, workflows, live)
 
 
 def merged_text() -> dict[str, str]:
