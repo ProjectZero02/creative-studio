@@ -401,3 +401,103 @@ def test_set_build_makes_only_the_views_frames_use():
     assert story_jobs._set_work(st, [("character", ana.id, "profile")]) == [
         ("character", ana.id, "profile")
     ]
+
+
+# --- M4: a safe way forward from Setup -----------------------------------
+
+
+def test_setup_unchanged_offers_continue(page_env):
+    from components.story_studio.setup_view import setup_changes
+
+    st, store = page_env
+    story = _film(store, idea="A fox finds a lantern in the snow.", target_seconds=30)
+    page._open_story(story.id)
+    assert setup_changes(st, page._story()) == []
+    st.idea = "A fox finds a lantern in the rain."
+    assert setup_changes(st, page._story()) == ["idea"]
+
+
+def test_continue_goes_to_the_furthest_step(page_env):
+    st, store = page_env
+    story = _film(store, idea="A fox finds a lantern.")
+    _open(st, story)
+    st.step = "create"
+    page.on_continue(None)
+    assert st.step == "video"
+
+
+def test_a_film_opens_on_the_step_it_was_left_on(page_env):
+    st, store = page_env
+    story = _film(store, idea="A fox finds a lantern.", step="storyboard")
+    assert page.opening_step(story) == "storyboard"
+    story.step = "nonsense"
+    assert page.opening_step(story) == "video"
+
+
+def test_second_language_toggle_saves_without_a_breakdown(page_env):
+    st, store = page_env
+    story = _film(store, idea="A fox finds a lantern.")
+    page._open_story(story.id)
+    before = st.second_on
+    page.on_second_setup(None)
+    saved = store.get(story.id, OWNER)
+    assert saved.second_on is (not before)
+    assert saved.final_uri  # the film is kept
+
+
+def test_film_stale_names_the_reason():
+    from components.story_studio.timeline_view import film_stale
+
+    story = Story(owner=OWNER, final_uri="gs://b/f.mp4", music_prompt="calm")
+    story.final_parts_json = json.dumps(story.film_parts())
+    assert film_stale(story, None) == ""
+    story.music_prompt = "loud drums"
+    assert film_stale(story, None) == "Film out of date · Music changed"
+    assert film_stale(Story(owner=OWNER), None) == "No film yet"
+
+
+def test_an_old_film_is_not_the_new_one():
+    story = Story(owner=OWNER, final_uri="gs://b/f.mp4", music_prompt="calm")
+    story.final_parts_json = json.dumps(story.film_parts())
+    assert page._outputs_ready(story, "video")
+    story.music_prompt = "loud drums"
+    assert not page._outputs_ready(story, "video")
+
+
+# --- M5: progress and wording ---------------------------------------------
+
+
+def test_progress_moves_with_time_not_step_count():
+    tasks = [
+        {"kind": "voice", "status": "done"},
+        {"kind": "voice", "status": "done"},
+        {"kind": "clip", "status": "queued"},
+        {"kind": "library", "status": "queued"},
+    ]
+    # Two quick voice lines out of four steps is not half the film.
+    assert story_jobs.task_progress(tasks) < 0.2
+    for t in tasks:
+        t["status"] = "done"
+    assert story_jobs.task_progress(tasks) == 1.0
+
+
+def test_second_language_price_matches_the_speech():
+    from components.story_studio import setup_view
+
+    bp = {"cost": {"video": 12.0, "voice": 0.05}}
+    assert setup_view.alt_cost(bp, "on_camera") == 12.05
+    assert setup_view.alt_cost(bp, "narrator") == 0.05
+    assert setup_view.alt_cost(bp, "none") == 0.0
+
+
+def test_new_music_keeps_the_film_and_marks_it_out_of_date(page_env):
+    st, store = page_env
+    story = _film(store, music_prompt="calm piano")
+    story.final_parts_json = json.dumps(story.film_parts())
+    story = store.save(story, OWNER)
+    _open(st, story)
+    page._set_story_field("music_prompt", "stormy cello")
+    saved = store.get(story.id, OWNER)
+    assert saved.final_uri == "gs://b/film.mp4"
+    assert saved.music_uri == ""  # the new music still has to be made
+    assert saved.film_changes() == ["Music changed"]

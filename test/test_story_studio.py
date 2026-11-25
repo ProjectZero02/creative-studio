@@ -1099,8 +1099,8 @@ def test_arabic_clips_chain_from_each_other_with_continuity(local_store):
             ),
             OWNER,
         )
-        job = _run(story_jobs.start_video(s.id, OWNER))
-        assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+        job, tasks = _run_chain(story_jobs.start_video(s.id, OWNER))
+        assert job.status == "done", [(t.label, t.error) for t in tasks]
         s = local_store.get(s.id, OWNER)
         first_ar = s.scenes[0].clip_alt_uri
         # The Arabic scene 2 starts from the end of the Arabic scene 1, not

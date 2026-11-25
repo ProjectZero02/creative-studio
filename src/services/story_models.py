@@ -835,7 +835,8 @@ class Story:
             logo = ""
         return {
             "shots": key(
-                [(sc.clip_uri, round(sc.clip_in, 3), sc.transition) for sc in self.scenes]
+                [(sc.clip_uri, round(sc.clip_in, 3), sc.transition) for sc in self.scenes],
+                bool(getattr(self, "seamless_joins", True)),
             ),
             "lines": key(
                 self.voice_on,
@@ -847,7 +848,12 @@ class Story:
                 (self.music_prompt or "").strip() or default_music_prompt(self),
                 tracks,
             ),
-            "look": key(self.aspect_ratio, self.resolution, logo),
+            "look": key(
+                self.aspect_ratio,
+                self.resolution,
+                logo,
+                bool(getattr(self, "color_match", True)),
+            ),
         }
 
     def film_changes(self) -> list[str]:

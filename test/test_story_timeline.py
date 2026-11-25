@@ -822,3 +822,31 @@ def test_joins_between_frames_never_show_black(tmp_path):
     )
     dark, total = _dark_frames(out)
     assert total == round(17.93 * 24) and dark == 0
+
+
+def test_a_one_take_of_a_set_length_keeps_its_length():
+    # 30 s asked, 30 s made with a frozen first half second: keep all 30 s.
+    scenes = _scenes(1)
+    scenes[0].duration = 30
+    plan = build_stitch_plan(scenes, 0.0)
+    story = Story(scenes=scenes, one_take=True, target_seconds=30)
+    tl = T.build_timeline(
+        story,
+        plan,
+        width=1280,
+        height=720,
+        clip_lengths={0: 30.0},
+        clip_stills={0: (0.5, 0.4)},
+    )
+    assert T.duration(tl) == 30
+    # With 1 s to spare, the frozen frames come out of the spare second.
+    tl = T.build_timeline(
+        story,
+        plan,
+        width=1280,
+        height=720,
+        clip_lengths={0: 31.0},
+        clip_stills={0: (0.5, 0.4)},
+    )
+    (clip,) = T.track(tl, "video")["clips"]
+    assert clip["in"] == 0.5 and T.duration(tl) == 30

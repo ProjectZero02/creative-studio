@@ -439,6 +439,37 @@ def latest_job_for(story_id: str, owner: str) -> Job | None:
     return max(jobs, key=lambda j: j.created_at) if jobs else None
 
 
+# How long a step usually takes, relative to the others, so the progress bar
+# moves with time and not with the count of steps (a video clip is many
+# times a voice line). Steps not listed weigh 1.
+TASK_WEIGHT = {
+    "clip": 10.0,
+    "clip_alt": 10.0,
+    "frame": 3.0,
+    "set": 3.0,
+    "scenario": 3.0,
+    "music": 4.0,
+    "stitch": 2.0,
+    "stitch_alt": 2.0,
+    "library": 0.5,
+    "library_alt": 0.5,
+}
+
+
+def task_progress(tasks: list[dict]) -> float:
+    """0..1: finished and skipped steps by weight, a running one counted at
+    40 %. The one number the panel shows (bar and percent)."""
+    total = sum(TASK_WEIGHT.get(t["kind"], 1.0) for t in tasks) or 1.0
+    got = 0.0
+    for t in tasks:
+        w = TASK_WEIGHT.get(t["kind"], 1.0)
+        if t["status"] in (DONE, SKIPPED):
+            got += w
+        elif t["status"] == RUNNING:
+            got += 0.4 * w
+    return round(min(1.0, got / total), 3)
+
+
 def job_snapshot(job_id: str, owner: str) -> dict | None:
     """A JSON-safe copy of the job for the UI, with elapsed seconds."""
     job = get_job(job_id, owner)
@@ -455,8 +486,6 @@ def job_snapshot(job_id: str, owner: str) -> dict | None:
                 d["elapsed"] = 0.0
             tasks.append(d)
     done = sum(1 for t in tasks if t["status"] in (DONE, SKIPPED))
-    running = sum(1 for t in tasks if t["status"] == RUNNING)
-    total = max(1, len(tasks))
     return {
         "id": job.id,
         "kind": job.kind,
@@ -464,7 +493,7 @@ def job_snapshot(job_id: str, owner: str) -> dict | None:
         "status": job.status,
         "message": job.message,
         "elapsed": round((job.finished_at or now) - job.created_at, 1),
-        "progress": round((done + 0.4 * running) / total, 3),
+        "progress": task_progress(tasks),
         "done": done,
         "total": len(tasks),
         "tasks": tasks,

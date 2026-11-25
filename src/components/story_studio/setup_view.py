@@ -92,6 +92,7 @@ class SetupHandlers:
     on_ref_mention: Callable
     on_ref_remove: Callable
     on_generate_scenario: Callable
+    on_continue: Callable
     render_auto_note: Callable
     fmt_secs: Callable[[float], str]
 
@@ -139,6 +140,45 @@ def one_take_of(s: StoryState) -> bool:
     return story_director.is_one_take(text or "")
 
 
+def setup_changes(s: StoryState, story: Story | None) -> list[str]:
+    """What the Setup form changes that needs a new breakdown (the script,
+    the look or how the film is shot). [] means the film can carry on
+    as it is: Continue, not Write breakdown. Brand and the second-language
+    version are saved straight away and never need one."""
+    if story is None or not story.scenes:
+        return ["new"]
+    out: list[str] = []
+    mode = s.input_mode if s.input_mode in ("idea", "script") else "idea"
+    if mode != (story.input_mode or "idea"):
+        out.append("input")
+    elif mode == "script":
+        if (s.raw_script or "").strip() != (story.raw_script or "").strip():
+            out.append("script")
+    elif (s.idea or "").strip() != (story.idea or "").strip():
+        out.append("idea")
+    asked = story_director.parse_duration_text(s.duration_text)
+    if s.duration_text.strip() and asked and asked != story.target_seconds:
+        out.append("length")
+    if one_take_of(s) != bool(story.one_take):
+        out.append("shots")
+    if (s.speech_mode or "auto") != (story.speech_mode or "auto"):
+        out.append("speech")
+    preset = STYLE_BY_ID.get(s.style, {}).get("prompt", "")
+    style_prompt = "" if s.style_text in ("", preset) else s.style_text
+    if s.style != story.style or style_prompt != (story.style_prompt or ""):
+        out.append("style")
+    for field_name in ("language", "aspect_ratio", "video_model", "pacing"):
+        if (getattr(s, field_name) or "") != (getattr(story, field_name, "") or ""):
+            out.append(field_name)
+    if s.resolution and s.resolution != (story.resolution or ""):
+        out.append("resolution")
+    if story_refs.dump(story_refs.parse(s.refs_json)) != story_refs.dump(
+        story_refs.parse(story.references_json)
+    ):
+        out.append("references")
+    return out
+
+
 def blueprint(s: StoryState) -> dict:
     seconds, source = film_seconds(s)
     bp = story_director.setup_blueprint(
@@ -154,11 +194,15 @@ def blueprint(s: StoryState) -> dict:
     return bp
 
 
-def alt_cost(bp: dict) -> float:
+def alt_cost(bp: dict, speech_mode: str = "auto") -> float:
     """What a second-language film adds: on-camera speech is in the video,
-    so it is a second full render; voiceover is a new narration track."""
+    so it is a second full render; voiceover is a new narration track. A
+    film with no speech needs no second version at all."""
     cost = bp["cost"]
-    return round(cost["video"] + cost["voice"], 2)
+    if speech_mode == "none":
+        return 0.0
+    video = 0.0 if speech_mode == "narrator" else cost["video"]
+    return round(video + cost["voice"], 2)
 
 
 def picked_brand(s: StoryState) -> dict | None:
@@ -476,7 +520,7 @@ def render_setup(
             alt = other_language(s.language)
             with me.box(classes="ss-second-row"):
                 me.slide_toggle(
-                    f"{alt} version (+{_money(alt_cost(bp))})",
+                    f"{alt} version (+{_money(alt_cost(bp, s.speech_mode))})",
                     checked=s.second_on,
                     on_change=h.on_second,
                     key="ss-second",
@@ -572,7 +616,7 @@ def _blueprint_card(
         with me.box(classes="ss-bp-cost"):
             with me.box(classes="ss-bp-row"):
                 _t("Estimated cost", "ss-muted")
-                extra = alt_cost(bp) if s.second_on else 0.0
+                extra = alt_cost(bp, s.speech_mode) if s.second_on else 0.0
                 me.text(
                     _money(round(cost["total"] + extra, 2)),
                     style=me.Style(font_weight=700),
@@ -591,15 +635,27 @@ def _blueprint_card(
             )
 
         with me.box(classes="ss-summary-cta"):
-            if story and story.scenes and not busy:
-                _t("Replaces the current shots.", "ss-muted ss-small")
             text = (s.raw_script if s.input_mode == "script" else s.idea) or ""
-            me.button(
-                "Writing…" if busy and s.job_kind == "scenario" else "Write breakdown",
-                type="flat",
-                color="primary",
-                disabled=busy or len(text.strip()) < 8,
-                on_click=h.on_generate_scenario,
-                key="ss-generate",
-            )
-            _t("Next: the set and start frames are made for you.", "ss-muted ss-small")
+            if not setup_changes(s, story):
+                # Nothing here changes the film: carry on where it was.
+                me.button(
+                    "Continue",
+                    type="flat",
+                    color="primary",
+                    disabled=busy,
+                    on_click=h.on_continue,
+                    key="ss-continue",
+                )
+            else:
+                if story and story.scenes and not busy:
+                    _t("Replaces the current shots.", "ss-muted ss-small")
+                me.button(
+                    "Writing…"
+                    if busy and s.job_kind == "scenario"
+                    else "Write breakdown",
+                    type="flat",
+                    color="primary",
+                    disabled=busy or len(text.strip()) < 8,
+                    on_click=h.on_generate_scenario,
+                    key="ss-generate",
+                )

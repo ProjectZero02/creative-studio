@@ -369,7 +369,7 @@ def _open_story(story_id: str) -> None:
     _set_story(story)
     _load_form(story)
     _load_set(story, force=True)
-    s.step = furthest_step(story)
+    s.step = opening_step(story)
     s.desk_tab = "set" if s.step == "set" else "shots"
     s.seq_filter = "all"
     s.animatic_index = 0
@@ -509,6 +509,8 @@ def on_step_select(e: me.WebEvent):
     s = me.state(StoryState)
     target = (e.value or {}).get("id", "")
     story = _story()
+    if target and target != s.step:
+        s.notice = ""  # a notice belongs to the step it was shown on
     if target == "stories":
         _refresh_stories()
         s.step = "stories"
@@ -520,7 +522,28 @@ def on_step_select(e: me.WebEvent):
             s.desk_tab = "set" if target == "set" else "shots"
         if target == "set":
             _load_set(story)
+    _remember_step(story, s.step)
     yield
+
+
+def _remember_step(story: Story | None, step: str) -> None:
+    """Keep the step the user is on, so opening the film again returns there."""
+    if story is None or step == "stories" or story.step == step:
+        return
+    try:
+        story_jobs.mutate_story(story.id, _owner(), lambda st: setattr(st, "step", step))
+    except StoryAccessError:
+        return
+    story.step = step
+
+
+def opening_step(story: Story) -> str:
+    """The step a film opens on: the one the user was on last, while it can
+    still be opened, else the furthest one it has reached."""
+    last = story.step or ""
+    if last in STEP_IDS and last != "stories" and can_enter(last, story):
+        return last
+    return furthest_step(story)
 
 
 # Ticks to keep checking the store after a job's snapshot goes missing.
@@ -535,10 +558,19 @@ def _outputs_ready(story: Story | None, kind: str) -> bool:
         return frames_ready(story)
     if kind == "clips":
         return bool(story.scenes) and any(sc.clip_uri for sc in story.scenes)
-    if kind in ("video", "export", "fix"):
+    if kind == "video":
+        # An old film is not the new one: wait until it matches the story.
+        return bool(story.final_uri) and not story.film_changes()
+    if kind in ("export", "fix"):
         return bool(story.final_uri)
     if kind == "scenario":
         return bool(story.scenes)
+    if kind == "set":
+        return bool(story.set_id)
+    if kind == "music":
+        return bool(story.music_uri)
+    if kind == "translate":
+        return bool(story.scenes) and not story.needs_translation()
     return False
 
 
@@ -586,6 +618,10 @@ def on_tick(e: me.WebEvent):
         story = _reload_story()
         if snap["kind"] in ("set", "scenario"):
             _load_set(story)
+            # The set this job built is the story's set from now on, as after
+            # a reload (a set made from references stays shown as them).
+            if story is not None and story.set_id and s.refs_json == "[]":
+                s.create_set_id = story.set_id
     if snap["status"] != "running" and snap.get("next_job"):
         # Setup's guided flow: the breakdown is written, then the set is
         # built and the frames paint. The page follows each job to its step.
@@ -607,7 +643,7 @@ def on_tick(e: me.WebEvent):
             and story.final_uri
             and snap["status"] == "done"
         ):
-            s.notice = "Your film is ready. Edit it below, then export."
+            s.notice = "Your film is ready."
         elif snap["kind"] == "export" and snap["status"] == "done":
             s.notice = "Export finished. The new video is saved to your library."
         elif snap["kind"] == "music" and snap["status"] == "done":
@@ -684,7 +720,7 @@ def progress_panel(title: str, kinds: tuple[str, ...]) -> None:
             with me.box(classes="ss-panel-title"):
                 me.text(title, style=me.Style(font_weight=600, font_size=16))
                 me.text(
-                    f"{job['done']} of {job['total']} steps done · {_fmt_secs(job['elapsed'])} elapsed",
+                    f"{pct}% · {_fmt_secs(job['elapsed'])}",
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
@@ -730,7 +766,11 @@ def progress_panel(title: str, kinds: tuple[str, ...]) -> None:
                             )
                     me.text(
                         f"{STATUS_LABEL.get(t['status'], t['status'])}"
-                        + (f" · {_fmt_secs(t['elapsed'])}" if t["elapsed"] else ""),
+                        + (
+                            f" · {_fmt_secs(t['elapsed'])}"
+                            if t["elapsed"] >= 1
+                            else ""
+                        ),
                         style=me.Style(
                             font_size=13,
                             color=me.theme_var("on-surface-variant"),
@@ -836,7 +876,7 @@ def story_card(r: dict) -> None:
             )
             with me.box(classes="ss-meta"):
                 _chip(style["chip"])
-                me.text(f"{r['scenes']} shots", style=me.Style(font_size=13))
+                me.text(f"{r['scenes']} shot" + ("" if r["scenes"] == 1 else "s"), style=me.Style(font_size=13))
                 me.text("·", style=me.Style(font_size=13))
                 me.text(
                     f"Updated {_fmt_date(r['updated'])}", style=me.Style(font_size=13)
@@ -978,6 +1018,7 @@ def _setup_handlers() -> setup_view.SetupHandlers:
             on_ref_mention=on_ref_mention,
             on_ref_remove=on_ref_remove,
             on_generate_scenario=on_generate_scenario,
+            on_continue=on_continue,
             render_auto_note=_auto_note,
             fmt_secs=_fmt_secs,
         )
@@ -1200,6 +1241,23 @@ def on_language(e: me.SelectSelectionChangeEvent):
 def on_second_setup(e: me.SlideToggleChangeEvent):
     s = me.state(StoryState)
     s.second_on = not s.second_on
+    story = _story()
+    if story is not None and story.scenes:
+        # Needs no new breakdown: saved straight away.
+        on = s.second_on
+
+        def apply(st: Story) -> None:
+            st.second_on = on
+
+        _edit(apply)
+
+
+def on_continue(e: me.ClickEvent):
+    """Setup changed nothing the film is made from: carry on where it was."""
+    s = me.state(StoryState)
+    story = _story()
+    if story is not None:
+        s.step = furthest_step(story)
 
 
 def on_aspect(e: me.SelectSelectionChangeEvent):
@@ -1258,6 +1316,15 @@ def on_brand(e: me.SelectSelectionChangeEvent):
         me.navigate("/brand", query_params={"id": "new"})
         return
     s.brand_id = e.value if e.value else "none"
+    story = _story()
+    if story is not None and story.scenes:
+        # The brand only changes the logo and colours: saved straight away.
+        brand_id, brand_json = _brand_snapshot(_owner(), s.brand_id)
+
+        def apply(st: Story) -> None:
+            st.brand_id, st.brand_json = brand_id, brand_json
+
+        _edit(apply)
 
 
 # -- References (services/story_refs.py) --
@@ -1429,6 +1496,8 @@ def on_generate_scenario(e: me.ClickEvent):
         if s.story_id:
             story_jobs.ensure_free(s.story_id)
         existing = get_store().get(s.story_id, owner) if s.story_id else None
+        old_set = existing.set_id if existing else ""
+        old_refs = existing.references_json if existing else ""
         story = existing or Story()
         if story.idea != idea:
             story.brief = ""  # a new idea: Gemini writes a new brief
@@ -1465,7 +1534,12 @@ def on_generate_scenario(e: me.ClickEvent):
         picked = s.create_set_id
         if picked and get_set_store().get(picked, owner) is None:
             picked = ""
-        story.set_id = _story_set_for(owner, story, refs, picked)
+        if refs and old_set and not picked and story.references_json == old_refs:
+            # Same references as last time: keep the set made from them
+            # instead of saving another copy.
+            story.set_id = old_set
+        else:
+            story.set_id = _story_set_for(owner, story, refs, picked)
         story.set_version = 0
         story.cast_json = ""
         story.scenes = []
@@ -2582,7 +2656,9 @@ def _set_story_field(field: str, value) -> None:
             "voice_name",
             "seamless_joins",
             "color_match",
-        ):
+        ) and not story.final_parts_json:
+            # Films made before part keys cannot say what changed: start over.
+            # Newer ones stay and show "Film out of date" (film_changes).
             story.clear_films()
         if field == "continuity":
             story.clear_films()
@@ -2836,6 +2912,7 @@ def _timeline_handlers() -> timeline_view.TimelineHandlers:
             job_dict=_job,
             scene_task=_scene_task,
             fmt_secs=_fmt_secs,
+            on_render=on_render,
         )
     return _TIMELINE_HANDLERS
 

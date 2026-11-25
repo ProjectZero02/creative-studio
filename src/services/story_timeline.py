@@ -773,6 +773,9 @@ def build_timeline(
     vids, voices = track(tl, "video")["clips"], track(tl, "voice")["clips"]
     voice_uris = voice_uris or {}
     segs = list(plan.segments)
+    exact_length = bool(getattr(story, "one_take", False)) and (
+        float(getattr(story, "target_seconds", 0) or 0) > 0
+    )
     for k, seg in enumerate(segs):
         i = seg.index
         next_seg = segs[k + 1] if k + 1 < len(segs) else None
@@ -791,6 +794,12 @@ def build_timeline(
             head = 0.0
         if exiting_seamless:
             tail = 0.0
+        if exact_length:
+            # A one-take film of a set length keeps that length: frozen
+            # frames are trimmed only from the clip's spare time.
+            spare = max(0.0, src_len - cin - float(seg.duration))
+            head = min(head, spare)
+            tail = min(tail, spare - head)
         cin = max(cin, min(head, src_len - MIN_KEEP))
         usable = max(cin + 0.1, src_len - tail)
         # The measured clip may be a little shorter than planned.

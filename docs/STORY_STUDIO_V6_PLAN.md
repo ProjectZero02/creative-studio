@@ -1,6 +1,6 @@
 # Story Studio v6 plan: do only the work the film needs
 
-Status: plan (2026-11-25). Fixes all 29 problems in
+Status: built on branch `story-v6` (2026-11-25); see Status at the end. Fixes all 29 problems in
 [STORY_STUDIO_PROBLEMS.md](STORY_STUDIO_PROBLEMS.md) (numbers below are from that file).
 
 ## Goal
@@ -177,12 +177,40 @@ close each in its PR. Follow-up issue: job state in Firestore (#23 full fix).
 
 ## References
 
-Patterns from editors that only re-render what changed (from product
-knowledge; re-check before building M4's banner):
+Patterns from editors that only re-render what changed:
 
-- Adobe Premiere Pro: the timeline render bar marks only changed sections as
-  needing a render; smart rendering copies untouched clips without re-encoding.
-- DaVinci Resolve: render cache keeps finished segments until their inputs
-  change.
-- Final Cut Pro: background rendering redoes only the changed parts, and
-  undoing a change brings back the cached render.
+- Adobe Premiere Pro: the timeline render bar marks only the changed sections
+  as needing a render (red/yellow), and smart rendering copies untouched clips
+  without re-encoding. Our per-part film key and the "Film out of date ·
+  Music changed" line follow this.
+- DaVinci Resolve: Smart Cache keeps finished segments until their inputs
+  change. Our voice cache (keyed by line, voice, language, set and model) and
+  the reused set follow this.
+- Final Cut Pro: background rendering redoes only the changed parts.
+
+Progress:
+
+- Harrison et al., "Rethinking the Progress Bar" (UIST 2007): people judge a
+  bar by how it moves over time, so a bar that jumps on quick steps and stalls
+  on slow ones feels slower. The bar is now weighted by how long each step
+  usually takes (a video clip weighs 10, a voice line 1), and the step count
+  that disagreed with it is gone.
+- Nielsen Norman Group, progress indicators: show one percent-done number for
+  long tasks, next to what is happening now.
+
+## Status
+
+Built: M1 to M5, with tests in `test/test_story_v6.py` and
+`test/test_story_timeline.py`.
+
+Not done, on purpose:
+
+- M3.2 (scene count from the story instead of "exactly N"): changes the
+  breakdown prompt for every film; needs its own live check.
+- Voice samples are still made for every character in a set build.
+- Music still has a quick bar in Edit as well as its own step; both edit the
+  same setting, so they never disagree.
+- #24a (export defaulting to 360p for a 720p film) only happens in mock mode,
+  where mock clips are 640x360. Real clips are the film's own size.
+- #23 full fix (job state in Firestore) stays a follow-up; the page no longer
+  treats an old film as the new one when a job is lost.

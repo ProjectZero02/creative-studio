@@ -63,6 +63,15 @@ JOIN_PILLS: list[tuple[str, str]] = [
 ]
 BUSY_KINDS = ("scenario", "scene", "set", "storyboard", "clips", "video", "translate")
 
+# The job panel on each desk step: (title, job kinds it shows).
+VIEW_PANEL = {
+    "scenario": ("Writing the breakdown", ("scenario", "scene")),
+    "set": ("Building the set", ("set",)),
+    "storyboard": ("Painting frames", ("storyboard", "scene")),
+    "editor": ("Working on your film", ("clips", "video", "translate")),
+    "music": ("Making music", ("music",)),
+}
+
 
 @dataclass
 class DeskHandlers:
@@ -216,7 +225,8 @@ def render_desk(
                         key="ss-desk-next",
                     )
 
-        h.render_progress_panel("Working on your film", BUSY_KINDS)
+        # Each step shows only the work that step makes.
+        h.render_progress_panel(*VIEW_PANEL.get(view, VIEW_PANEL["editor"]))
 
         if view == "set":
             _render_set_tab(s, story, story_set, busy_any, is_demo, h)
@@ -310,17 +320,19 @@ def _render_turns(story: Story, sel: int, busy: bool, h: DeskHandlers) -> None:
     per turn."""
     sc = story.scenes[sel]
     rows = turn_rows(story, sel)
+    cuts = sc.cuts() if sc.clip_uri else []
+    flags = sc.sound() if sc.clip_uri else []
+    if len(rows) < 2 and not cuts and not flags:
+        return  # one clean turn: nothing to show or redo here
     with me.box(classes="ss-card ss-turns"):
         me.text("Turns", style=me.Style(font_size=16, font_weight=600))
-        cuts = sc.cuts()
-        if sc.clip_uri:
+        if cuts:
             _t(
-                f"Cut found in turn {int(cuts[0].get('turn', 0)) + 1}"
-                if cuts
-                else "No cuts found",
-                "ss-turn-status" + (" is-bad" if cuts else ""),
+                f"Cut found in turn {int(cuts[0].get('turn', 0)) + 1}",
+                "ss-turn-status is-bad",
             )
-            for flag in sc.sound():
+        if sc.clip_uri:
+            for flag in flags:
                 _t(sound_note(flag), "ss-sound-flag")
         if len(rows) < 2:
             # One turn: "Redo clip" makes it again.
