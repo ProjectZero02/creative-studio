@@ -29,7 +29,7 @@ import wave
 
 from google.cloud import texttospeech
 
-from common.analytics import get_logger, track_model_call
+from common.analytics import extract_usage_metadata, get_logger, track_model_call
 from config.default import Default
 from config.gemini_tts import gemini_tts_api
 
@@ -166,7 +166,10 @@ def _synthesize_generate_content(
     voice_name: str,
     language_code: str,
     speakers: list[tuple[str, str]] | None,
+    usage: dict | None = None,
 ) -> bytes:
+    """Speech via generate_content. `usage` (if given) gets the measured
+    token counts of the response."""
     # Imported here so Cloud-TTS-only callers don't build a Gemini client.
     from google.genai import types  # pylint: disable=import-outside-toplevel
 
@@ -213,6 +216,8 @@ def _synthesize_generate_content(
             http_options=types.HttpOptions(timeout=TTS_TIMEOUT_MS),
         ),
     )
+    if usage is not None:
+        usage.update(extract_usage_metadata(response))
     for candidate in response.candidates or []:
         for part in (candidate.content.parts if candidate.content else None) or []:
             if part.inline_data and part.inline_data.data:
@@ -243,8 +248,9 @@ def synthesize_speech(
 
     """
     speakers = [(n.strip(), v) for n, v in (speakers or []) if n.strip()] or None
+    # The style prompt is input too, on both APIs.
     billing_units = {
-        "characters_synthesized": len(text) if text else 0,
+        "characters_synthesized": len(text or "") + len((prompt or "").strip()),
         "voice_name": ",".join(v for _, v in speakers) if speakers else voice_name,
         "language_code": language_code,
     }
@@ -261,6 +267,7 @@ def synthesize_speech(
                 voice_name,
                 language_code,
                 speakers,
+                usage=ctx["billing_units"],  # measured tokens
             )
         else:
             audio_content = _synthesize_cloud_tts(
