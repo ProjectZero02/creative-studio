@@ -111,22 +111,19 @@ def test_model_call_log_is_structured_on_cloud_run(monkeypatch):
 
 
 
-def test_story_jobs_record_owner_page_and_feature(monkeypatch):
+def test_story_job_model_call_records_owner_page_and_feature(monkeypatch, recorded):
     from services import story_jobs
 
     monkeypatch.setattr(story_jobs, "_finish", lambda job: None)
-    seen = {}
     done = threading.Event()
 
     def target(_job):
-        seen.update(
-            owner=usage.current_owner(),
-            page=usage.current_page(),
-            feature=usage.current_feature(),
-        )
-        done.set()
+        try:
+            _model_call()  # a mocked model call inside the job thread
+        finally:
+            done.set()
 
     job = story_jobs.Job(id="j1", owner="o@x", story_id="s1", kind="build")
     story_jobs._spawn(job, target)
     assert done.wait(5)
-    assert seen == {"owner": "o@x", "page": "story", "feature": "story"}
+    assert recorded == [{"owner": "o@x", "page": "story", "feature": "story"}]
