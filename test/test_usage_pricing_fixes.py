@@ -119,7 +119,10 @@ def test_omni_input_units_for_edit_and_images():
 def test_omni_input_units_for_chat_history(monkeypatch):
     from models import omni
 
-    monkeypatch.setattr(omni, "download_from_gcs", lambda uri: b"video")
+    def no_download(uri):
+        raise AssertionError("follow-up turns must not download earlier clips")
+
+    monkeypatch.setattr(omni, "download_from_gcs", no_download)
     history = [
         {"type": "user_input", "content": [{"type": "text", "text": "a"}]},
         {"type": "model_output", "content": [{"type": "video", "gcs_uri": "gs://b/1.mp4"}]},
@@ -127,10 +130,11 @@ def test_omni_input_units_for_chat_history(monkeypatch):
         {"type": "model_output", "content": [{"type": "video", "gcs_uri": "gs://b/3.mp4"}]},
     ]
     req = _omni("t2v", previous_interaction_id="i1", chat_history_json=json.dumps(history))
-    # Only the last two clips are sent inline; older ones become text.
+    # No clip is sent (only previous_interaction_id), but the API re-reads
+    # all three earlier clips from the thread.
     assert omni.input_media_units(omni._build_input_parts(req), req) == {
         "input_image_count": 0,
-        "input_video_seconds": 8,
+        "input_video_seconds": 12,
     }
 
 
