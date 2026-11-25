@@ -38,6 +38,7 @@ import contextlib
 import contextvars
 import datetime
 import logging
+import os
 import queue
 import signal
 import threading
@@ -120,6 +121,43 @@ def in_context(fn):
     return run
 
 
+def current_env() -> str:
+    """The Cloud Run service name, or "local"."""
+    return os.environ.get("K_SERVICE") or "local"
+
+
+def place_for(model: str) -> tuple[str, str]:
+    """(project, location) a model is called in, from the app config. Call
+    sites that use another client set ``ctx["project"]``/``ctx["location"]``
+    in track_model_call instead."""
+    try:
+        from config.default import Default  # pylint: disable=import-outside-toplevel
+
+        cfg = Default()
+    except Exception:
+        return "", ""
+    name = (model or "").lower()
+    project = cfg.PROJECT_ID or ""
+    if "omni" in name:
+        return cfg.OMNI_PROJECT_ID or project, cfg.OMNI_LOCATION
+    if "veo" in name:
+        return cfg.VEO_PROJECT_ID or project, cfg.VEO_LOCATION
+    if "lyria" in name:
+        location = "global" if "lyria-3" in name else cfg.LYRIA_LOCATION
+        return cfg.LYRIA_PROJECT_ID or project, location
+    if "live" in name:
+        return project, cfg.LIVE_LOCATION
+    if "tts" in name or "chirp" in name:
+        return project, cfg.GEMINI_TTS_LOCATION
+    if "try-on" in name or "vto" in name:
+        return project, cfg.VTO_LOCATION
+    if "image" in name or "banana" in name:
+        return project, cfg.GEMINI_IMAGE_GEN_LOCATION
+    if "imagen" in name:
+        return project, cfg.LOCATION
+    return project, cfg.GEMINI_LOCATION
+
+
 def event(
     owner: str,
     model: str,
@@ -131,14 +169,24 @@ def event(
     feature: str = "",
     event_id: str = "",
     fetch: bool = True,
+    env: str = "",
+    project: str = "",
+    location: str = "",
 ) -> dict:
     at = at if at is not None else time.time()
     units = units or {}
+    if not (project and location):
+        default_project, default_location = place_for(model)
+        project = project or default_project
+        location = location or default_location
     cost, pricing_details = pricing.estimate_details(
-        model, units, status, at=at, fetch=fetch
+        model, units, status, at=at, fetch=fetch, location=location
     )
     return {
         "event_id": event_id or new_event_id(),
+        "env": env or current_env(),
+        "project": project or "",
+        "location": location or "",
         "owner": owner or "unknown",
         "model": model or "unknown",
         "kind": pricing.kind_of(model, units),
@@ -288,6 +336,8 @@ def record(
     task: str = "",
     feature: str = "",
     event_id: str = "",
+    project: str = "",
+    location: str = "",
 ) -> None:
     """Queue one model call; the writer thread prices and stores it."""
     if not owner or owner == "unknown":
@@ -298,11 +348,14 @@ def record(
             "model": model,
             "status": status,
             "units": dict(units or {}),
-            "page": page,
+            "page": page or current_page(),
             "task": task,
-            "feature": feature,
+            "feature": feature or current_feature(),
             "at": time.time(),
             "event_id": event_id or new_event_id(),
+            "env": current_env(),
+            "project": project,
+            "location": location,
         }
     )
     _ensure_writer()

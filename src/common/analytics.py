@@ -199,6 +199,8 @@ def log_model_call(
     error: dict = None,
     count_usage: bool = True,
     event_id: str = "",
+    project: str = "",
+    location: str = "",
 ):
     """Logs a generative model call event. `count_usage=False` logs it
     without a usage event (a wrapper whose real model call is logged on
@@ -261,6 +263,8 @@ def log_model_call(
             str((details or {}).get("task") or ""),
             feature=feature,
             event_id=event_id,
+            project=project,
+            location=location,
         )
     except Exception:  # usage is best effort
         analytics_logger.warning("usage: could not queue a usage event", exc_info=True)
@@ -339,6 +343,8 @@ def track_model_call(
             pipeline_id=ctx["pipeline_id"],
             count_usage=count_usage,
             event_id=ctx["event_id"],
+            project=str(ctx.get("project") or ""),
+            location=str(ctx.get("location") or ""),
         )
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
@@ -362,5 +368,7 @@ def track_model_call(
             error=err_dict,
             count_usage=count_usage,
             event_id=ctx["event_id"],
+            project=str(ctx.get("project") or ""),
+            location=str(ctx.get("location") or ""),
         )
         raise  # Re-raise the exception after logging
