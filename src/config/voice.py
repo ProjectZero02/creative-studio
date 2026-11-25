@@ -78,6 +78,48 @@ DEFAULT_DIALOGUE = (
 )
 
 
+# Arabic site: Arabic samples and an Arabic voice language. Speaker names stay
+# "Host"/"Guest" (they are the speaker ids sent to the model).
+DEFAULT_SCRIPT_AR = (
+    "أهلًا بكم في الاستوديو. في الدقيقتين القادمتين سأريكم كيف يتحول نص واحد "
+    "إلى تعليق صوتي طبيعي بأكثر من مئة لغة."
+)
+DEFAULT_DIALOGUE_AR = (
+    "Host: أهلًا بكم من جديد في البرنامج! نتحدث اليوم عن أصوات الذكاء الاصطناعي.\n"
+    "Guest: شكرًا على الاستضافة. بصراحة، تبدو أقرب إلى صوت الإنسان كل شهر."
+)
+# The sample scripts count as empty: the page may swap them, never the user's own.
+SAMPLE_SCRIPTS = (
+    DEFAULT_SCRIPT,
+    DEFAULT_DIALOGUE,
+    DEFAULT_SCRIPT_AR,
+    DEFAULT_DIALOGUE_AR,
+)
+
+
+def sample_script(lang: str, dialogue: bool) -> str:
+    """The sample script for the site language."""
+    if lang == "ar":
+        return DEFAULT_DIALOGUE_AR if dialogue else DEFAULT_SCRIPT_AR
+    return DEFAULT_DIALOGUE if dialogue else DEFAULT_SCRIPT
+
+
+def is_arabic_language(code: str) -> bool:
+    """True for an Arabic language code (ar-EG, ar-XA, ar-001...)."""
+    return code.lower().startswith("ar")
+
+
+def default_language(engine: str, lang: str = "en") -> str:
+    """The voice language to start with: on the Arabic site the engine's
+    first Arabic code (ar-EG for Gemini TTS, ar-XA for Chirp 3 HD, the same
+    pick as models.voice.speech_language), else en-US."""
+    if lang == "ar":
+        for code in languages_for(engine).values():
+            if is_arabic_language(code):
+                return code
+    return DEFAULT_LANGUAGE
+
+
 def is_chirp(engine: str) -> bool:
     """True when the engine is Chirp 3 HD (Cloud Text-to-Speech voices)."""
     return engine == CHIRP_ENGINE

@@ -21,7 +21,7 @@ from components.styles import (
     PAGE_BACKGROUND_PADDING_STYLE,
     PAGE_BACKGROUND_STYLE,
 )
-from components.lang_manager.lang_manager import lang_manager, on_lang_load
+from components.lang_manager.lang_manager import lang_manager, on_lang_load, page_title
 from components.theme_manager.theme_manager import theme_manager
 from components.user_menu.user_menu import user_menu_bar
 from components.live_agent.live_agent import live_agent_bridge
@@ -59,6 +59,7 @@ def page_scaffold(page_name: str):
         current=app_state.lang,
         chosen=app_state.lang_chosen,
         on_lang_load=on_lang_load,
+        title=page_title(page_name, app_state.lang),
     )
 
     # Voice agent: one invisible bridge per page; the call itself lives in the

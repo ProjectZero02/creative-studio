@@ -1468,7 +1468,7 @@ class GmHomeChat extends LitElement {
       return html`<div class="stage"><video class="media" src=${url} controls playsinline preload="metadata"></video></div>`;
     }
     if (mime.startsWith('audio/') || j.kind === 'music' || j.kind === 'voice') {
-      return html`<gm-audio class="audio" .src=${url} .label=${j.handle || ''} ?speed=${j.kind === 'voice'}></gm-audio>`;
+      return html`<gm-audio class="audio" .src=${url} .label=${j.handle || ''} .strings=${this._s} ?speed=${j.kind === 'voice'}></gm-audio>`;
     }
     if (mime.startsWith('image/') || j.kind === 'image') {
       return html`<div class="stage"><a href=${url} target="_blank" rel="noopener"><img class="media" src=${url} alt=${j.prompt || j.handle} loading="lazy"></a></div>`;
@@ -1566,7 +1566,10 @@ class GmHomeChat extends LitElement {
       if (i === at) return j.status === 'failed' ? 'bad' : 'now';
       return '';
     };
-    const time = secs ? `${secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min ${secs % 60} s`}${running && typical ? ` · ${(S.about || 'about {n} s').replace('{n}', typical)}` : ''}` : '';
+    const dur = secs < 60
+      ? (S.secs || '{n} s').replace('{n}', secs)
+      : (S.mins || '{m} min {n} s').replace('{m}', Math.floor(secs / 60)).replace('{n}', secs % 60);
+    const time = secs ? `${dur}${running && typical ? ` · ${(S.about || 'about {n} s').replace('{n}', typical)}` : ''}` : '';
     const shownTasks = tasks.slice(0, 8);
     const doneTasks = tasks.filter((t) => t.status === 'done').length;
     return html`<details class="prog ${running ? 'live' : ''}" ?open=${running || j.status === 'failed'}>
@@ -1613,7 +1616,7 @@ class GmHomeChat extends LitElement {
         @mouseenter=${(e) => e.target.play().catch(() => {})} @mouseleave=${(e) => e.target.pause()}></video>`;
     }
     if (mime.startsWith('audio/') || j.kind === 'music' || j.kind === 'voice') {
-      return html`<gm-audio class="pj-audio" compact .src=${url} .label=${j.handle || ""}></gm-audio>`;
+      return html`<gm-audio class="pj-audio" compact .src=${url} .label=${j.handle || ""} .strings=${this._s}></gm-audio>`;
     }
     if (mime.startsWith('image/') || j.kind === 'image') {
       return html`<img class="pj-img" src=${url} alt=${j.prompt || j.handle} loading="lazy" draggable="false">`;
@@ -1854,10 +1857,12 @@ class GmHomeChat extends LitElement {
     textarea {
       display: block; width: 100%; min-width: 0; height: 52px; min-height: 52px; max-height: 220px; resize: none; border: 0; outline: 0;
       background: transparent; color: inherit; font: inherit; font-size: 17px; line-height: 24px; padding: 14px 14px 4px;
+      /* Typed text reads in its own direction (dir="auto"), in either UI language. */
+      unicode-bidi: plaintext;
     }
     textarea::placeholder { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9; }
     .tools { flex: none; display: flex; align-items: center; gap: 6px; }
-    .row { padding: 0 2px 0 0; }
+    .row { padding-block: 0; padding-inline: 0 2px; }
     button { font: inherit; }
     .icon, .send {
       width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0;
@@ -1907,7 +1912,8 @@ class GmHomeChat extends LitElement {
     .msg { display: flex; gap: 12px; align-items: flex-start; }
     .msg.user { justify-content: flex-end; }
     .bubble {
-      max-width: 78%; padding: 12px 16px; border-radius: 20px 20px 6px 20px; font-size: 16px; line-height: 1.5; white-space: pre-wrap;
+      max-width: 78%; padding: 12px 16px; border-radius: 20px; border-end-end-radius: 6px; font-size: 16px; line-height: 1.5; white-space: pre-wrap;
+      unicode-bidi: plaintext;
       background: var(--sys-secondary-container, #dfe6f7); color: var(--sys-on-secondary-container, #1b2433);
     }
     .avatar {
@@ -2110,7 +2116,7 @@ class GmHomeChat extends LitElement {
     /* Ghost text: a copy of the text behind the box, with the suggestion. */
     .ta-wrap { position: relative; }
     .gh, .ta-wrap textarea { font: inherit; font-size: 17px; line-height: 24px; padding: 14px 14px 4px; letter-spacing: normal; }
-    .gh { position: absolute; inset: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; color: transparent; }
+    .gh { position: absolute; inset: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; color: transparent; unicode-bidi: plaintext; }
     .ta-wrap textarea { position: relative; z-index: 1; }
     .g-typed { color: transparent; }
     .g-sug { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.75; }

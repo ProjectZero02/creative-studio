@@ -4,6 +4,7 @@ Component that shows the generated 3D view (card 2 on the Interiors page).
 
 import mesop as me
 
+from common.i18n import tx
 from common.utils import create_display_url
 from components.demo_flow.demo_flow import cicon, ctext, demo_card_head
 
@@ -23,7 +24,7 @@ def generated_3d_view(storyboard: dict, is_generating: bool):
             ctext("Building the 3D view…", "gm-demo-drop-text")
         elif uri:
             with me.box(classes="gm-demo-img"):
-                me.image(src=create_display_url(uri), alt="Generated 3D view")
+                me.image(src=create_display_url(uri), alt=tx("Generated 3D view"))
         else:
             cicon("view_in_ar", "gm-demo-drop-icon")
             ctext("Your 3D view appears here", "gm-demo-drop-text")

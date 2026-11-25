@@ -26,6 +26,7 @@ import mesop as me
 
 import models.shop_the_look_workflow as shop_the_look_workflow
 import pages.vto as vto
+from common.i18n import tx
 from common.mock_generation import (
     fake_wait,
     is_mock_uri,
@@ -44,6 +45,7 @@ from components.demo_flow.demo_flow import (
     demo_steps,
     demo_upload_button,
     mode_switch_value,
+    tx_ctx,
 )
 from components.edit_button.edit_button import edit_button
 from components.generation_progress.generation_progress import (
@@ -226,14 +228,18 @@ def _try_on_flow():
 
     with me.box(classes="gm-demo-pair"):
         with me.box(classes="gm-demo-card"):
-            _card_head("1", "Model", "A full-body photo works best.")
+            _card_head(
+                "1", tx_ctx("Model", "Model (person)"), "A full-body photo works best."
+            )
             with me.box(classes="gm-demo-drop gm-demo-drop-tall"):
                 if vs.is_generating_person_image:
                     me.progress_spinner(diameter=36)
                     ctext("Creating a virtual model…", "gm-demo-drop-text")
                 elif vs.person_image_display_url:
                     with me.box(classes="gm-demo-img"):
-                        me.image(src=vs.person_image_display_url, alt="Chosen model")
+                        me.image(
+                            src=vs.person_image_display_url, alt=tx("Chosen model")
+                        )
                 else:
                     cicon("person_outline", "gm-demo-drop-icon")
                     ctext("No model yet", "gm-demo-drop-text")
@@ -263,7 +269,7 @@ def _try_on_flow():
                 if vs.product_image_display_url:
                     with me.box(classes="gm-demo-img"):
                         me.image(
-                            src=vs.product_image_display_url, alt="Chosen clothing"
+                            src=vs.product_image_display_url, alt=tx("Chosen clothing")
                         )
                 else:
                     cicon("checkroom", "gm-demo-drop-icon")
@@ -347,7 +353,7 @@ def _try_on_flow():
         work_stage=1,
         aspect="3:4",
         count=vs.vto_sample_count,
-        media_label="try-on",
+        media_label=tx("try-on"),
         on_retry=on_progress_retry,
         on_dismiss=on_progress_dismiss,
     )
@@ -376,7 +382,7 @@ def _try_on_results(vs: vto.PageState):
                 critique = critiques.get(uri)
                 with me.box(classes="gm-demo-result"):
                     with me.box(classes="gm-demo-result-img"):
-                        me.image(src=url, alt=f"Try-on result {i + 1}")
+                        me.image(src=url, alt=tx(f"Try-on result {i + 1}"))
                     if uri and not is_mock_uri(uri):
                         with me.box(classes="gm-demo-result-actions"):
                             edit_button(gcs_uri=uri)
@@ -609,8 +615,9 @@ def _shop_the_look_flow():
                 me.icon("cloud_off")
             ctext("The catalog isn't available", "gm-demo-card-title")
             ctext(
-                "Shop the look reads its models and clothing from Firestore. "
-                + state.look_error,
+                tx("Shop the look reads its models and clothing from Firestore.")
+                + " "
+                + tx(state.look_error),
                 "gm-demo-muted",
             )
             me.button("Try again", on_click=on_retry_look_load, type="stroked")

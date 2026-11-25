@@ -59,10 +59,10 @@ class MediaDetailViewer extends LitElement {
       background-color: rgba(0, 0, 0, 0.8);
     }
     .prev-btn {
-      left: 10px;
+      inset-inline-start: 10px;
     }
     .next-btn {
-      right: 10px;
+      inset-inline-end: 10px;
     }
     .sources {
       display: flex;
@@ -138,6 +138,8 @@ class MediaDetailViewer extends LitElement {
       veoClickEvent: { type: String },
       omniClickEvent: { type: String },
       extendClickEvent: { type: String },
+      lang: { type: String },
+      stringsJson: { type: String }, // English -> shown text, from Python
       _currentIndex: { state: true },
       _activeTab: { state: true },
     };
@@ -155,8 +157,19 @@ class MediaDetailViewer extends LitElement {
     this.veoClickEvent = "";
     this.omniClickEvent = "";
     this.extendClickEvent = "";
+    this.lang = "";
+    this.stringsJson = "{}";
     this._currentIndex = 0;
     this._activeTab = "details";
+  }
+
+  /** The shown text for an English string (English when no translation). */
+  _t(english) {
+    try {
+      return (JSON.parse(this.stringsJson || "{}") || {})[english] || english;
+    } catch (_) {
+      return english;
+    }
   }
 
   _navigate(direction) {
@@ -179,7 +192,7 @@ class MediaDetailViewer extends LitElement {
     const container = this.shadowRoot.getElementById('gif-container');
 
     const header = document.createElement('h5');
-    header.textContent = 'Converted GIF';
+    header.textContent = this._t('Converted GIF');
 
     container.appendChild(header);
 
@@ -211,10 +224,11 @@ class MediaDetailViewer extends LitElement {
         assetHtml = html`<audio .src=${currentUrl} controls autoplay></audio>`;
         break;
       default:
-        assetHtml = html`<p>Unknown or unsupported media type.</p>`;
+        assetHtml = html`<p>${this._t('Unknown or unsupported media type.')}</p>`;
     }
 
     const showButtons = urls.length > 1;
+    const rtl = this.lang === "ar";
 
     return html`
       ${assetHtml}
@@ -224,15 +238,17 @@ class MediaDetailViewer extends LitElement {
               class="carousel-btn prev-btn"
               @click=${() => this._navigate(-1)}
               ?disabled=${this._currentIndex === 0}
+              aria-label=${this._t('Previous')}
             >
-              &#x2039;
+              ${rtl ? html`&#x203A;` : html`&#x2039;`}
             </button>
             <button
               class="carousel-btn next-btn"
               @click=${() => this._navigate(1)}
               ?disabled=${this._currentIndex === urls.length - 1}
+              aria-label=${this._t('Next')}
             >
-              &#x203A;
+              ${rtl ? html`&#x2039;` : html`&#x203A;`}
             </button>
           `
         : ""}
@@ -245,7 +261,7 @@ class MediaDetailViewer extends LitElement {
       if (sourceUrls.length === 0) return html``;
 
       return html`
-        <h3>Sources</h3>
+        <h3>${this._t('Sources')}</h3>
         <div class="sources">
           ${sourceUrls.map((url) => url.endsWith(".mp4") ? html`<video width="160" height="120" .src=${url} controls autoplay></video>` : html`<img .src=${url} />`)}
         </div>
@@ -263,22 +279,22 @@ class MediaDetailViewer extends LitElement {
         let formattedValue = value;
         if (key === 'Generation Time (s)' && value !== null && !isNaN(parseFloat(value))) {
           console.log("is number:", !isNaN(parseFloat(value)));
-          formattedValue = Math.round(value * 100) / 100 + ' seconds';
+          formattedValue = Math.round(value * 100) / 100 + ' ' + this._t('seconds');
         } else if (key === 'Timestamp' && value) {
           const date = new Date(value);
           if (!isNaN(date)) {
-            formattedValue = date.toLocaleString();
+            formattedValue = this.lang === 'ar' ? date.toLocaleString('ar') : date.toLocaleString();
           }
         }
         return html`
           <div class="metadata-item">
-            <span class="metadata-key">${key}</span>
+            <span class="metadata-key">${this._t(key)}</span>
             <span class="metadata-value">${formattedValue}</span>
           </div>
         `;
       });
     } catch (e) {
-      return html`<p>Could not parse metadata.</p>`;
+      return html`<p>${this._t('Could not parse metadata.')}</p>`;
     }
   }
 
@@ -287,13 +303,13 @@ class MediaDetailViewer extends LitElement {
       const rawMetadata = JSON.parse(this.rawMetadataJson);
       return html`
         <div class="metadata-item">
-          <span class="metadata-key">Firestore Document ID</span>
+          <span class="metadata-key">${this._t('Firestore Document ID')}</span>
           <span class="metadata-value">${this.id}</span>
         </div>
         <pre class="raw-json"><code>${JSON.stringify(rawMetadata, null, 2)}</code></pre>
       `;
     } catch (e) {
-      return html`<p>Could not parse raw metadata.</p>`;
+      return html`<p>${this._t('Could not parse raw metadata.')}</p>`;
     }
   }
 
@@ -312,7 +328,7 @@ class MediaDetailViewer extends LitElement {
 
     const handleCopyLink = () => {
       if (!navigator.clipboard) {
-        alert("Copy to clipboard is only available on secure (HTTPS) sites.");
+        alert(this._t("Copy to clipboard is only available on secure (HTTPS) sites."));
         return;
       }
       const url = new URL(window.location.href);
@@ -322,7 +338,7 @@ class MediaDetailViewer extends LitElement {
         const copyButton = this.shadowRoot.querySelector("#copy-link-btn");
         if (copyButton) {
           const originalText = copyButton.textContent;
-          copyButton.textContent = "Copied!";
+          copyButton.textContent = this._t("Copied!");
           setTimeout(() => {
             copyButton.textContent = originalText;
           }, 2000);
@@ -333,11 +349,11 @@ class MediaDetailViewer extends LitElement {
     return html`
       <div class="actions">
         <download-button .url=${gcsUri} .filename=${gcsPath.split("/").pop()}></download-button>
-        ${isImage ? html`<mwc-button outlined @click=${() => this._dispatch(this.editClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'edit'}></svg-icon>Edit</mwc-button>` : ""}
+        ${isImage ? html`<mwc-button outlined @click=${() => this._dispatch(this.editClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'edit'}></svg-icon>${this._t('Edit')}</mwc-button>` : ""}
         ${isImage ? html`<mwc-button outlined @click=${() => this._dispatch(this.veoClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'movie_filter'}></svg-icon>Veo</mwc-button>` : ""}
         ${isImage ? html`<mwc-button outlined @click=${() => this._dispatch(this.omniClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'spark'}></svg-icon>Omni</mwc-button>` : ""}
-        ${isVideo ? html`<mwc-button outlined @click=${() => this._dispatch(this.extendClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'movie_filter'}></svg-icon>Extend</mwc-button>` : ""}
-        <mwc-button id="copy-link-btn" outlined @click=${handleCopyLink}><svg-icon slot="icon" .iconName=${'link'}></svg-icon>Copy Link</mwc-button>
+        ${isVideo ? html`<mwc-button outlined @click=${() => this._dispatch(this.extendClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'movie_filter'}></svg-icon>${this._t('Extend')}</mwc-button>` : ""}
+        <mwc-button id="copy-link-btn" outlined @click=${handleCopyLink}><svg-icon slot="icon" .iconName=${'link'}></svg-icon>${this._t('Copy Link')}</mwc-button>
         ${this.mediaType === 'video' ? html`<convert-to-gif-button .url=${gcsUri} @conversion-complete=${this._handleGifConversion}></convert-to-gif-button>` : ""}
       </div>
     `;
@@ -354,8 +370,8 @@ class MediaDetailViewer extends LitElement {
         </div>
         <div class="right-column">
           <div class="tabs">
-            <div class="tab" ?active=${this._activeTab === 'details'} @click=${() => { this._activeTab = 'details' }}>Details</div>
-            <div class="tab" ?active=${this._activeTab === 'raw'} @click=${() => { this._activeTab = 'raw' }}>Raw</div>
+            <div class="tab" ?active=${this._activeTab === 'details'} @click=${() => { this._activeTab = 'details' }}>${this._t('Details')}</div>
+            <div class="tab" ?active=${this._activeTab === 'raw'} @click=${() => { this._activeTab = 'raw' }}>${this._t('Raw')}</div>
           </div>
           ${this._activeTab === 'details' ? this.renderMetadata() : this.renderRawMetadata()}
         </div>

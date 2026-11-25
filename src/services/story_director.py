@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from common.lang_detect import lang_name, resolve_lang
 from config.default import Default
 from services.story_models import (
     CAMERA_IDS,
@@ -1000,6 +1001,10 @@ def outline_prompt(story: Story, story_set: object | None = None) -> str:
         )
 
     seq_targets = ", ".join(str(c) for c in bp["shots_per_sequence"])
+    # The brief and sequence titles/summaries are shown to the person to read
+    # and edit: write them in the language of their idea. visual_grammar
+    # stays English (it only feeds the image and video prompts).
+    reader = lang_name(resolve_lang(story.idea))
     return f"""Plan a {bp["estimated_seconds"]}-second film broken into exactly {bp["sequence_count"]} sequences
 and {bp["scene_count"]} total shots (~{bp["duration"]}s each, pacing: {getattr(story, "pacing", "cinematic")}).
 Visual style: {style["label"]}.
@@ -1007,10 +1012,10 @@ Visual style: {style["label"]}.
 Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}{_main_character(story, story_set)}
 
 Rules:
-- Write the title in {story.language}; write brief, visual_grammar, and sequence summaries in English.
+- Write the title in {story.language}; write brief and sequence titles and summaries in {reader}; write visual_grammar in English.
 - "visual_grammar": one concise paragraph locking the global lens family, focal length feel, lighting ratio, contrast, and color grade for the whole film.
 {_speech_rules(story)}{cast_block}{_brand_rule(story)}
-- "brief": 3 to 5 vivid sentences in English covering subject, audience, tone, dramatic arc, and look.
+- "brief": 3 to 5 vivid sentences in {reader} covering subject, audience, tone, dramatic arc, and look.
 - "sequences": exactly {bp["sequence_count"]} sequences in narrative order (Act -> Sequence), with shot counts matching [{seq_targets}] and summing to {bp["scene_count"]}.
   For each sequence provide "key" ("seq1", "seq2", ...), "title", "summary", "location" (location key or name), "cast" (character keys or names), "target_seconds", and "shot_count".
 

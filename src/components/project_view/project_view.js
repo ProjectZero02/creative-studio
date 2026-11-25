@@ -341,6 +341,7 @@ class GmProjectView extends LitElement {
     :host { display: block; font-family: var(--gm-font, 'Google Sans', system-ui, sans-serif); color: var(--sys-on-surface, #1f1f1f); }
     * { box-sizing: border-box; }
     button, input { font: inherit; color: inherit; }
+    input { unicode-bidi: plaintext; }
     svg { fill: currentColor; flex: none; }
     a { color: inherit; text-decoration: none; }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

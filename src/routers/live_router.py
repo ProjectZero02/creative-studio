@@ -83,6 +83,33 @@ async def _owner(ws: WebSocket) -> str | None:
     return ANONYMOUS_USER_EMAIL
 
 
+def _site_lang(ws: WebSocket) -> str:
+    """The site language: ?lang= from the call button, else the gm_lang
+    cookie, else English. The presenter's own language still wins: the
+    model is told to answer in the language they use."""
+    from common.i18n import LANG_COOKIE, normalize_lang
+
+    raw = ws.query_params.get("lang") or ws.cookies.get(LANG_COOKIE) or ""
+    return normalize_lang(raw)
+
+
+# What the server says itself, per site language.
+_SAY = {
+    "en": {
+        "offline": "Offline mode: type a request, for example 'image of a red fox in snow'.",
+        "no_live": "Could not reach Gemini Live. Switched to typed offline mode.",
+    },
+    "ar": {
+        "offline": "الوضع دون اتصال: اكتب طلبك، مثلاً «اصنع صورة لثعلب أحمر في الثلج».",
+        "no_live": "تعذّر الوصول إلى Gemini Live. تم التحويل إلى الوضع الكتابي دون اتصال.",
+    },
+}
+
+
+def _say(lang: str, key: str) -> str:
+    return _SAY.get(lang, _SAY["en"])[key]
+
+
 def _genai_client():
     """Vertex AI with the app's own credentials (ADC / Cloud Run service account)."""
     from google import genai
@@ -94,12 +121,16 @@ def _genai_client():
 
 
 def _live_config(
-    resume_handle: str | None, mode: str = FILL, avatar: str = ""
+    resume_handle: str | None, mode: str = FILL, avatar: str = "", lang: str = "en"
 ) -> types.LiveConnectConfig:
     # Voice only (the default), or a Live Avatar: the model then answers with
     # a fragmented MP4 (H.264 video with the AAC voice inside). The avatar
     # gets its own voice, else it speaks with a default that may not match it.
     voice = Default.LIVE_AVATAR_VOICE if avatar else Default.LIVE_VOICE
+    # No language_code: the native-audio Live models pick the spoken
+    # language from the conversation (and a fixed code would force Arabic on
+    # an English speaker, or the reverse). The system prompt carries the
+    # language rule and the site language as the fallback.
     output = {
         "response_modalities": ["VIDEO" if avatar else "AUDIO"],
         "speech_config": types.SpeechConfig(
@@ -114,7 +145,7 @@ def _live_config(
         **output,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
-        system_instruction=system_prompt(mode),
+        system_instruction=system_prompt(mode, lang),
         tools=tool_declarations(Default.LIVE_ASYNC_TOOLS, mode),
         session_resumption=types.SessionResumptionConfig(handle=resume_handle),
         context_window_compression=types.ContextWindowCompressionConfig(
@@ -126,8 +157,16 @@ def _live_config(
 class _Bridge:
     """One browser call."""
 
-    def __init__(self, ws: WebSocket, owner: str, mode: str = FILL, avatar: str = ""):
+    def __init__(
+        self,
+        ws: WebSocket,
+        owner: str,
+        mode: str = FILL,
+        avatar: str = "",
+        lang: str = "en",
+    ):
         self.ws = ws
+        self.lang = lang
         self.owner = owner
         self.mode = mode
         self.avatar = avatar
@@ -135,7 +174,7 @@ class _Bridge:
         self._send_lock = asyncio.Lock()
         self.inbox: asyncio.Queue = asyncio.Queue()
         self.job_events: asyncio.Queue = asyncio.Queue()
-        self.call = LiveCall(owner, self.send, self.jobs, mode)
+        self.call = LiveCall(owner, self.send, self.jobs, mode, lang=lang)
         self.closed = False
         self.session = None
         self.session_gen = 0
@@ -290,11 +329,9 @@ class _Bridge:
         # The typed agent only knows the job tools (also after a failed Live
         # connection in a Fill only call).
         self.call.mode = ACT
-        self.agent = ScriptedAgent(self.call, say)
+        self.agent = ScriptedAgent(self.call, say, lang=self.lang)
         await self.status("offline", reason)
-        await say(
-            "Offline mode: type a request, for example 'image of a red fox in snow'."
-        )
+        await say(_say(self.lang, "offline"))
         while True:
             message = await self.inbox.get()
             kind = message.get("type")
@@ -317,7 +354,10 @@ class _Bridge:
             reconnect = False
             await self.status("connecting")
             async with client.aio.live.connect(
-                model=model, config=_live_config(self.resume_handle, self.mode, self.avatar)
+                model=model,
+                config=_live_config(
+                    self.resume_handle, self.mode, self.avatar, self.lang
+                ),
             ) as session:
                 self.session = session
                 await self.status("live")
@@ -501,7 +541,7 @@ async def live_socket(ws: WebSocket):
     offline = Default.LIVE_AGENT_OFFLINE or wants_offline
     mode = ACT if offline or ws.query_params.get("agent") == ACT else FILL
     avatar = Default.LIVE_AVATAR if ws.query_params.get("avatar") == "1" else ""
-    bridge = _Bridge(ws, owner, mode, avatar)
+    bridge = _Bridge(ws, owner, mode, avatar, _site_lang(ws))
     unsubscribe = bridge.jobs.subscribe(owner, bridge.on_job)
     reader = asyncio.create_task(bridge.read_browser())
     jobs_task = asyncio.create_task(bridge.pump_jobs())
@@ -520,7 +560,7 @@ async def live_socket(ws: WebSocket):
                     await bridge.send(
                         {
                             "type": "error",
-                            "message": "Could not reach Gemini Live. Switched to typed offline mode.",
+                            "message": _say(bridge.lang, "no_live"),
                         }
                     )
                     await bridge.run_offline(str(exc)[:200])

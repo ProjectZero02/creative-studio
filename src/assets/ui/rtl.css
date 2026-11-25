@@ -18,7 +18,9 @@
  * RTL / Arabic. Loaded on every page (common/ui_theme.py SHARED_STYLESHEETS),
  * before studio.css. <html lang/dir> is set by components/lang_manager.
  *
- * Every rule here starts with html[dir="rtl"] (or :lang(ar)), which is more
+ * Every rule here starts with html[dir="rtl"] (or :lang(ar)), except the
+ * typed-text direction rule (dir="auto" behaviour, the same in English). That
+ * prefix is more
  * specific than studio.css's "html body ..." rules, so load order does not
  * matter. Rules that override an !important or an inline Mesop style use
  * !important themselves.
@@ -129,29 +131,66 @@ html:lang(ar) body .gm-nav [style*="text-transform: uppercase"] {
   html[dir="rtl"] body .mat-drawer:has(.gm-nav-collapsed) { border-left: 0 !important; }
 }
 
-/* ---------- Studio chrome ---------- */
-html[dir="rtl"] body .gm-composer-actions { margin-left: 0; margin-right: auto; }
-html[dir="rtl"] body .gm-attach-remove { right: auto; left: 2px; }
-html[dir="rtl"] body .gm-segmented .mat-button-toggle + .mat-button-toggle { border-right: none !important; }
-html[dir="rtl"] body .gm-demo-bar-actions { margin-left: 0; margin-right: auto; }
-html[dir="rtl"] body .gm-step + .gm-step::before { margin-left: 0; }
-@media (max-width: 600px) {
-  html[dir="rtl"] body .gm-composer { padding: 14px 14px 10px 12px; }
-}
+/* ---------- Studio chrome ----------
+   Composer, chips, attachments, segmented controls and demo bars use logical
+   properties in their own sheets (margin-inline-start, inset-inline-end, ...),
+   so they mirror without rules here. */
 
-/* Text inputs: the caret and placeholder start on the right. Prompts that
-   contain Latin text still lay out correctly (dir="auto" behaviour). */
+/* ---------- Typed text and user content ----------
+   Typed text reads in its own direction, in either UI language (what
+   dir="auto" does): Arabic typed in the English UI starts on the right, an
+   English prompt in the Arabic UI keeps its period at the end. Placeholders
+   follow the page direction. */
+html body textarea,
+html body input:not([type]),
+html body input[type="text"],
+html body input[type="search"],
+html body [contenteditable="true"] { unicode-bidi: plaintext; }
 html[dir="rtl"] body textarea,
-html[dir="rtl"] body input { text-align: start; unicode-bidi: plaintext; }
+html[dir="rtl"] body input { text-align: start; }
 /* Email addresses and URLs stay left-to-right. */
 html[dir="rtl"] body input[type="email"],
 html[dir="rtl"] body input[type="url"] { direction: ltr; text-align: right; }
 
-/* Material form fields and selects: label and arrow on the mirrored side. */
+/* Things people wrote (prompts, chat and film titles, brand names) inside the
+   Arabic UI: keep their own direction, isolated from the labels around them. */
+html[dir="rtl"] body .gm-history-item,
+html[dir="rtl"] body .gm-brand-card-text > *,
+html[dir="rtl"] body .ss-story-body > :first-child { unicode-bidi: plaintext; }
+
+/* ---------- Numbers inside Arabic text ----------
+   "<$0.01", "1,234" and "0:03 / 0:20" are left-to-right runs: in a
+   right-to-left cell "<" would mirror to ">" and jump to the other end. Usage
+   values keep their own direction and stay right-aligned. */
+html[dir="rtl"] body .gm-usage-stat-value,
+html[dir="rtl"] body .gm-usage-table > :not(.gm-usage-model):not(.gm-usage-th) { direction: ltr; text-align: right; }
+/* The Type column (5-column table) is translated text: keep it right to left. */
+html[dir="rtl"] body .gm-usage-table:not(.gm-usage-table-3) > :nth-child(5n + 2) { direction: rtl; }
+html[dir="rtl"] body .gm-usage-model { unicode-bidi: plaintext; text-align: right; }
+html[dir="rtl"] body .gm-ltr { direction: ltr; unicode-bidi: isolate; }
+
+/* ---------- Material form fields ----------
+   Label and arrow on the mirrored side. The outline corners use logical
+   radii in studio.css. */
 html[dir="rtl"] body .mat-mdc-form-field,
 html[dir="rtl"] body .mat-mdc-select { direction: rtl; text-align: right; }
 html[dir="rtl"] body .mdc-floating-label { left: auto !important; right: 4px; transform-origin: right top !important; }
 html[dir="rtl"] body .mat-mdc-select-arrow-wrapper { transform: none; }
+/* A Latin value ("Gemini Omni 1.2 Flash") keeps its own direction, so a long
+   one is cut at its end ("Gemini Omni 1.2 Fl...") and not at its start. */
+html[dir="rtl"] body .mat-mdc-select-value,
+html[dir="rtl"] body .mat-mdc-select-value-text { unicode-bidi: plaintext; text-align: right; }
+
+/* ---------- Overlays (select panels, menus, tooltips, snackbars) ----------
+   Angular reads the page direction once at start-up, before the language
+   loads, so the CDK stamps dir="ltr" on every overlay it opens. Turn their
+   content right-to-left so Material's own RTL rules (option check on the
+   left, menu icons on the right) line up. */
+html[dir="rtl"] .cdk-overlay-container [dir="ltr"],
+html[dir="rtl"] .cdk-overlay-pane { direction: rtl; }
+html[dir="rtl"] .mat-mdc-option .mdc-list-item__primary-text { flex: 1 1 auto; margin-left: 0 !important; text-align: right; }
+html[dir="rtl"] .mat-mdc-option .mat-pseudo-checkbox { margin-left: 0; margin-right: 16px; }
+html[dir="rtl"] .mat-mdc-menu-item { text-align: right; }
 
 /* Dialog action rows already use flex-end, which follows the direction. */
 
@@ -160,6 +199,3 @@ html[dir="rtl"] body .mat-mdc-select-arrow-wrapper { transform: none; }
    reading direction (arrow_forward, chevron_right, ...) with .gm-flip. */
 html[dir="rtl"] body .gm-flip,
 html[dir="rtl"] body .gm-rtl-flip { transform: scaleX(-1); }
-
-/* ---------- Numbers and Latin names inside Arabic text ---------- */
-html[dir="rtl"] body .gm-ltr { direction: ltr; unicode-bidi: isolate; }

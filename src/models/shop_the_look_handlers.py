@@ -24,6 +24,7 @@ import requests
 
 import models.shop_the_look_workflow as shop_the_look_workflow
 from common.metadata import MediaItem, add_media_item_to_firestore
+from common.lang_detect import ui_lang
 from common.storage import download_from_gcs
 from common.workflows import WorkflowStepResult
 from config.default import Default
@@ -304,7 +305,10 @@ def on_click_vto_look(e: me.ClickEvent):  # pylint: disable=unused-argument
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             if e.key != "retry":
-                desc_future = executor.submit(describe_images_and_look, look_articles)
+                # The worker thread has no Mesop state: pass the site language.
+                desc_future = executor.submit(
+                    describe_images_and_look, look_articles, ui_lang()
+                )
 
             article_image_bytes_list = list(executor.map(download_from_gcs, articles))
 
@@ -365,6 +369,7 @@ def on_click_vto_look(e: me.ClickEvent):  # pylint: disable=unused-argument
                     potential_images,
                     f"a {row.article_type}",
                     f"the {row.article_type}",
+                    lang=ui_lang(),
                 )
 
                 last_best_image = None
@@ -411,6 +416,7 @@ def on_click_vto_look(e: me.ClickEvent):  # pylint: disable=unused-argument
                 article_image_bytes_list,
                 articles,
                 final_image_bytes_list,
+                lang=ui_lang(),
             )
             state.final_critic = final_critic
             state.final_accuracy = final_critic.accurate

@@ -29,7 +29,7 @@ from contextlib import nullcontext
 import mesop as me
 from flask import request
 
-from common.i18n import plural, t
+from common.i18n import format_date, plural, t
 from common.identity import (
     INTERNAL_VERIFIED_EMAIL_ENVIRON,
     INTERNAL_VERIFIED_ROLE_ENVIRON,
@@ -337,7 +337,7 @@ def _fmt(ts: str) -> str:
         dt = datetime.datetime.fromisoformat(ts)
     except ValueError:
         return ts
-    return dt.strftime("%d %b %Y, %H:%M UTC")
+    return format_date(dt, "%d %b %Y, %H:%M UTC")
 
 
 _COLS = "minmax(140px,1.2fr) minmax(200px,1.6fr) 130px 100px 170px 170px 220px"

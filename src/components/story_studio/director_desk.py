@@ -31,7 +31,9 @@ from dataclasses import dataclass
 
 import mesop as me
 
+from common.i18n import tx
 from components.story_studio.set_cards import SetHandlers, asset_card, card_key
+from components.story_studio.widgets import tx_dots
 from services.story_models import (
     CAMERA_IDS,
     CAMERA_PRESETS,
@@ -137,7 +139,7 @@ class DeskHandlers:
 def _t(text: str, cls: str) -> None:
     """Text with a CSS class (me.text takes no classes)."""
     with me.box(classes=cls):
-        me.text(text)
+        me.text(tx_dots(text))
 
 
 def take_of(groups: list[list[int]], index: int) -> int:
@@ -381,7 +383,8 @@ def _render_take_facts(
         # A narrated line is only shown while the narrator is on.
         if sc.narration.strip() and (sc.spoken or story.voice_on):
             me.text(
-                ("On camera: " if sc.spoken else "Voiceover: ") + sc.narration.strip(),
+                tx("On camera: " if sc.spoken else "Voiceover: ")
+                + sc.narration.strip(),
                 style=me.Style(font_size=14),
             )
 
@@ -571,7 +574,7 @@ def _render_panel(
                             type="icon", disabled=dis, on_click=handler, key=k
                         ):
                             me.icon(icon)
-                            h.sr(f"{label}: shot {i + 1}")
+                            h.sr(f"{tx(label)}: shot {i + 1}")
         if rewriting:
             with me.box(classes="ss-busy-line"):
                 me.box(classes="ss-spinner")
@@ -1006,7 +1009,7 @@ def _render_animatic(s: StoryState, story: Story, h: DeskHandlers) -> None:
                 )
                 if sc.narration.strip() and (sc.spoken or story.voice_on):
                     me.text(
-                        ("On camera: " if sc.spoken else "Voiceover: ")
+                        tx("On camera: " if sc.spoken else "Voiceover: ")
                         + sc.narration.strip(),
                         style=me.Style(font_size=14),
                     )

@@ -221,6 +221,8 @@ _STRINGS = {
     "t_settings": ("home.chat.t_settings", "Settings"),
     "t_files": ("home.chat.t_files", "Files"),
     "about": ("home.chat.about", "about {n} s"),
+    "secs": ("home.chat.secs", "{n} s"),
+    "mins": ("home.chat.mins", "{m} min {n} s"),
     "steps_done": ("home.chat.steps_done", "Steps"),
     # The headline once a type is picked (until the first message).
     "title_image": ("home.title.image", "Paint a picture with words"),
@@ -256,6 +258,14 @@ _STRINGS = {
     "p_out_voice": ("home.chat.p_out_voice", "Voice-over"),
     "p_saved": ("home.chat.p_saved", "Saved to Library"),
     "live": ("live.talk", "Talk to the studio"),
+    # The audio player (gm_audio.js).
+    "audio": ("home.chat.audio", "Audio"),
+    "audio_play": ("home.chat.audio_play", "Play {name}"),
+    "audio_pause": ("home.chat.audio_pause", "Pause {name}"),
+    "audio_position": ("home.chat.audio_position", "{name} position"),
+    "audio_of": ("home.chat.audio_of", "{a} of {b}"),
+    "audio_speed": ("home.chat.audio_speed", "Playback speed {rate}"),
+    "audio_download": ("home.chat.audio_download", "Download {name}"),
 }
 
 

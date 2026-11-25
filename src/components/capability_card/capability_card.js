@@ -183,7 +183,7 @@ class CapabilityCard extends LitElement {
     .poster { transition: transform 400ms cubic-bezier(0.2, 0, 0, 1); }
     .mode {
       position: absolute;
-      left: 10px;
+      inset-inline-start: 10px;
       top: 10px;
       padding: 3px 9px;
       border-radius: 999px;

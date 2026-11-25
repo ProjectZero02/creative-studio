@@ -40,6 +40,9 @@ class VoiceState:
     prompt_prefill_seen: str = ""  # last ?prompt= applied on load
     voice: str = DEFAULT_VOICE
     language: str = DEFAULT_LANGUAGE
+    # True once the user picks a language; until then it follows the site
+    # language (Arabic on the Arabic site, see pages/voice.py).
+    language_picked: bool = False
     style: str = DEFAULT_STYLE
     pace: str = DEFAULT_PACE
     style_notes: str = ""

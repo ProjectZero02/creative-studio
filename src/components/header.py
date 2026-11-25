@@ -20,7 +20,7 @@ import typing
 
 import mesop as me
 
-from common.i18n import route_key, t, tr
+from common.i18n import route_key, t, tr, tx
 from components.pill import pill
 from components.svg_icon.svg_icon import svg_icon
 
@@ -70,12 +70,13 @@ def localized_title_and_purpose(
     """The page title and purpose in the current language (English as given)."""
     slug = nav_title_keys().get(title.lower())
     if not slug:
-        return title, purpose
+        # Not a menu page: translate by the exact English (common/i18n_ar/).
+        return tx(title), tx(purpose) if purpose else purpose
     local_title = tr(f"nav.{slug}", title)
     if not purpose:
         return local_title, purpose
     key = f"nav.{slug}.desc" if from_nav else f"page.{slug}.purpose"
-    return local_title, tr(key, purpose)
+    return local_title, tr(key, tx(purpose))
 
 
 def _md_escape(text: str) -> str:

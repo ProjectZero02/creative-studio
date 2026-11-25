@@ -29,6 +29,7 @@ import mesop as me
 
 from common import brand_kit
 from common.analytics import get_logger
+from common.i18n import current_lang
 from common.notify import notify
 from common.prompt_prefill import (
     is_new_prompt_arrival,
@@ -50,6 +51,7 @@ from components.story_studio.widgets import (
     film_compare,
     story_stepper,
     story_ticker,
+    tx_dots,
 )
 from services import (
     story_autoset,
@@ -720,7 +722,7 @@ def progress_panel(title: str, kinds: tuple[str, ...]) -> None:
             with me.box(classes="ss-panel-title"):
                 me.text(title, style=me.Style(font_weight=600, font_size=16))
                 me.text(
-                    f"{pct}% · {_fmt_secs(job['elapsed'])}",
+                    tx_dots(f"{pct}% · {_fmt_secs(job['elapsed'])}"),
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
@@ -931,6 +933,8 @@ def _start_new_story() -> None:
     s.style_text = ""
     s.idea = ""
     s.character = ""
+    # A new film is spoken in the site language until the idea says otherwise.
+    s.language = "Arabic" if current_lang() == "ar" else "English"
     s.reference_uri = ""
     s.refs_json = "[]"
     s.ref_menu_open = False
@@ -1218,7 +1222,7 @@ def _auto_note() -> None:
     with me.box(classes="ss-auto-note", key="ss-auto-note"):
         me.icon("auto_awesome", style=me.Style(font_size=18, width=18, height=18))
         with me.box(classes="ss-auto-text"):
-            me.text(f"From your idea: {summary}")
+            me.text(f"{tx_dots('From your idea:')} {tx_dots(summary)}")
         if _pinned():
             me.button(
                 "Use auto", type="stroked", on_click=on_reset_auto, key="ss-auto-reset"

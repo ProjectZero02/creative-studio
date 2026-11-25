@@ -25,6 +25,7 @@ from google.api_core.exceptions import GoogleAPIError  # Import GoogleAPIError
 from google.cloud import aiplatform  # storage import removed
 
 from common.analytics import get_logger, track_model_call
+from common.lang_detect import english_for_model
 from common.storage import store_to_gcs  # Import the common function
 
 # from google.cloud import storage # No longer needed here
@@ -82,7 +83,8 @@ def generate_music_with_lyria(
                 f"Prediction client initiated on project {PROJECT_ID} in {cfg.LYRIA_LOCATION}: {LYRIA_ENDPOINT}. Requesting {sample_count} samples.",
             )
 
-            instances = [{"prompt": prompt}]
+            # Lyria 2 reads US English prompts only; the page keeps the person's words.
+            instances = [{"prompt": english_for_model(prompt)}]
             parameters = {"sampleCount": sample_count}
 
             try:

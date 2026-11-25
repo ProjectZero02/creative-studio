@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import mesop as me
 
-from components.story_studio.widgets import story_ticker, story_timeline
+from components.story_studio.widgets import story_ticker, story_timeline, tx_dots
 from services import story_export as export_mod
 from services import story_jobs, story_subtitles
 from services import story_timeline as timeline_mod
@@ -85,7 +85,7 @@ def film_stale(story: Story, used: StorySet | None) -> str:
         return "No film yet"
     changes = story.film_changes()
     if changes:
-        return "Film out of date · " + ", ".join(changes)
+        return " · ".join(["Film out of date", *changes])
     if used and story.set_version and story.set_version != used.version:
         return "Set changed since this film was made"
     return ""
@@ -139,7 +139,9 @@ def render_timeline(
                             style=me.Style(font_size=20, font_weight=600),
                         )
                         me.text(
-                            f"{_count(len(story.scenes), 'shot')} · {STYLE_BY_ID.get(story.style, STYLES[0])['label']} · {story.aspect_ratio}",
+                            tx_dots(
+                                f"{_count(len(story.scenes), 'shot')} · {STYLE_BY_ID.get(story.style, STYLES[0])['label']} · {story.aspect_ratio}"
+                            ),
                             style=me.Style(
                                 font_size=14, color=me.theme_var("on-surface-variant")
                             ),
@@ -300,8 +302,10 @@ def _render_edit_view(
                     style=me.Style(font_size=18, font_weight=600),
                 )
                 me.text(
-                    f"{h.fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}"
-                    + (f" · Set: {used.name}" if used else ""),
+                    tx_dots(
+                        f"{h.fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}"
+                        + (f" · Set: {used.name}" if used else "")
+                    ),
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
@@ -309,7 +313,7 @@ def _render_edit_view(
                 stale = film_stale(story, used)
                 if stale and not job_open:
                     me.text(
-                        stale,
+                        tx_dots(stale),
                         style=me.Style(font_size=13, color=me.theme_var("error")),
                     )
                 if story.film_edited and story.final_uri and not exporting:
@@ -557,7 +561,7 @@ def _export_actions(
     with me.box(classes="ss-export-actions"):
         with me.box(classes="ss-export-what"):
             me.text(
-                export_mod.label(opts, tl),
+                tx_dots(export_mod.label(opts, tl)),
                 style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )
         if srt_ready:

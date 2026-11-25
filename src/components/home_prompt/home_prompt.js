@@ -196,7 +196,8 @@ class HomePrompt extends LitElement {
       display: flex;
       align-items: flex-end;
       gap: 10px;
-      padding: 6px 6px 4px 14px;
+      padding-block: 6px 4px;
+      padding-inline: 14px 6px;
     }
     textarea {
       flex: 1;
@@ -213,6 +214,7 @@ class HomePrompt extends LitElement {
       line-height: 1.45;
       padding: 14px 4px 10px;
       box-sizing: border-box;
+      unicode-bidi: plaintext; /* typed text reads in its own direction */
     }
     textarea::placeholder { color: var(--sys-on-surface-variant, #5f6673); opacity: 1; }
     textarea:focus { outline: none; }

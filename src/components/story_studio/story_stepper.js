@@ -36,6 +36,7 @@ class StoryStepper extends LitElement {
   static properties = {
     stepsJson: { type: String },
     selectEvent: { type: String },
+    stringsJson: { type: String },
   };
 
   static styles = css`
@@ -113,6 +114,19 @@ class StoryStepper extends LitElement {
     super();
     this.stepsJson = '[]';
     this.selectEvent = '';
+    this.stringsJson = '{}';
+  }
+
+  /** Text in the page's language: stringsJson maps English (or an English
+   * template with {0}, {1}) to its translation; English is the fallback. */
+  _T(text, ...args) {
+    if (this._strsSrc !== this.stringsJson) {
+      this._strsSrc = this.stringsJson;
+      try { this._strs = JSON.parse(this.stringsJson || '{}'); } catch (_) { this._strs = {}; }
+    }
+    let out = (this._strs && this._strs[text]) || text;
+    args.forEach((v, i) => { out = out.replace(`{${i}}`, v); });
+    return out;
   }
 
   _steps() {
@@ -125,13 +139,13 @@ class StoryStepper extends LitElement {
 
   render() {
     const steps = this._steps();
-    return html`<nav aria-label="Film steps"><ol style="--steps: ${steps.length}">
+    return html`<nav aria-label=${this._T('Film steps')}><ol style="--steps: ${steps.length}">
       ${steps.map((s, i) => {
         const icon = s.state === 'done' ? ICONS.done : (ICONS[s.id] || ICONS.stories);
         return html`<li class="${s.state === 'current' ? 'is-current' : ''}">
           <button class="${s.state}" ?disabled=${!s.enabled}
             aria-current=${s.state === 'current' ? 'step' : 'false'}
-            aria-label="${`Step ${i + 1}: ${s.label}${s.state === 'done' ? ' (done)' : ''}`}"
+            aria-label=${this._T(s.state === 'done' ? 'Step {0}: {1} (done)' : 'Step {0}: {1}', i + 1, s.label)}
             @click=${() => this._select(s.id)}>
             <span class="badge"><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>
             <span class="label">${s.label}</span>

@@ -28,6 +28,7 @@ from contextlib import nullcontext
 import mesop as me
 
 from common import brand_kit
+from common.i18n import tx
 from common.storage import store_to_gcs
 from common.utils import create_display_url
 from components.header import header
@@ -400,7 +401,7 @@ def _editor(s: BrandState, kit: dict, rows: list[dict]) -> None:
             with me.box(classes="gm-brand-logo-row"):
                 if kit["logo_uri"]:
                     with me.box(classes="gm-brand-logo"):
-                        me.image(src=_media_url(kit["logo_uri"]), alt="Brand logo")
+                        me.image(src=_media_url(kit["logo_uri"]), alt=tx("Brand logo"))
                     me.button(
                         "Remove logo", on_click=on_remove_logo, key="brand-rm-logo"
                     )

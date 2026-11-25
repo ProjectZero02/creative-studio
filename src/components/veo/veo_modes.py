@@ -20,6 +20,7 @@ from common.analytics import log_ui_click
 from state.state import AppState
 from state.veo_state import PageState
 from components.library.library_chooser_button import library_chooser_button
+from components.studio_chips import studio_text
 from config.veo_models import get_veo_model_config
 from config.video_studio_models import (
     STUDIO_MODE_LABELS,
@@ -93,7 +94,9 @@ def veo_mode_toggle():
         me.button_toggle(
             value=state.veo_mode,
             buttons=[
-                me.ButtonToggleButton(label=VEO_MODE_LABELS.get(mode, mode), value=mode)
+                me.ButtonToggleButton(
+                    label=studio_text(VEO_MODE_LABELS.get(mode, mode)), value=mode
+                )
                 for mode in modes
             ],
             multiple=False,

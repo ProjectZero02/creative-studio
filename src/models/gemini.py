@@ -36,6 +36,7 @@ from common.analytics import (
 )
 from common.analytics import extract_usage_metadata as _extract_usage_metadata
 from common.error_handling import GenerationError
+from common.lang_detect import lang_name, resolve_lang, ui_lang, write_in
 from common.storage import store_to_gcs
 from config.default import Default  # Import Default for cfg
 from config.evaluators import GEMINI_TTS_EVALUATOR
@@ -297,9 +298,13 @@ def generate_image_from_prompt_and_images(
     reraise=True,
 )
 def extract_room_names_from_image(
-    image_uri: str, feature: str | None = None
+    image_uri: str, feature: str | None = None, lang: str | None = None
 ) -> list[str]:
-    """Analyzes a floor plan image and extracts the names of the rooms."""
+    """Analyzes a floor plan image and extracts the names of the rooms.
+
+    The names are shown on buttons and titles, so they come in `lang` (the
+    site language by default). They are also the rooms' keys for this plan;
+    they are made once per plan, so keys stay stable."""
     model_name = cfg.MODEL_ID  # Use a fast model for this analysis task
 
     config = types.GenerateContentConfig(
@@ -308,7 +313,11 @@ def extract_room_names_from_image(
         temperature=0.1,  # Low temperature for factual extraction
     )
 
-    prompt_text = "Analyze this floor plan image and identify all the labeled rooms. Return a JSON list of the room names."
+    prompt_text = (
+        "Analyze this floor plan image and identify all the labeled rooms. Return a JSON list of the room names. "
+        f"Write each room name in {lang_name(lang or ui_lang())}, translating the plan's labels if needed, "
+        "and keep every name unique."
+    )
 
     prompt_parts = [
         prompt_text,
@@ -364,6 +373,10 @@ def rewriter(
 
     """
     full_prompt = f"{rewriter_prompt} {original_prompt}"
+    # The rewrite goes back into the person's text box: keep their language
+    # (the site language when the text gives no hint). Models that only read
+    # English translate at the call (common.lang_detect.english_for_model).
+    full_prompt += "\n\n" + write_in(resolve_lang(original_prompt))
 
     # Build multimodal parts for any supplied reference images. Skip empty URIs
     # and fall back to image/png when a mime type is missing.
@@ -469,6 +482,10 @@ Then, review the original prompt with your description.
 Output this as JSON.
 
 """
+    # The critique is read by the person: their language (or the site's).
+    text_prompt_for_analysis += "Keep the JSON keys in English. " + write_in(
+        resolve_lang(music_generation_prompt, lang=ui_lang())
+    )
 
     text_part = types.Part.from_text(text=text_prompt_for_analysis)
 
@@ -922,6 +939,7 @@ def select_best_image_with_description(
     generated_image_gcs_uris: list[str],
     real_photo_description: str,
     ai_photo_description: str,
+    lang: str | None = None,
 ) -> BestImageAccuracy:
     """Selects the best generated image by comparing it against a set of real
     images.
@@ -938,6 +956,7 @@ def select_best_image_with_description(
         f"Please analyze the following images. The first set of images are photos of {real_photo_description}. The second set of images are AI-generated images of a model wearing the articles of clothing.",
         f"Your task is to select the generated image that best represents the {ai_photo_description} from the real photos.",
         "For each generated image, provide the analysis of True or False indicating if the generated image is accurate with overall reasoning. The single image you choose as the best should set best_image value to True.",
+        f"Write every reasoning in {lang_name(lang or ui_lang())}.",
         "\n--- REAL IMAGES ---",
     ]
 
@@ -968,6 +987,7 @@ def final_image_critic(
     article_image_bytes_list: list[bytes],
     article_image_gcs_uris: list[str],
     generated_image_bytes_list: list[bytes],
+    lang: str | None = None,
 ) -> GeneratedImageAccuracyWrapper:
     """Selects the best generated image by comparing it against a set of real
     images. Provide feedback on accuracy.
@@ -984,6 +1004,7 @@ def final_image_critic(
         "The first set of images are photos of apparel items. The generated image is AI-generated image of a model wearing the apparel items.",
         "Your task is to determine if the AI-generated image reaslistically depicts all apparel items from the real photos.",
         "Provide the analysis of True or False, indicating if the generated image is accurate with overall reasoning. In addition provide detailed reasoning for each apparel item.",
+        f"Write every reasoning in {lang_name(lang or ui_lang())}.",
         "\n--- APAREL IMAGES ---",
     ]
 
@@ -1012,6 +1033,7 @@ def final_image_critic(
 
 def describe_images_and_look(
     look_articles: list[CatalogRecord],
+    lang: str | None = None,
 ) -> ArticleDescriptionWrapper:
     """Describe the overall aestetic of an outfit in addition to describing
     each article seperately.
@@ -1030,6 +1052,7 @@ def describe_images_and_look(
         ),
         "Your task is describe each article of clothing in a style of a product catalog, within 3 sentences each.",
         "Also, you also should generate a description of the entire outfit as look_description when all articles are worn together as an outfit.",
+        f"Write every description in {lang_name(lang or ui_lang())}.",
         "\n--- ARTICLE IMAGES ---",
     ]
 
@@ -1079,6 +1102,10 @@ def generate_transformation_prompts(image_uris: list[str]) -> list[Transformatio
     * linkedin pop-out: A photorealistic portrait is presented within a #FFFFFF white circular frame. The image inside the circle captures the subject from the chest up. The subject is leaning his chin on his crossed arms, in a casual, relaxed style, as if looking out of a window. The subject's arms extend out of the circular boundary, overlapping the boundary. These arms, complete with hands, breach the edge of the white circle creating a compelling 3D pop-out effect. The arm MUST cross the boundary of the crop. The lighting is soft and even.
 
     """
+    # Titles are shown as buttons, so they follow the site language; the
+    # prompts only feed the image model.
+    if ui_lang() == "ar":
+        prompt_text += "Write each title in Arabic and each prompt in English.\n"
 
     prompt_parts = [prompt_text]
     for uri in image_uris:

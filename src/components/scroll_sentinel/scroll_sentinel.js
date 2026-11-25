@@ -17,6 +17,8 @@ class ScrollSentinel extends LitElement {
       isLoading: { type: Boolean },
       allItemsLoaded: { type: Boolean },
       visible: { type: String }, // Event handler ID
+      loadingLabel: { type: String }, // page-language text from Python
+      endLabel: { type: String },
     };
   }
 
@@ -24,6 +26,8 @@ class ScrollSentinel extends LitElement {
     super();
     this.isLoading = false;
     this.allItemsLoaded = false;
+    this.loadingLabel = "";
+    this.endLabel = "";
     this.visible = "";
     this.observer = null;
     this.debounceTimeout = null;
@@ -66,10 +70,10 @@ class ScrollSentinel extends LitElement {
 
   render() {
     if (this.isLoading) {
-      return html`<p>Loading...</p>`;
+      return html`<p>${this.loadingLabel || "Loading..."}</p>`;
     }
     if (this.allItemsLoaded) {
-      return html`<p>End of list</p>`;
+      return html`<p>${this.endLabel || "End of list"}</p>`;
     }
     return html``; // Otherwise, be invisible
   }

@@ -172,6 +172,7 @@ export class GmAudio extends LitElement {
     compact: { type: Boolean, reflect: true },
     download: { type: String },
     speed: { type: Boolean },
+    strings: { type: Object }, // the Home chat's strings (audio_* keys); English fallback
     _playing: { state: true },
     _time: { state: true },
     _duration: { state: true },
@@ -218,6 +219,9 @@ export class GmAudio extends LitElement {
     .wave {
       position: relative; flex: 1 1 auto; min-width: 40px; height: 60%;
       cursor: pointer; touch-action: none; border-radius: 6px;
+      /* Time runs left to right in every language: the seek math, the
+         played fill and the arrow keys all assume it. */
+      direction: ltr;
     }
     .bars {
       position: absolute; inset: 0; display: flex; align-items: center; gap: 2px;
@@ -248,6 +252,7 @@ export class GmAudio extends LitElement {
     this.compact = false;
     this.download = '';
     this.speed = false;
+    this.strings = {};
     this._playing = false;
     this._time = 0;
     this._duration = 0;
@@ -428,23 +433,26 @@ export class GmAudio extends LitElement {
     const bars = loading ? placeholderPeaks(this.src, n) : resample(this._peaks, n);
     const barEls = bars.map((v) => html`<i style="height:${Math.round(v * 100)}%"></i>`);
     const pct = this._duration ? Math.min(100, (this._time / this._duration) * 100) : 0;
-    const name = this.label || 'Audio';
+    const S = this.strings || {};
+    // S.audio_* templates use {name}, {a}, {b}, {rate}; English is the fallback.
+    const fill = (tpl, vals) => tpl.replace(/\{(\w+)\}/g, (m, k) => (k in vals ? vals[k] : m));
+    const name = this.label || S.audio || 'Audio';
     const now = Math.round(this._time);
     const total = Math.round(this._duration);
 
     return html`
       <div class="row">
         <button class="play" type="button"
-          aria-label=${this._playing ? `Pause ${name}` : `Play ${name}`}
+          aria-label=${fill(this._playing ? (S.audio_pause || 'Pause {name}') : (S.audio_play || 'Play {name}'), { name })}
           @click=${this._toggle}>
           ${this._playing ? ICON_PAUSE : ICON_PLAY}
         </button>
         <div class="wave" role="slider" tabindex="0"
-          aria-label=${`${name} position`}
+          aria-label=${fill(S.audio_position || '{name} position', { name })}
           aria-valuemin="0"
           aria-valuemax=${total}
           aria-valuenow=${now}
-          aria-valuetext=${`${fmt(this._time)} of ${fmt(this._duration)}`}
+          aria-valuetext=${fill(S.audio_of || '{a} of {b}', { a: fmt(this._time), b: fmt(this._duration) })}
           style="--_p:${pct}%"
           @pointerdown=${this._onPointerDown}
           @pointermove=${this._onPointerMove}
@@ -457,11 +465,11 @@ export class GmAudio extends LitElement {
         <span class="time">${fmt(this._time)} / ${fmt(this._duration)}</span>
         ${this.speed ? html`
           <button class="speed" type="button"
-            aria-label=${`Playback speed ${this._rateLabel(this._rate)}`}
+            aria-label=${fill(S.audio_speed || 'Playback speed {rate}', { rate: this._rateLabel(this._rate) })}
             @click=${this._cycleSpeed}>${this._rateLabel(this._rate)}</button>` : nothing}
         ${this.download ? html`
           <a class="btn" href=${this.src} download=${this.download}
-            aria-label=${`Download ${name}`} title="Download">${ICON_DOWNLOAD}</a>` : nothing}
+            aria-label=${fill(S.audio_download || 'Download {name}', { name })} title=${S.download || 'Download'}>${ICON_DOWNLOAD}</a>` : nothing}
         <audio preload="metadata" src=${this.src || nothing}
           @play=${this._onPlay}
           @pause=${this._onPause}

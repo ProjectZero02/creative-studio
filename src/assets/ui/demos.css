@@ -49,7 +49,6 @@ html body .gm-step + .gm-step::before {
   width: 28px;
   height: 1px;
   background: var(--sys-outline-variant);
-  margin-right: 0;
 }
 html body .gm-step-num {
   width: 26px;
@@ -200,7 +199,7 @@ html body .gm-demo-bar {
   gap: 12px;
 }
 html body .gm-demo-bar-settings { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-html body .gm-demo-bar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+html body .gm-demo-bar-actions { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; }
 html body .gm-demo-bar-actions button { height: var(--gm-control-h); padding: 0 20px; }
 html body .gm-demo-select-sm { width: 120px; }
 html body .gm-demo-select-sm .mat-mdc-form-field-subscript-wrapper,
