@@ -83,11 +83,55 @@ def extract_usage_metadata(response: Any) -> dict[str, int]:
         "tool_use_prompt_token_count": "tool_use_prompt_tokens",
         "total_token_count": "total_tokens",
     }
-    return {
+    out = {
         destination: value
         for source, destination in fields.items()
         if (value := getattr(usage_metadata, source, None)) is not None
     }
+    # Per-modality counts: audio input, and image/audio/video output, are
+    # billed at their own rates.
+    for source, prefix in (
+        ("prompt_tokens_details", "prompt"),
+        ("candidates_tokens_details", "output"),
+    ):
+        for detail in getattr(usage_metadata, source, None) or []:
+            modality = getattr(detail, "modality", "") or ""
+            modality = str(getattr(modality, "value", modality)).rsplit(".", 1)[-1]
+            count = getattr(detail, "token_count", None)
+            if count and modality.upper() in ("AUDIO", "IMAGE", "VIDEO"):
+                key = f"{prefix}_{modality.lower()}_tokens"
+                out[key] = out.get(key, 0) + int(count)
+    return out
+
+
+def extract_interaction_usage(interaction: Any) -> dict[str, int]:
+    """Billable token counts from an Interactions API result (Gemini Omni)."""
+    usage = getattr(interaction, "usage", None)
+    if not usage:
+        return {}
+    out: dict[str, int] = {}
+    for source, destination in (
+        ("total_input_tokens", "prompt_tokens"),
+        ("total_cached_tokens", "cached_prompt_tokens"),
+        ("total_output_tokens", "candidates_tokens"),
+        ("total_thought_tokens", "thoughts_tokens"),
+        ("total_tool_use_tokens", "tool_use_prompt_tokens"),
+    ):
+        value = getattr(usage, source, None)
+        if value is not None:
+            out[destination] = int(value)
+    for source, prefix in (
+        ("input_tokens_by_modality", "prompt"),
+        ("output_tokens_by_modality", "output"),
+    ):
+        for detail in getattr(usage, source, None) or []:
+            modality = getattr(detail, "modality", "") or ""
+            modality = str(getattr(modality, "value", modality)).rsplit(".", 1)[-1].lower()
+            count = getattr(detail, "tokens", None) or getattr(detail, "token_count", None)
+            if count and modality in ("audio", "image", "video"):
+                key = f"{prefix}_{modality}_tokens"
+                out[key] = out.get(key, 0) + int(count)
+    return out
 
 
 def extract_generated_image_count(response: Any) -> int:
@@ -152,8 +196,11 @@ def log_model_call(
     billing_units: dict = None,
     pipeline_id: str = None,
     error: dict = None,
+    count_usage: bool = True,
 ):
-    """Logs a generative model call event."""
+    """Logs a generative model call event. `count_usage=False` logs it
+    without a usage event (a wrapper whose real model call is logged on
+    its own)."""
     try:
         state = me.state(AppState)
         page_name = state.current_page
@@ -188,6 +235,8 @@ def log_model_call(
     analytics_logger.info(
         f"Model Call: {model_name} ({status})", extra={"extra_data": extra_data},
     )
+    if not count_usage:
+        return
     try:
         from common import usage
 
@@ -234,6 +283,7 @@ def track_model_call(
     """
     from common.error_handling import classify_error
 
+    count_usage = bool(kwargs.pop("count_usage", True))
     start_time = time.time()
     ctx = {
         "billing_units": billing_units or {},
@@ -250,6 +300,7 @@ def track_model_call(
             details=ctx["details"],
             billing_units=ctx["billing_units"] if ctx["billing_units"] else None,
             pipeline_id=ctx["pipeline_id"],
+            count_usage=count_usage,
         )
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
@@ -264,5 +315,6 @@ def track_model_call(
             billing_units=ctx["billing_units"] if ctx["billing_units"] else None,
             pipeline_id=ctx["pipeline_id"],
             error=err_dict,
+            count_usage=count_usage,
         )
         raise  # Re-raise the exception after logging

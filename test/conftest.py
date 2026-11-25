@@ -117,6 +117,21 @@ def gcs_bucket_for_tests(request):
 
 
 @pytest.fixture(autouse=True)
+def _no_price_catalog(monkeypatch):
+    """Prices come from the built-in price book in tests: the Cloud Billing
+    Catalog is never read (tests that need it stub _fetch_catalog_skus)."""
+    from config import pricing
+
+    def _offline(service=pricing.VERTEX_SERVICE):
+        raise RuntimeError("no billing catalog in tests")
+
+    pricing.clear_price_cache()
+    monkeypatch.setattr(pricing, "_fetch_catalog_skus", _offline)
+    yield
+    pricing.clear_price_cache()
+
+
+@pytest.fixture(autouse=True)
 def _no_story_previews(monkeypatch):
     """Story Studio renders a preview in a background thread after each
     timeline save; tests that want one call story_jobs._proxy_worker."""

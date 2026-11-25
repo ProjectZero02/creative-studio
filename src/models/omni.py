@@ -21,7 +21,11 @@ import uuid
 
 from google import genai
 
-from common.analytics import get_logger, track_model_call
+from common.analytics import (
+    extract_interaction_usage,
+    get_logger,
+    track_model_call,
+)
 from common.error_handling import ErrorCategory, GenerationError
 from common.storage import download_from_gcs, store_to_gcs
 from config.default import Default
@@ -156,6 +160,7 @@ def generate_omni_video(
         "video_seconds_generated": request.duration_seconds,
         "sample_count": 1,
         "aspect_ratio": request.aspect_ratio,
+        "resolution": request.resolution or "720p",
         "omni_mode": request.omni_mode,
         "is_multiturn": bool(request.previous_interaction_id),
     }
@@ -206,6 +211,10 @@ def generate_omni_video(
                 **call_args,
                 timeout=config.OMNI_TIMEOUT_MS / 1000.0,
             )
+
+            # Bill from the tokens the API reports (inputs include the
+            # earlier clips of a chat thread).
+            ctx["billing_units"].update(extract_interaction_usage(interaction))
 
             # 4. Extract outputs
             video_data, interaction_id = _extract_video_payload(interaction)

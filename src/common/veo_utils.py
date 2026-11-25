@@ -53,6 +53,8 @@ def start_async_veo_job(
             aspect_ratio=request.aspect_ratio,
             video_count=request.video_count,
             mode=mode,
+            # Only starts the job: the Veo call itself is counted when it runs.
+            count_usage=False,
         ):
             # 1. Create the job record in Firestore immediately
             job_id = create_initial_job(request, user_email)

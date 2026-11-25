@@ -110,6 +110,32 @@ def _say(lang: str, key: str) -> str:
     return _SAY.get(lang, _SAY["en"])[key]
 
 
+def add_live_usage(totals: dict, meta) -> None:
+    """Add one Live message's token counts to a session's totals."""
+    for source, dest in (
+        ("prompt_token_count", "prompt_tokens"),
+        ("cached_content_token_count", "cached_prompt_tokens"),
+        ("response_token_count", "candidates_tokens"),
+        ("thoughts_token_count", "thoughts_tokens"),
+        ("tool_use_prompt_token_count", "tool_use_prompt_tokens"),
+    ):
+        value = getattr(meta, source, None)
+        if value:
+            totals[dest] = totals.get(dest, 0) + int(value)
+    for source, prefix in (
+        ("prompt_tokens_details", "prompt"),
+        ("response_tokens_details", "output"),
+    ):
+        for detail in getattr(meta, source, None) or []:
+            modality = getattr(detail, "modality", None)
+            modality = str(getattr(modality, "value", modality) or "")
+            modality = modality.rsplit(".", 1)[-1].lower()
+            count = getattr(detail, "token_count", None)
+            if count and modality in ("audio", "image", "video"):
+                key = f"{prefix}_{modality}_tokens"
+                totals[key] = totals.get(key, 0) + int(count)
+
+
 def _genai_client():
     """Vertex AI with the app's own credentials (ADC / Cloud Run service account)."""
     from google import genai
@@ -178,6 +204,7 @@ class _Bridge:
         self.closed = False
         self.session = None
         self.session_gen = 0
+        self.usage_totals: dict = {}
         self.resume_handle: str | None = None
         self._tasks: set[asyncio.Task] = set()
         self.deferred: dict[
@@ -372,6 +399,7 @@ class _Bridge:
                     if not down.done():
                         down.cancel()
                     self.session = None
+                    self._record_usage(model)
                 if down in done and not down.cancelled():
                     try:
                         reconnect = down.result()
@@ -386,6 +414,26 @@ class _Bridge:
             if not reconnect:
                 return
             logger.info("Live session for %s reconnecting with resumption", self.owner)
+
+    def _record_usage(self, model: str) -> None:
+        """Count one Live connection's tokens on the usage page."""
+        totals, self.usage_totals = self.usage_totals, {}
+        if not totals:
+            return
+        try:
+            from common import usage
+
+            usage.record(
+                self.owner,
+                model,
+                "success",
+                totals,
+                page="live",
+                task="live_call",
+                feature="live",
+            )
+        except Exception:  # usage is best effort
+            logger.debug("Live usage was not recorded", exc_info=True)
 
     async def _upstream(self, session) -> None:
         while True:
@@ -429,6 +477,8 @@ class _Bridge:
                 update = msg.session_resumption_update
                 if update and update.resumable and update.new_handle:
                     self.resume_handle = update.new_handle
+                if getattr(msg, "usage_metadata", None):
+                    add_live_usage(self.usage_totals, msg.usage_metadata)
                 if msg.go_away is not None:
                     return True
                 if msg.tool_call_cancellation:

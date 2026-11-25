@@ -14,7 +14,7 @@
 """Usage and cost page (/usage).
 
 What the signed-in person generated in the last 7 or 30 days and what it
-cost, as an estimate from dynamic pricing and recorded billing units: totals,
+cost, priced by config/pricing.py from each call's billing units: totals,
 spend per day, and a table per model. Admins can switch to everyone and see a
 table per person. Data comes from common/usage.py.
 """
@@ -249,9 +249,9 @@ def usage_content(embedded: bool = False):
                             me.text(f"{row['calls']:,}")
                             me.text(money(row["cost"]))
             me.text(
-                "Costs are list-price estimates from the billing units of each call "
-                "(seconds of video, images, tracks, characters, tokens), not a bill. "
-                "Token prices are refreshed dynamically; unavailable prices are not "
-                "silently replaced. Failed calls count as free.",
+                "Google list prices for what each call made: video seconds by "
+                "resolution and audio, image size, tokens, characters, tracks. "
+                "Not a bill: free tiers, discounts and credits are not taken off. "
+                "Failed calls are free.",
                 style=me.Style(font_size=12, color=me.theme_var("on-surface-variant")),
             )
