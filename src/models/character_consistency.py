@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 from google import genai
 from PIL import Image as PIL_Image
 
+from common import usage
 from common.analytics import extract_usage_metadata, track_model_call
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.storage import download_from_gcs, store_to_gcs
@@ -99,9 +100,9 @@ def generate_character_video(
         data={},
     )
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        profiles = list(executor.map(get_facial_composite_profile, reference_image_bytes_list))
+        profiles = list(executor.map(usage.in_context(get_facial_composite_profile), reference_image_bytes_list))
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        all_descriptions = list(executor.map(get_natural_language_description, profiles))
+        all_descriptions = list(executor.map(usage.in_context(get_natural_language_description), profiles))
     character_description = all_descriptions[0]
     step_duration = time.time() - step_start_time
     yield WorkflowStepResult(
@@ -303,7 +304,7 @@ def _generate_gemini_candidates(
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [
             executor.submit(
-                generate_image_from_prompt_and_images,
+                usage.in_context(generate_image_from_prompt_and_images),
                 candidate_prompt,
                 reference_image_gcs_uris,
                 aspect_ratio="1:1",
@@ -378,31 +379,44 @@ def _generate_video_from_image(
 
     input_image = genai.types.Image(image_bytes=image_bytes, mime_type="image/png")
 
-    operation = veo_client.models.generate_videos(
-        model=cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
-        prompt=video_prompt,
-        config=genai.types.GenerateVideosConfig(
-            duration_seconds=8,
-            aspect_ratio=aspect_ratio,
-            number_of_videos=1,
-            enhance_prompt=True,
-            person_generation="allow_adult",
-        ),
-        image=input_image,
-    )
+    # Veo 3.x makes audio by default; 8 s, one video, 720p.
+    billing_units = {
+        "video_seconds_generated": 8,
+        "sample_count": 1,
+        "duration_seconds": 8,
+        "resolution": "720p",
+        "aspect_ratio": aspect_ratio,
+        "generate_audio": True,
+    }
+    with track_model_call(
+        cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
+        billing_units=billing_units,
+        task="character_consistency_video",
+    ) as ctx:
+        operation = veo_client.models.generate_videos(
+            model=cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
+            prompt=video_prompt,
+            config=genai.types.GenerateVideosConfig(
+                duration_seconds=8,
+                aspect_ratio=aspect_ratio,
+                number_of_videos=1,
+                enhance_prompt=True,
+                person_generation="allow_adult",
+            ),
+            image=input_image,
+        )
 
-    # This is a long running operation, we should not block here in a real app
-    # For this example, we will wait for it to complete
-    import time
+        while not operation.done:
+            time.sleep(10)
+            operation = veo_client.operations.get(operation)
 
-    while not operation.done:
-        time.sleep(10)
-        operation = veo_client.operations.get(operation)
+        if operation.error:
+            raise Exception(f"Error generating video: {operation.error}")
 
-    if operation.error:
-        raise Exception(f"Error generating video: {operation.error}")
-
-    return operation.response.generated_videos[0].video.video_bytes, video_prompt
+        videos = operation.response.generated_videos or []
+        ctx["billing_units"]["videos_generated"] = len(videos)
+        ctx["output_received"] = bool(videos)
+        return videos[0].video.video_bytes, video_prompt
 
 def _reframe_image_to_16_9(
     image_gcs_uri: str,

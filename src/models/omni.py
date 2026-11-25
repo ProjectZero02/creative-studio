@@ -172,6 +172,8 @@ def generate_omni_video(
 
         # 2. Build input list
         input_parts = _build_input_parts(request)
+        # Input estimate for when the API reports no usage.
+        ctx["billing_units"].update(input_media_units(input_parts, request))
 
         # 3. Call Interactions API
         try:
@@ -206,10 +208,13 @@ def generate_omni_video(
             logger.info(
                 f"Calling client.interactions.create with model={model_config.model_name}",
             )
+            # A client timeout may still be billed: the server keeps going.
+            ctx["bill_on_timeout"] = True
             interaction = client.interactions.create(
                 **call_args,
                 timeout=config.OMNI_TIMEOUT_MS / 1000.0,
             )
+            ctx["bill_on_timeout"] = False
 
             # Bill from the tokens the API reports (inputs include the
             # earlier clips of a chat thread).
@@ -217,6 +222,7 @@ def generate_omni_video(
 
             # 4. Extract outputs
             video_data, interaction_id = _extract_video_payload(interaction)
+            ctx["output_received"] = True  # billed even if saving fails
 
             # 5. Decode and save
             gcs_uri = _save_video_to_gcs(video_data)
@@ -227,6 +233,34 @@ def generate_omni_video(
         except Exception as e:
             logger.exception("Error calling Gemini Omni Interactions API")
             raise GenerationError(f"Omni generation failed: {e}") from e
+
+
+def input_media_units(input_parts: list, request: OmniVideoGenerationRequest) -> dict:
+    """Images and seconds of video sent as input, for the cost estimate when
+    the API reports no token usage. Each input video (edit, extend, upscale,
+    or an earlier clip of a chat) is counted as `duration_seconds` long:
+    edit and upscale keep the input's length, and earlier clips were made at
+    the thread's length."""
+    images = videos = 0
+    items = []
+    for part in input_parts:
+        if not isinstance(part, dict):
+            continue
+        content = part.get("content")
+        items.extend(content if isinstance(content, list) else [part])
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "image":
+            images += 1
+        elif item.get("type") == "video" and (
+            item.get("data") or item.get("uri") or item.get("gcs_uri")
+        ):
+            videos += 1
+    return {
+        "input_image_count": images,
+        "input_video_seconds": videos * int(request.duration_seconds or 0),
+    }
 
 
 # Modes whose task cannot be inferred from the inputs alone; the Interactions

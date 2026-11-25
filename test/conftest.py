@@ -131,6 +131,43 @@ def _no_price_catalog(monkeypatch):
     pricing.clear_price_cache()
 
 
+class _NullUsageDB:
+    """Swallows usage events: tests never write to Firestore."""
+
+    def collection(self, name):
+        return self
+
+    def document(self, doc_id):
+        return self
+
+    def set(self, doc):
+        pass
+
+    def add(self, doc):
+        pass
+
+
+def _drain_usage_queue(usage, timeout=10.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while usage._queue.unfinished_tasks and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+@pytest.fixture(autouse=True)
+def _no_usage_writes(monkeypatch):
+    """Usage events from model calls in tests go nowhere, and each test
+    starts and ends with an empty usage queue."""
+    from common import usage
+
+    monkeypatch.setattr(usage, "_db", lambda: _NullUsageDB())
+    _drain_usage_queue(usage)
+    yield
+    _drain_usage_queue(usage)
+    usage._exiting.clear()
+
+
 @pytest.fixture(autouse=True)
 def _no_story_previews(monkeypatch):
     """Story Studio renders a preview in a background thread after each

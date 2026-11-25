@@ -32,6 +32,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
+import os
+import time
+import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -59,6 +63,16 @@ from services.live_agent import (
 from services.live_jobs import DONE, FAILED, get_live_jobs
 
 logger = get_logger(__name__)
+
+# Live usage is recorded at least this often during a call (and at close).
+USAGE_RECORD_SECONDS = 60
+# Raw usage_metadata messages are logged at DEBUG; LIVE_USAGE_DEBUG=true logs
+# them at INFO (to read on Cloud Run whether counts are per turn or totals).
+_USAGE_LOG_LEVEL = (
+    logging.INFO
+    if os.environ.get("LIVE_USAGE_DEBUG", "").lower() in ("1", "true")
+    else logging.DEBUG
+)
 router = APIRouter()
 
 # Close codes the browser shows as a message.
@@ -205,6 +219,9 @@ class _Bridge:
         self.session = None
         self.session_gen = 0
         self.usage_totals: dict = {}
+        self.usage_session_id = uuid.uuid4().hex[:12]
+        self.model = ""
+        self._usage_recorded_at = time.monotonic()
         self.resume_handle: str | None = None
         self._tasks: set[asyncio.Task] = set()
         self.deferred: dict[
@@ -375,6 +392,7 @@ class _Bridge:
 
     async def run_live(self) -> None:
         client, model = _genai_client()
+        self.model = model
         failures = 0
         while not self.closed and not self.call.ended:
             self.session_gen += 1
@@ -415,8 +433,15 @@ class _Bridge:
                 return
             logger.info("Live session for %s reconnecting with resumption", self.owner)
 
+    def _maybe_record_usage(self) -> None:
+        """Record the tokens so far when a minute has passed since the last
+        record, so a long call shows up before it ends."""
+        if time.monotonic() - self._usage_recorded_at >= USAGE_RECORD_SECONDS:
+            self._record_usage(self.model)
+
     def _record_usage(self, model: str) -> None:
         """Count one Live connection's tokens on the usage page."""
+        self._usage_recorded_at = time.monotonic()
         totals, self.usage_totals = self.usage_totals, {}
         if not totals:
             return
@@ -478,6 +503,12 @@ class _Bridge:
                 if update and update.resumable and update.new_handle:
                     self.resume_handle = update.new_handle
                 if getattr(msg, "usage_metadata", None):
+                    logger.log(
+                        _USAGE_LOG_LEVEL,
+                        "Live usage_metadata session=%s: %s",
+                        self.usage_session_id,
+                        msg.usage_metadata,
+                    )
                     add_live_usage(self.usage_totals, msg.usage_metadata)
                 if msg.go_away is not None:
                     return True
@@ -526,6 +557,7 @@ class _Bridge:
                 if content.turn_complete:
                     self.model_speaking = False
                     await self.send({"type": "turn_complete"})
+                    self._maybe_record_usage()
                     await self._flush_updates(session)
                     if self.call.ended:
                         return False

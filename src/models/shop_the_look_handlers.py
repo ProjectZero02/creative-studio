@@ -23,6 +23,7 @@ import mesop as me
 import requests
 
 import models.shop_the_look_workflow as shop_the_look_workflow
+from common import usage
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.lang_detect import ui_lang
 from common.storage import download_from_gcs
@@ -307,7 +308,7 @@ def on_click_vto_look(e: me.ClickEvent):  # pylint: disable=unused-argument
             if e.key != "retry":
                 # The worker thread has no Mesop state: pass the site language.
                 desc_future = executor.submit(
-                    describe_images_and_look, look_articles, ui_lang()
+                    usage.in_context(describe_images_and_look), look_articles, ui_lang()
                 )
 
             article_image_bytes_list = list(executor.map(download_from_gcs, articles))

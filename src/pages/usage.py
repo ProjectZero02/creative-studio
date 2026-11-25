@@ -31,6 +31,7 @@ import mesop as me
 
 from common import usage
 from common.i18n import format_date, tx
+from config import pricing
 from components.header import header
 from components.page_scaffold import page_frame, page_scaffold
 from state.state import AppState
@@ -64,6 +65,7 @@ class UsageState:
     days: int = 7
     everyone: bool = False
     summary_json: str = ""
+    alerts_json: str = ""  # admins: price book drift and unpriced models
     error: str = ""
     loading: bool = False
     loaded_for: list[str] = field(default_factory=list)
@@ -87,13 +89,47 @@ def _load(s: UsageState) -> None:
     s.everyone = everyone
     try:
         events = usage.load(None if everyone else app.user_email, s.days)
-        s.summary_json = json.dumps(usage.summarize(events, s.days))
+        summary = usage.summarize(events, s.days)
+        s.summary_json = json.dumps(summary)
+        s.alerts_json = json.dumps(_alerts(summary)) if _is_admin() else ""
         s.error = ""
     except Exception:  # pylint: disable=broad-except
         logger.exception("Usage: could not load events")
         s.summary_json = ""
         # The details go to the log; people see a plain line.
         s.error = "Usage could not be loaded. Try again later."
+
+
+def _alerts(summary: dict) -> dict:
+    """What an admin should fix: book SKUs the catalog lacks or prices
+    differently, and models seen in the period that have no price."""
+    drift = pricing.price_drift()
+    return {
+        "missing": sorted(d["sku"] for d in drift if d["issue"] == "missing"),
+        "changed": [
+            {"sku": d["sku"], "book": d["book"], "catalog": d["catalog"]}
+            for d in drift
+            if d["issue"] == "price"
+        ],
+        "unpriced": sorted(m["model"] for m in summary["models"] if m.get("unpriced")),
+    }
+
+
+def _alert_banner(alerts: dict) -> None:
+    if not any(alerts.get(k) for k in ("missing", "changed", "unpriced")):
+        return
+    with me.box(classes="gm-usage-card gm-usage-alert"):
+        _label("Price check", "gm-usage-title")
+        if alerts.get("unpriced"):
+            _label("No price for", "gm-usage-th")
+            me.text(", ".join(alerts["unpriced"]))
+        if alerts.get("changed"):
+            _label("Price changed in the catalog", "gm-usage-th")
+            for row in alerts["changed"]:
+                me.text(f"{row['sku']}: {row['book']:g} → {row['catalog']:g}")
+        if alerts.get("missing"):
+            _label("Not in the catalog (list price used)", "gm-usage-th")
+            me.text(", ".join(alerts["missing"]))
 
 
 def on_load(e: me.LoadEvent):  # pylint: disable=unused-argument
@@ -201,6 +237,8 @@ def usage_content(embedded: bool = False):
                 with me.box(classes="gm-usage-card"):
                     me.text("Nothing generated in this period yet.")
                 return
+            if s.alerts_json:
+                _alert_banner(json.loads(s.alerts_json))
             total = summary["total"]
             with me.box(classes="gm-usage-stats"):
                 _stat("Estimated cost", money(total["cost"]))
@@ -252,6 +290,6 @@ def usage_content(embedded: bool = False):
                 "Google list prices for what each call made: video seconds by "
                 "resolution and audio, image size, tokens, characters, tracks. "
                 "Not a bill: free tiers, discounts and credits are not taken off. "
-                "Failed calls are free.",
+                "Failed calls are free unless Google returned output.",
                 style=me.Style(font_size=12, color=me.theme_var("on-surface-variant")),
             )
