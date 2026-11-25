@@ -192,6 +192,8 @@ def generate_image_from_prompt_and_images(
     billing_units = {
         "aspect_ratio": aspect_ratio,
         "input_asset_count": len(images),
+        # Output tokens per image (so the price) depend on the size.
+        "image_size": image_size or "1K",
     }
     if use_search:
         billing_units["grounding_web_search"] = True

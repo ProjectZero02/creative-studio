@@ -105,15 +105,14 @@ AR_TEXT: dict[str, str] = {
     "Shop the Look": "تسوّق الإطلالة",
     "Virtual Try-On": "القياس الافتراضي",
     (
-        "Costs are list-price estimates from the billing units of each call "
-        "(seconds of video, images, tracks, characters, tokens), not a bill. "
-        "Token prices are refreshed dynamically; unavailable prices are not "
-        "silently replaced. Failed calls count as free."
+        "Google list prices for what each call made: video seconds by "
+        "resolution and audio, image size, tokens, characters, tracks. "
+        "Not a bill: free tiers, discounts and credits are not taken off. "
+        "Failed calls are free."
     ): (
-        "التكاليف تقديرات بسعر القائمة من وحدات الفوترة لكل طلب "
-        "(ثواني الفيديو والصور والمقاطع والأحرف والرموز)، وليست فاتورة. "
-        "تُحدَّث أسعار الرموز تلقائيًا، ولا تُستبدل الأسعار غير المتاحة بصمت. "
-        "الطلبات التي تعذّرت مجانية."
+        "أسعار Google المعلنة لما أنتجه كل طلب: ثواني الفيديو حسب الدقة والصوت، "
+        "وحجم الصورة، والرموز، والأحرف، والمقاطع. ليست فاتورة: لا تُخصم "
+        "الحصص المجانية والخصومات والأرصدة. الطلبات التي تعذّرت مجانية."
     ),
     # Users (pages/admin_users.py)
     "Add people, set their role and reset passwords. Only admins see this page.": (

@@ -72,7 +72,7 @@ def event(
 ) -> dict:
     at = at if at is not None else time.time()
     units = units or {}
-    cost, pricing_details = pricing.estimate_details(model, units, status)
+    cost, pricing_details = pricing.estimate_details(model, units, status, at=at)
     return {
         "owner": owner or "unknown",
         "model": model or "unknown",

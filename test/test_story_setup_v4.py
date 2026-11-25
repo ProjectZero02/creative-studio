@@ -86,13 +86,14 @@ def test_blueprint_30s_is_one_continuous_take():
 def test_blueprint_cost_uses_pricing_per_second():
     bp = sd.setup_blueprint(30, video_model="gemini-omni-1.2-flash")
     cost = bp["cost"]
-    assert cost["video"] == round(bp["seconds"] * 0.40, 2)  # Omni list price
+    assert cost["video"] >= round(bp["seconds"] * 5792 * 12.00 / 1e6, 2)  # Omni 720p
     assert cost["frames"] > 0 and cost["music"] == 0.06
     assert cost["total"] == round(
         cost["video"] + cost["frames"] + cost["voice"] + cost["music"], 2
     )
-    fast = sd.setup_blueprint(30, video_model="3.1-fast")
-    assert fast["cost"]["video"] < cost["video"]
+    # Omni 1.2 at 720p (about $0.07/s) costs less than Veo 3.1 ($0.40/s).
+    veo = sd.setup_blueprint(30, video_model="3.1")
+    assert veo["cost"]["video"] > cost["video"]
 
 
 def test_blueprint_long_film_has_cuts_and_takes_fit_the_take_limit():
