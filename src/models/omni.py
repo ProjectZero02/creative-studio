@@ -15,7 +15,6 @@
 """Service wrapper for interacting with EAP Gemini Omni Flash model."""
 
 import base64
-import json
 import time
 import uuid
 
@@ -279,6 +278,10 @@ def _resolve_gcs_uris_in_history(
 ) -> list:
     """Iterate input parts history and convert GCS URIs back to base64 data for model outputs.
 
+    Not used for follow-up turns (see _build_input_parts): those send only
+    previous_interaction_id. Kept for replaying a thread whose interaction
+    is gone.
+
     Only the most recent ``max_inline_videos`` ``model_output`` video entries are
     downloaded and base64-encoded; older video items are replaced with a lightweight
     text summary so long multi-minute takes never OOM or blow HTTP limits.
@@ -360,17 +363,15 @@ def _build_input_parts(request: OmniVideoGenerationRequest) -> list:
     # Aspect ratio and duration travel in response_format, not the prompt.
     modified_prompt = request.prompt
 
-    # Handle multi-turn history if present
-    if request.previous_interaction_id and request.chat_history_json:
-        try:
-            logger.info("Mode: Multi-turn Chat / Editing")
-            raw_history = json.loads(request.chat_history_json)
-            input_parts = _resolve_gcs_uris_in_history(raw_history)
-        except json.JSONDecodeError as je:
-            raise GenerationError(f"Failed to decode chat history: {je}") from je
-
-        # Append current user prompt to history list, with any images sent
-        # for this turn (first, then last frame).
+    if request.previous_interaction_id:
+        # A follow-up turn: the API keeps the earlier turns (and their videos)
+        # under previous_interaction_id, so only this turn's text and images
+        # are sent. Re-sending an earlier clip inline most likely made the API
+        # screen it like an upload: turn 2 of long takes was refused as
+        # content_blocked (live, 2026-11-25). chat_history_json stays the
+        # caller's record of the thread; it is not sent. The turn keeps the
+        # user_input step shape the API already accepts for follow-ups.
+        logger.info("Mode: Multi-turn Chat / Editing")
         content = [{"type": "text", "text": modified_prompt}]
         for uri, mime in (
             (request.reference_image_gcs, request.reference_image_mime_type),

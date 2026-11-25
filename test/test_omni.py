@@ -133,9 +133,8 @@ def test_build_input_parts_edit() -> None:
 
 @patch("models.omni.download_from_gcs")
 def test_build_input_parts_chat(mock_download: MagicMock) -> None:
-    """Test building input parts for multi-turn chat mode."""
-    mock_download.return_value = b"video_bytes_resolved"
-
+    """A follow-up turn sends only its own text: the API keeps the earlier
+    turns under previous_interaction_id, so no earlier clip is re-sent."""
     history = [
         {"type": "user_input", "content": [{"type": "text", "text": "Start video"}]},
         {
@@ -159,25 +158,35 @@ def test_build_input_parts_chat(mock_download: MagicMock) -> None:
         previous_interaction_id="int-123",
         chat_history_json=json.dumps(history),
     )
-    parts = _build_input_parts(req)
-    assert len(parts) == 3
-    assert parts[0] == history[0]
-    # Resolved model output containing base64 data
-    assert parts[1] == {
-        "type": "model_output",
+    assert _build_input_parts(req) == [
+        {"type": "user_input", "content": [{"type": "text", "text": "Make it faster"}]}
+    ]
+    mock_download.assert_not_called()
+
+
+def test_build_input_parts_follow_up_keeps_this_turns_images() -> None:
+    """Images sent for this turn (first, then last frame) still go along."""
+    req = OmniVideoGenerationRequest(
+        prompt="Land on this frame",
+        duration_seconds=8,
+        aspect_ratio="16:9",
+        resolution="360p",
+        omni_mode="t2v",
+        model_version_id="gemini-omni-1.2-flash",
+        previous_interaction_id="int-1",
+        reference_image_gcs="gs://b/first.png",
+        last_reference_image_gcs="gs://b/last.jpg",
+        last_reference_image_mime_type="image/jpeg",
+    )
+    (turn,) = _build_input_parts(req)
+    assert turn == {
+        "type": "user_input",
         "content": [
-            {
-                "type": "video",
-                "data": "dmlkZW9fYnl0ZXNfcmVzb2x2ZWQ=",
-                "mime_type": "video/mp4",
-            },
+            {"type": "text", "text": "Land on this frame"},
+            {"type": "image", "mime_type": "image/png", "uri": "gs://b/first.png"},
+            {"type": "image", "mime_type": "image/jpeg", "uri": "gs://b/last.jpg"},
         ],
     }
-    assert parts[2] == {
-        "type": "user_input",
-        "content": [{"type": "text", "text": "Make it faster"}],
-    }
-    mock_download.assert_called_once_with("gs://bucket/video.mp4")
 
 
 def test_extract_video_payload() -> None:
@@ -1462,3 +1471,67 @@ def test_generate_omni_video_extend_upscale_missing_video_not_billed(
 
     mock_client.interactions.create.assert_not_called()
     mock_track.assert_not_called()
+
+
+
+def _has_video(value: object) -> bool:
+    """True when any part of an Interactions input is a video."""
+    if isinstance(value, dict):
+        if value.get("type") == "video" or "data" in value:
+            return True
+        return any(_has_video(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_video(v) for v in value)
+    return False
+
+
+@patch("models.omni.download_from_gcs")
+@patch("models.omni._save_video_to_gcs")
+@patch("models.omni.get_omni_client")
+def test_turn_two_of_a_long_take_sends_no_earlier_video(
+    mock_get_client: MagicMock,
+    mock_save: MagicMock,
+    mock_download: MagicMock,
+) -> None:
+    """Turn 2 of a Story Studio take (as story_service builds it): the call
+    carries previous_interaction_id and no inline copy of turn 1's clip,
+    which the API refused as content_blocked (2026-11-25)."""
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    mock_client.interactions.create.return_value = _mock_video_interaction("int-2")
+    mock_save.return_value = "gs://bucket/videos/turn2.mp4"
+    history = [
+        {
+            "type": "user_input",
+            "content": [
+                {"type": "text", "text": "A keeper climbs the stairs."},
+                {"type": "image", "mime_type": "image/png", "uri": "gs://b/f0.png"},
+            ],
+        },
+        {
+            "type": "model_output",
+            "content": [
+                {"type": "video", "gcs_uri": "gs://b/turn1.mp4", "mime_type": "video/mp4"}
+            ],
+        },
+    ]
+    req = _omni_request(
+        "t2v",
+        prompt="Continue this exact shot without a cut: the keeper lights the lamp.",
+        model_version_id="gemini-omni-1.2-flash",
+        resolution="360p",
+        previous_interaction_id="int-1",
+        chat_history_json=json.dumps(history),
+    )
+
+    gcs_uri, interaction_id = generate_omni_video(req)
+
+    assert (gcs_uri, interaction_id) == ("gs://bucket/videos/turn2.mp4", "int-2")
+    _, kwargs = mock_client.interactions.create.call_args
+    assert kwargs["previous_interaction_id"] == "int-1"
+    assert not _has_video(kwargs["input"])
+    assert kwargs["input"] == [
+        {"type": "user_input", "content": [{"type": "text", "text": req.prompt}]}
+    ]
+    assert "generation_config" not in kwargs
+    mock_download.assert_not_called()
