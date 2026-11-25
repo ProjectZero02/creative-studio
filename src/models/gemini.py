@@ -482,6 +482,10 @@ Then, review the original prompt with your description.
 Output this as JSON.
 
 """
+    # The critique is read by the person: their language (or the site's).
+    text_prompt_for_analysis += "Keep the JSON keys in English. " + write_in(
+        resolve_lang(music_generation_prompt, lang=ui_lang())
+    )
 
     text_part = types.Part.from_text(text=text_prompt_for_analysis)
 
@@ -1098,6 +1102,10 @@ def generate_transformation_prompts(image_uris: list[str]) -> list[Transformatio
     * linkedin pop-out: A photorealistic portrait is presented within a #FFFFFF white circular frame. The image inside the circle captures the subject from the chest up. The subject is leaning his chin on his crossed arms, in a casual, relaxed style, as if looking out of a window. The subject's arms extend out of the circular boundary, overlapping the boundary. These arms, complete with hands, breach the edge of the white circle creating a compelling 3D pop-out effect. The arm MUST cross the boundary of the crop. The lighting is soft and even.
 
     """
+    # Titles are shown as buttons, so they follow the site language; the
+    # prompts only feed the image model.
+    if ui_lang() == "ar":
+        prompt_text += "Write each title in Arabic and each prompt in English.\n"
 
     prompt_parts = [prompt_text]
     for uri in image_uris:

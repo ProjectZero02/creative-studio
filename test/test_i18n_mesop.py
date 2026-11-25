@@ -80,4 +80,5 @@ def test_group_files_merge_into_ar_text():
             assert english in i18n.AR_TEXT, english
             assert arabic.strip(), english
         for pattern, _template in mod.PATTERNS:
-            assert pattern.startswith("^") and pattern.endswith("$"), pattern
+            body = pattern.removeprefix("(?s)")
+            assert body.startswith("^") and body.endswith("$"), pattern
