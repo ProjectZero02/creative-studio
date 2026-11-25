@@ -481,6 +481,8 @@ def test_voice_studio_on_load_pulls_recent_library_assets(monkeypatch):
         history_urls=[],
         history_texts=[],
         history_meta=[],
+        language="en-US",
+        language_picked=False,
     )
     app_state = SimpleNamespace(user_email="alice@example.com")
     sample = [
