@@ -114,9 +114,10 @@ def test_lookups_and_counts():
     assert s.asset("nope", "cup") is None
     assert s.narrator().name == "Narrator"
     assert [c.id for c in s.on_screen()] == ["maya"]
-    # 4 views for Maya, none for the narrator, 2 for the location, 1 for the prop.
-    assert s.image_count() == 7
-    assert s.missing_images() == 7 - 3
+    # A build makes only the views frames use (story_sets.BUILD_VIEWS): front
+    # and face for Maya, none for the narrator, the plate, the prop.
+    assert s.image_count() == 4
+    assert s.missing_images() == 4 - 3
     assert s.summary() == "1 character · 1 location · 1 prop"
     assert "gs://b/cafe.png" in s.media_uris()
 
@@ -697,11 +698,11 @@ def test_set_views_are_made_from_the_front_image(mock_backend, stores):
     lead = made.on_screen()[0]
     front = story_sets.image_of(lead, "front").uri
     assert refs_of[front] == []
-    for view in ("three_quarter", "profile", "face"):
-        assert refs_of[story_sets.image_of(lead, view).uri] == [front]
+    assert refs_of[story_sets.image_of(lead, "face").uri] == [front]
+    # Views no frame uses are left for the user to ask for.
+    assert story_sets.image_of(lead, "profile") is None or not story_sets.image_of(lead, "profile").uri
     plate = story_sets.image_of(made.locations[0], "plate").uri
-    angle = story_sets.image_of(made.locations[0], "angle").uri
-    assert refs_of[plate] == [] and refs_of[angle] == [plate]
+    assert refs_of[plate] == []
 
 
 def test_regenerate_one_image_and_locked_images_stay(mock_backend, stores):
@@ -770,7 +771,7 @@ def test_failed_front_skips_its_views_and_retry_finishes(stores, tmp_path, monke
         lead = set_db.get(story_db.get(story.id, OWNER).set_id, OWNER).on_screen()[0]
         status = {t.label: t.status for t in job.tasks}
         assert status[f"{lead.name} · Front"] == "failed"
-        assert status[f"{lead.name} · Profile"] == "skipped"
+        assert status[f"{lead.name} · Face"] == "skipped"
         assert any(k.endswith("· Wide") and v == "done" for k, v in status.items())
         backend.fail = False
         again = _run(story_jobs.retry(job.id, OWNER))

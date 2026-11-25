@@ -46,9 +46,17 @@ from services.story_models import (
     resolution_options,
     voice_label,
 )
+from services.story_autoset import SHOTS
 from services.story_service import display_url
 from state.story_state import StoryState
 
+# Who speaks, as Setup chips (Auto: Gemini picks per scene).
+SPEECH_CHIPS = {
+    "auto": "Auto",
+    "on_camera": "On camera",
+    "narrator": "Narrator",
+    "none": "None",
+}
 # Pacing chips, calm to fast.
 PACING_CHIPS = ("documentary", "cinematic", "dynamic")
 # Menu order of "Add reference".
@@ -64,6 +72,8 @@ class SetupHandlers:
     on_duration_live: Callable
     on_duration_blur: Callable
     on_pacing: Callable
+    on_shots: Callable
+    on_speech: Callable
     on_video_model: Callable
     on_aspect: Callable
     on_language: Callable
@@ -82,6 +92,7 @@ class SetupHandlers:
     on_ref_mention: Callable
     on_ref_remove: Callable
     on_generate_scenario: Callable
+    on_continue: Callable
     render_auto_note: Callable
     fmt_secs: Callable[[float], str]
 
@@ -121,9 +132,51 @@ def film_seconds(s: StoryState) -> tuple[int, str]:
 
 
 def one_take_of(s: StoryState) -> bool:
-    """The idea (or script) asks for one continuous shot."""
+    """One continuous take: picked in Setup (by hand or read from the idea
+    in any language), else the idea (or script) says so in English."""
+    if s.shots in ("one", "several"):
+        return s.shots == "one"
     text = s.raw_script if s.input_mode == "script" else s.idea
     return story_director.is_one_take(text or "")
+
+
+def setup_changes(s: StoryState, story: Story | None) -> list[str]:
+    """What the Setup form changes that needs a new breakdown (the script,
+    the look or how the film is shot). [] means the film can carry on
+    as it is: Continue, not Write breakdown. Brand and the second-language
+    version are saved straight away and never need one."""
+    if story is None or not story.scenes:
+        return ["new"]
+    out: list[str] = []
+    mode = s.input_mode if s.input_mode in ("idea", "script") else "idea"
+    if mode != (story.input_mode or "idea"):
+        out.append("input")
+    elif mode == "script":
+        if (s.raw_script or "").strip() != (story.raw_script or "").strip():
+            out.append("script")
+    elif (s.idea or "").strip() != (story.idea or "").strip():
+        out.append("idea")
+    asked = story_director.parse_duration_text(s.duration_text)
+    if s.duration_text.strip() and asked and asked != story.target_seconds:
+        out.append("length")
+    if one_take_of(s) != bool(story.one_take):
+        out.append("shots")
+    if (s.speech_mode or "auto") != (story.speech_mode or "auto"):
+        out.append("speech")
+    preset = STYLE_BY_ID.get(s.style, {}).get("prompt", "")
+    style_prompt = "" if s.style_text in ("", preset) else s.style_text
+    if s.style != story.style or style_prompt != (story.style_prompt or ""):
+        out.append("style")
+    for field_name in ("language", "aspect_ratio", "video_model", "pacing"):
+        if (getattr(s, field_name) or "") != (getattr(story, field_name, "") or ""):
+            out.append(field_name)
+    if s.resolution and s.resolution != (story.resolution or ""):
+        out.append("resolution")
+    if story_refs.dump(story_refs.parse(s.refs_json)) != story_refs.dump(
+        story_refs.parse(story.references_json)
+    ):
+        out.append("references")
+    return out
 
 
 def blueprint(s: StoryState) -> dict:
@@ -134,16 +187,22 @@ def blueprint(s: StoryState) -> dict:
         video_model=engine_of(s),
         resolution=s.resolution,
         one_take=one_take_of(s),
+        voice_on=s.speech_mode != "none",
+        speech_mode=s.speech_mode,
     )
     bp["source"] = source
     return bp
 
 
-def alt_cost(bp: dict) -> float:
+def alt_cost(bp: dict, speech_mode: str = "auto") -> float:
     """What a second-language film adds: on-camera speech is in the video,
-    so it is a second full render; voiceover is a new narration track."""
+    so it is a second full render; voiceover is a new narration track. A
+    film with no speech needs no second version at all."""
     cost = bp["cost"]
-    return round(cost["video"] + cost["voice"], 2)
+    if speech_mode == "none":
+        return 0.0
+    video = 0.0 if speech_mode == "narrator" else cost["video"]
+    return round(video + cost["voice"], 2)
 
 
 def picked_brand(s: StoryState) -> dict | None:
@@ -461,7 +520,7 @@ def render_setup(
             alt = other_language(s.language)
             with me.box(classes="ss-second-row"):
                 me.slide_toggle(
-                    f"{alt} version (+{_money(alt_cost(bp))})",
+                    f"{alt} version (+{_money(alt_cost(bp, s.speech_mode))})",
                     checked=s.second_on,
                     on_change=h.on_second,
                     key="ss-second",
@@ -473,6 +532,20 @@ def render_setup(
                 )
 
             _style(s, h)
+
+            with me.box(classes="ss-film-type"):
+                with me.box(classes="ss-pacing"):
+                    _t("Shots", "ss-label")
+                    with me.box(classes="ss-chip-row ss-chip-row-3"):
+                        for sid, label in SHOTS.items():
+                            _chip_button(label, s.shots == sid, h.on_shots, f"shots-{sid}")
+                with me.box(classes="ss-pacing"):
+                    _t("Speech", "ss-label")
+                    with me.box(classes="ss-chip-row ss-chip-row-4"):
+                        for mode, label in SPEECH_CHIPS.items():
+                            _chip_button(
+                                label, s.speech_mode == mode, h.on_speech, f"speech-{mode}"
+                            )
 
             with me.box(classes="ss-pacing"):
                 _t("Pacing", "ss-label")
@@ -543,31 +616,46 @@ def _blueprint_card(
         with me.box(classes="ss-bp-cost"):
             with me.box(classes="ss-bp-row"):
                 _t("Estimated cost", "ss-muted")
-                extra = alt_cost(bp) if s.second_on else 0.0
+                extra = alt_cost(bp, s.speech_mode) if s.second_on else 0.0
                 me.text(
                     _money(round(cost["total"] + extra, 2)),
                     style=me.Style(font_weight=700),
                 )
+            parts = [
+                ("Video", cost["video"]),
+                ("Frames", cost["frames"]),
+                ("Voice", cost["voice"] if s.speech_mode != "none" else 0.0),
+                ("Music", cost["music"]),
+            ]
+            if s.second_on:
+                parts.append((other_language(s.language), extra))
             _t(
-                f"Video {_money(cost['video'])} · Frames {_money(cost['frames'])} · "
-                f"Voice {_money(cost['voice'])} · Music {_money(cost['music'])}"
-                + (
-                    f" · {other_language(s.language)} {_money(extra)}"
-                    if s.second_on
-                    else ""
-                ),
+                " · ".join(f"{name} {_money(v)}" for name, v in parts if v > 0),
                 "ss-muted ss-small",
             )
 
         with me.box(classes="ss-summary-cta"):
-            if story and story.scenes and not busy:
-                _t("Replaces the current shots.", "ss-muted ss-small")
-            me.button(
-                "Writing…" if busy else "Write breakdown",
-                type="flat",
-                color="primary",
-                disabled=busy,
-                on_click=h.on_generate_scenario,
-                key="ss-generate",
-            )
-            _t("Next: the set and start frames are made for you.", "ss-muted ss-small")
+            text = (s.raw_script if s.input_mode == "script" else s.idea) or ""
+            if not setup_changes(s, story):
+                # Nothing here changes the film: carry on where it was.
+                me.button(
+                    "Continue",
+                    type="flat",
+                    color="primary",
+                    disabled=busy,
+                    on_click=h.on_continue,
+                    key="ss-continue",
+                )
+            else:
+                if story and story.scenes and not busy:
+                    _t("Replaces the current shots.", "ss-muted ss-small")
+                me.button(
+                    "Writing…"
+                    if busy and s.job_kind == "scenario"
+                    else "Write breakdown",
+                    type="flat",
+                    color="primary",
+                    disabled=busy or len(text.strip()) < 8,
+                    on_click=h.on_generate_scenario,
+                    key="ss-generate",
+                )

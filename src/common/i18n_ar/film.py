@@ -520,6 +520,25 @@ AR_TEXT: dict[str, str] = {
     "Step {0}: {1} (done)": "الخطوة {0}: {1} (مكتملة)",
     "From your idea:": "من فكرتك:",
     "Narrator · voice sample": "الراوي · عينة الصوت",
+    # Story Studio v6
+    "No film yet": "لا فيلم بعد",
+    "Update film": "تحديث الفيلم",
+    "Your film is ready.": "فيلمك جاهز.",
+    "One take": "لقطة واحدة",
+    "Several shots": "عدة لقطات",
+    "No speech": "بلا كلام",
+    "Music and picture only: nobody speaks and there is no narrator.": "موسيقى وصورة فقط: لا أحد يتكلم ولا يوجد راوٍ.",
+    "Writing the breakdown": "جارٍ كتابة التقسيم",
+    "Building the set": "جارٍ بناء الطاقم",
+    "Painting frames": "جارٍ رسم الإطارات",
+    "Finishing the film · sound and checks": "إنهاء الفيلم · الصوت والفحوص",
+    "Joining the takes": "جارٍ وصل المقاطع",
+    "Stitching the film again": "إعادة تجميع الفيلم",
+    "Film out of date": "الفيلم غير محدّث",
+    "Music changed": "تغيّرت الموسيقى",
+    "Shots changed": "تغيّرت اللقطات",
+    "Narration changed": "تغيّر التعليق الصوتي",
+    "Picture or brand changed": "تغيّرت الصورة أو العلامة",
 }
 
 for _table in (_STATUS, _VIEWS, _SHOT_SIZES, _CAMERAS, _STYLES, _LANGS):
@@ -540,6 +559,10 @@ PATTERNS: list[tuple[str, str]] = [
     # built in story_stepper.js from translated parts.
     # Films list
     (r"^(\d+) shots?$", "اللقطات: {0}"),
+    # Story Studio v6: progress and remakes
+    (r"^(\d+)%$", "{0}٪"),
+    (r"^Scene (\d+) · making a rough join again$", "المشهد {0} · إعادة وصلة خشنة"),
+    (r"^Making scene (\d+) turn (\d+) again · a cut inside the take$", "إعادة المشهد {0} الدور {1} · قطع داخل المقطع"),
     (r"^Updated (\w{3}) (\d+), (\d{4})$", "حُدّث {1} {0} {2}"),
     (r"^Delete “(.+)”\?$", "حذف «{0}»؟"),
     (

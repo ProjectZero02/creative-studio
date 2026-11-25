@@ -63,6 +63,32 @@ class TimelineHandlers:
     job_dict: Callable
     scene_task: Callable
     fmt_secs: Callable[[float], str]
+    on_render: Callable
+
+
+def _money(value: float) -> str:
+    """The same price format as Setup ("$12.00", "<$0.01")."""
+    if 0 < value < 0.01:
+        return "<$0.01"
+    return f"${value:,.2f}"
+
+
+def _count(n: int, word: str) -> str:
+    """"1 shot", "4 shots"."""
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def film_stale(story: Story, used: StorySet | None) -> str:
+    """Why the film no longer matches the story, in a few words ("" when it
+    does). Drives the Update film button in Edit & Export."""
+    if not story.final_uri:
+        return "No film yet"
+    changes = story.film_changes()
+    if changes:
+        return " · ".join(["Film out of date", *changes])
+    if used and story.set_version and story.set_version != used.version:
+        return "Set changed since this film was made"
+    return ""
 
 
 def download_url(story: Story, what: str) -> str:
@@ -114,7 +140,7 @@ def render_timeline(
                         )
                         me.text(
                             tx_dots(
-                                f"{len(story.scenes)} shots · {STYLE_BY_ID.get(story.style, STYLES[0])['label']} · {story.aspect_ratio}"
+                                f"{_count(len(story.scenes), 'shot')} · {STYLE_BY_ID.get(story.style, STYLES[0])['label']} · {story.aspect_ratio}"
                             ),
                             style=me.Style(
                                 font_size=14, color=me.theme_var("on-surface-variant")
@@ -142,14 +168,6 @@ def render_timeline(
                             "Making your film…",
                             style=me.Style(font_size=18, font_weight=600),
                         )
-                        me.text(
-                            "Clips, music and voiceover are generated in parallel, then stitched.",
-                            style=me.Style(
-                                font_size=14,
-                                color=me.theme_var("on-surface-variant"),
-                                text_align="center",
-                            ),
-                        )
                         if s.job_running:
                             me.button(
                                 "Cancel",
@@ -162,15 +180,13 @@ def render_timeline(
                         me.icon(
                             "movie", style=me.Style(font_size=36, width=36, height=36)
                         )
-                        me.text(
-                            "No film yet. Render it from Director's Desk.",
-                            style=me.Style(font_size=15),
-                        )
+                        me.text("No film yet", style=me.Style(font_size=15))
                         me.button(
-                            "Go to Director's Desk",
+                            "Make film",
                             type="flat",
                             color="primary",
-                            on_click=h.on_back_editor,
+                            on_click=h.on_render,
+                            key="ss-make-film",
                         )
 
         with me.box(classes="ss-filmstrip", key="ss-strip"):
@@ -253,7 +269,7 @@ def _film_offers(story: Story, h: TimelineHandlers) -> None:
                 key="ss-make-alt",
             )
             me.text(
-                f"About {h.alt_cost(story):.2f} USD",
+                "+" + _money(h.alt_cost(story)),
                 style=me.Style(
                     font_size=13, color=me.theme_var("on-surface-variant")
                 ),
@@ -294,9 +310,10 @@ def _render_edit_view(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
                 )
-                if used and story.set_version and story.set_version != used.version:
+                stale = film_stale(story, used)
+                if stale and not job_open:
                     me.text(
-                        "Set changed since this film was made",
+                        tx_dots(stale),
                         style=me.Style(font_size=13, color=me.theme_var("error")),
                     )
                 if story.film_edited and story.final_uri and not exporting:
@@ -305,6 +322,15 @@ def _render_edit_view(
                         style=me.Style(font_size=13, color=me.theme_var("primary")),
                     )
             with me.box(classes="ss-edit-tools"):
+                if stale and not job_open:
+                    me.button(
+                        "Make film" if not story.final_uri else "Update film",
+                        type="flat",
+                        color="primary",
+                        disabled=busy,
+                        on_click=h.on_render,
+                        key="ss-update-film",
+                    )
                 me.button(
                     "Takes",
                     type="stroked",

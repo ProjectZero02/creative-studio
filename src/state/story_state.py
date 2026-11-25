@@ -46,6 +46,8 @@ class StoryState:
     # for an Arabic film).
     second_on: bool = False
     speech_mode: str = "auto"
+    # One continuous take ("one"), several shots, or "auto" (from the idea).
+    shots: str = "auto"
     # Brand picked in Setup: a brand id, "none", or "" (not picked yet: the
     # owner's default brand). The brand is copied onto the story at Create.
     brand_id: str = ""
@@ -65,6 +67,7 @@ class StoryState:
     # Auto settings read from the idea while typing (services/story_autoset).
     auto_json: str = ""  # what was found, for the note under the idea
     pinned_json: str = "[]"  # form fields the user set by hand (kept as is)
+    live_text: str = ""  # the idea text the last Gemini settings read is for
 
     # Director's Desk UI state: one canvas. A strip of takes and shots; the
     # selected shot opens in the side panel. References (cast and set) and

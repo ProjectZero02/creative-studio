@@ -39,13 +39,81 @@ Everything above ``render_timeline`` is pure and unit tested.
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import json
 import os
 import re
 import subprocess
 import tempfile
+import threading
+import time
 import uuid
+
+# The running job's cancel event (set by story_jobs for its threads): a long
+# ffmpeg run stops when the user cancels.
+CANCEL: contextvars.ContextVar[threading.Event | None] = contextvars.ContextVar(
+    "story_cancel", default=None
+)
+
+
+class Cancelled(Exception):
+    """The user cancelled the job while ffmpeg was running."""
+
+
+def run_ffmpeg(args: list[str], **kw) -> subprocess.CompletedProcess:
+    """subprocess.run for ffmpeg that stops it when the job is cancelled:
+    "q" on stdin first (ffmpeg's own clean stop), then terminate, then kill.
+    Raises Cancelled after stopping it. Never uses a shell."""
+    cancel = CANCEL.get()
+    if cancel is None:
+        return subprocess.run(args, capture_output=True, text=True, check=False, **kw)
+    if cancel.is_set():
+        raise Cancelled()
+    proc = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        **kw,
+    )
+    box: dict = {"out": [], "err": []}
+    readers = [
+        threading.Thread(
+            target=lambda s=stream, k=k: box[k].append(s.read()), daemon=True
+        )
+        for k, stream in (("out", proc.stdout), ("err", proc.stderr))
+    ]
+    for r in readers:
+        r.start()
+    while proc.poll() is None:
+        time.sleep(0.25)
+        if cancel.is_set() and proc.poll() is None:
+            try:
+                proc.stdin.write("q")
+                proc.stdin.flush()
+            except (OSError, ValueError):
+                pass
+            deadline = time.time() + 2
+            while proc.poll() is None and time.time() < deadline:
+                time.sleep(0.05)
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            raise Cancelled()
+    for r in readers:
+        r.join(5)
+    try:
+        proc.stdin.close()
+    except OSError:
+        pass
+    return subprocess.CompletedProcess(
+        args, proc.returncode, "".join(box["out"]), "".join(box["err"])
+    )
 
 TRACK_KINDS = ("video", "voice", "music", "text")
 JOIN_TYPES = ("cut", "bridge", "extend", "dissolve", "fade_black")
@@ -705,6 +773,9 @@ def build_timeline(
     vids, voices = track(tl, "video")["clips"], track(tl, "voice")["clips"]
     voice_uris = voice_uris or {}
     segs = list(plan.segments)
+    exact_length = bool(getattr(story, "one_take", False)) and (
+        float(getattr(story, "target_seconds", 0) or 0) > 0
+    )
     for k, seg in enumerate(segs):
         i = seg.index
         next_seg = segs[k + 1] if k + 1 < len(segs) else None
@@ -723,6 +794,12 @@ def build_timeline(
             head = 0.0
         if exiting_seamless:
             tail = 0.0
+        if exact_length:
+            # A one-take film of a set length keeps that length: frozen
+            # frames are trimmed only from the clip's spare time.
+            spare = max(0.0, src_len - cin - float(seg.duration))
+            head = min(head, spare)
+            tail = min(tail, spare - head)
         cin = max(cin, min(head, src_len - MIN_KEEP))
         usable = max(cin + 0.1, src_len - tail)
         # The measured clip may be a little shorter than planned.
@@ -1690,7 +1767,7 @@ def render_timeline(
             fmt=fmt,
             end_hold=hold,
         )
-        result = subprocess.run(args, capture_output=True, text=True, check=False)
+        result = run_ffmpeg(args)
         if result.returncode != 0:
             from common.analytics import get_logger
 
@@ -1706,11 +1783,13 @@ def render_timeline(
             for c in merge_runs(track(tl, "video")["clips"], tl["fps"])[1:]
         ]
         try:
-            timeline["seams"] = seam_check(out_path, cuts)
+            # One decode of the film serves both checks.
+            changes = frame_changes(out_path)
+            timeline["seams"] = seam_check(out_path, cuts, changes=changes)
             planned = [c["t"] for c in cuts if not c["seamless"]]
             # Cuts nobody planned (inside a take, or at a seamless join).
             timeline["cuts"] = [
-                c for c in take_cuts(out_path)
+                c for c in take_cuts(out_path, changes=changes)
                 if all(abs(c["t"] - p) > 0.3 for p in planned)
             ]
         except Exception:  # the check never stops the film
@@ -1767,14 +1846,12 @@ def frame_changes(path: str) -> list[tuple[float, float]]:
 
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "scores.txt")
-        subprocess.run(
+        run_ffmpeg(
             [
                 _ffmpeg(), "-v", "error", "-i", path, "-an", "-vf",
                 "select='gte(scene,0)',metadata=print:key=lavfi.scene_score:file=scores.txt",
                 "-f", "null", "-",
             ],
-            capture_output=True,
-            check=False,
             cwd=tmp,
         )
         if not os.path.exists(log):
@@ -1790,8 +1867,10 @@ def frame_changes(path: str) -> list[tuple[float, float]]:
 # new framing), wherever it falls; a continuous take should have none.
 CUT_RATIO = 30.0
 # ...and a real cut changes most of the picture: the cuts Omni made scored
-# 0.34 to 0.44, caption swaps and soft joins about 0.02.
-CUT_MIN_SCORE = 0.12
+# 0.34 to 0.44, caption swaps and soft joins about 0.02. Kept well above a
+# fast camera pan (each flagged cut can pay for a turn to be made again),
+# and still below the lowest real cut.
+CUT_MIN_SCORE = 0.25
 
 
 def locate(timeline: dict, t: float) -> tuple[int, float]:
@@ -1870,14 +1949,17 @@ def take_cuts(
     ratio: float = CUT_RATIO,
     skip: float = 0.25,
     min_score: float = CUT_MIN_SCORE,
+    changes: list[tuple[float, float]] | None = None,
 ) -> list[dict]:
     """Hard cuts anywhere in a rendered film: every frame whose change is at
     least `ratio` times the median and at least `min_score` (a new picture,
     not a caption swap in a near-still shot), ignoring the first `skip`
     seconds.
     Unlike seam_check, which only looks next to planned joins, this finds a
-    cut the video model made inside one generated take."""
-    changes = frame_changes(path)
+    cut the video model made inside one generated take. ``changes``: the
+    film's frame_changes when already measured."""
+    if changes is None:
+        changes = frame_changes(path)
     if len(changes) < 3:
         return []
     scores = sorted(s for _, s in changes)
@@ -1895,14 +1977,23 @@ def take_cuts(
     return found
 
 
-def seam_check(path: str, cuts: list, window: float = 0.09) -> list[dict]:
+def seam_check(
+    path: str,
+    cuts: list,
+    window: float = 0.09,
+    changes: list[tuple[float, float]] | None = None,
+) -> list[dict]:
     """How visible each join of a rendered film is: the largest frame change
     within `window` seconds of the join, and how many times the film's
     median change that is. ``cuts`` are join times, or dicts with ``t``,
     ``scene`` (the clip after the join) and ``seamless`` (the join is meant
-    to be invisible). ``jump`` marks a seamless join past SEAM_JUMP_RATIO."""
-    changes = frame_changes(path)
-    if not changes or not cuts:
+    to be invisible). ``jump`` marks a seamless join past SEAM_JUMP_RATIO.
+    ``changes``: the film's frame_changes when already measured."""
+    if not cuts:  # one take, no joins: nothing to decode
+        return []
+    if changes is None:
+        changes = frame_changes(path)
+    if not changes:
         return []
     ordered = sorted(s for _, s in changes)
     median = max(ordered[len(ordered) // 2], 1e-4)
