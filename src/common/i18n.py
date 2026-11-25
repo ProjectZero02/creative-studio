@@ -1196,6 +1196,19 @@ _AR_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
+def _merge_page_text() -> None:
+    """Add the per-page Arabic in common/i18n_ar/ (entries here win)."""
+    global _AR_PATTERNS  # pylint: disable=global-statement
+    from common import i18n_ar  # pylint: disable=import-outside-toplevel
+
+    for english, arabic in i18n_ar.merged_text().items():
+        AR_TEXT.setdefault(english, arabic)
+    _AR_PATTERNS = _AR_PATTERNS + tuple(i18n_ar.merged_patterns())
+
+
+_merge_page_text()
+
+
 # --------------------------------------------------------------------------- #
 # Lookup                                                                      #
 # --------------------------------------------------------------------------- #
