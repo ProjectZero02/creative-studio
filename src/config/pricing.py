@@ -34,8 +34,13 @@ How each kind of call is billed:
 * Chirp 3 HD: per character. Imagen, Lyria, Virtual Try-On: per item.
 
 Estimates are not a bill: free tiers (Chirp's first 1M characters a month),
-discounts, committed use, credits and taxes are not included. Failed calls
-cost 0.
+discounts, committed use, credits and taxes are not included.
+
+Failed calls: a call that failed before any output cost 0. Two failures are
+priced like a success, because Google bills them: "failed_after_output" (the
+API returned output and a later step, such as saving it, failed) and
+"timeout_maybe_billed" (the client gave up on a call the server keeps
+running, e.g. a Gemini Omni interaction).
 """
 
 from __future__ import annotations
@@ -59,6 +64,8 @@ CATALOG_RETRY_SECONDS = 30 * 60  # after a failed read, wait before trying again
 _CATALOG_BASE_URL = "https://cloudbilling.googleapis.com/v1"
 _BILLING_SCOPE = "https://www.googleapis.com/auth/cloud-billing.readonly"
 VERTEX_SERVICE = "Vertex AI"
+# Call statuses that Google bills (see the module docstring).
+BILLED_STATUSES = frozenset({"success", "failed_after_output", "timeout_maybe_billed"})
 TTS_SERVICE = "Cloud Text-to-Speech API"
 
 
@@ -939,7 +946,7 @@ def estimate_details(
 ) -> tuple[float | None, dict]:
     """The cost of one call and how it was priced. `fetch=False` never reads
     the catalog (list prices unless it is already cached)."""
-    if status != "success":
+    if status not in BILLED_STATUSES:
         return 0.0, {"pricing_status": "not_applicable"}
     units = units or {}
     key = model_key(model)

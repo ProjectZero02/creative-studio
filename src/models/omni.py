@@ -207,10 +207,13 @@ def generate_omni_video(
             logger.info(
                 f"Calling client.interactions.create with model={model_config.model_name}",
             )
+            # A client timeout may still be billed: the server keeps going.
+            ctx["bill_on_timeout"] = True
             interaction = client.interactions.create(
                 **call_args,
                 timeout=config.OMNI_TIMEOUT_MS / 1000.0,
             )
+            ctx["bill_on_timeout"] = False
 
             # Bill from the tokens the API reports (inputs include the
             # earlier clips of a chat thread).
@@ -218,6 +221,7 @@ def generate_omni_video(
 
             # 4. Extract outputs
             video_data, interaction_id = _extract_video_payload(interaction)
+            ctx["output_received"] = True  # billed even if saving fails
 
             # 5. Decode and save
             gcs_uri = _save_video_to_gcs(video_data)

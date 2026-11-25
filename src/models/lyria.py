@@ -103,6 +103,9 @@ def generate_music_with_lyria(
                         error_message = f"Lyria API Error: {error_detail.get('message', 'Unknown error from API payload')}"
                     logger.error(error_message)
                     raise ValueError(error_message)
+                # Billed from here on, even if saving fails.
+                ctx["billing_units"]["sample_count"] = len(response.predictions)
+                ctx["output_received"] = True
 
                 destination_blob_names = []
                 for prediction in response.predictions:
@@ -197,6 +200,7 @@ def generate_music_with_lyria(
                     raise ValueError(
                         "Lyria API returned an unexpected response (no valid prediction data).",
                     )
+                ctx["output_received"] = True  # billed even if saving fails
 
                 destination_blob_names = []
                 contents = audio_b64

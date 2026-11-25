@@ -277,14 +277,37 @@ def track_click(element_id: str):
     return decorator
 
 
+def is_timeout(exc: BaseException | None) -> bool:
+    """Whether an exception (or one it was raised from) is a timeout."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        name = type(exc).__name__.lower()
+        if (
+            isinstance(exc, TimeoutError)
+            or "timeout" in name
+            or "deadlineexceeded" in name
+            or "timed out" in str(exc).lower()
+        ):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 @contextmanager
 def track_model_call(
     model_name: str, billing_units: dict = None, pipeline_id: str = None, **kwargs,
 ):
     """Context manager to log the duration, status, and telemetry of a model call.
 
-    Yields a dict `ctx = {"billing_units": {...}, "details": {...}, "pipeline_id": ...}`
-    which code inside the block can update dynamically.
+    Yields a dict `ctx = {"billing_units": {...}, "details": {...}, "pipeline_id": ...,
+    "event_id": ...}` which code inside the block can update dynamically.
+
+    Set ``ctx["output_received"] = True`` right after the API returns output:
+    a later exception (say, saving to GCS) is then logged as
+    "failed_after_output" and priced. ``ctx["bill_on_timeout"] = True``
+    around a call the server finishes even when the client gives up turns a
+    timeout into "timeout_maybe_billed" (also priced).
     """
     from common.error_handling import classify_error
 
@@ -314,9 +337,16 @@ def track_model_call(
         err_dict = classify_error(e)
         details = dict(ctx["details"])
         details["error"] = err_dict["message"]
+        # Output that came back is billed even when a later step fails; a
+        # client timeout on a call the server keeps running may be billed.
+        status = "failure"
+        if ctx.get("output_received"):
+            status = "failed_after_output"
+        elif ctx.get("bill_on_timeout") and is_timeout(e):
+            status = "timeout_maybe_billed"
         log_model_call(
             model_name,
-            status="failure",
+            status=status,
             duration_ms=duration_ms,
             details=details,
             billing_units=ctx["billing_units"] if ctx["billing_units"] else None,
