@@ -589,6 +589,17 @@ def _run(job):
     return done
 
 
+def _run_chain(job):
+    """Run a job and the ones it starts after it (the second-language film
+    follows the main one). Returns (main job, every task of the chain)."""
+    first = done = _run(job)
+    tasks = list(done.tasks)
+    while done.params.get("next_job"):
+        done = _run(story_jobs.get_job(done.params["next_job"], OWNER))
+        tasks += done.tasks
+    return first, tasks
+
+
 def test_full_pipeline_with_mock_backend(fast_backend, local_store):
     s = local_store.save(
         Story(idea="A lighthouse keeper befriends a whale", scene_count=3, duration=4),
@@ -833,9 +844,9 @@ def _ready_story(local_store, **kw):
 
 def test_render_makes_both_films_from_the_same_clips(bilingual, local_store):
     s = _ready_story(local_store, second_on=True)
-    job = _run(story_jobs.start_video(s.id, OWNER))
-    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
-    kinds = [t.kind for t in job.tasks]
+    job, tasks = _run_chain(story_jobs.start_video(s.id, OWNER))
+    assert all(t.status == "done" for t in tasks), [(t.label, t.error) for t in tasks]
+    kinds = [t.kind for t in tasks]
     assert kinds.count("clip") == 3  # clips are rendered once, not per language
     assert kinds.count("voice_alt") == 2  # the silent scene gets no voice
     assert [lang for lang, _ in bilingual.films] == ["English", "Arabic"]
@@ -883,8 +894,8 @@ def test_translation_keeps_edited_lines_unless_forced(bilingual, local_store):
 def test_failed_translation_still_makes_main_film(bilingual, local_store):
     bilingual.translate = lambda story: "not json"
     s = _ready_story(local_store, second_on=True)
-    job = _run(story_jobs.start_video(s.id, OWNER))
-    by_kind = {t.kind: t.status for t in job.tasks}
+    job, tasks = _run_chain(story_jobs.start_video(s.id, OWNER))
+    by_kind = {t.kind: t.status for t in tasks}
     assert by_kind["translate"] == "failed"
     assert by_kind["stitch"] == by_kind["library"] == "done"
     assert by_kind["stitch_alt"] == "skipped"
@@ -1015,8 +1026,8 @@ def test_spoken_scene_gets_no_voiceover(speech, local_store):
 
 def test_second_language_rerenders_only_spoken_clips(speech, local_store):
     s = _spoken_story(local_store, second_on=True)
-    job = _run(story_jobs.start_video(s.id, OWNER))
-    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    job, tasks = _run_chain(story_jobs.start_video(s.id, OWNER))
+    assert all(t.status == "done" for t in tasks), [(t.label, t.error) for t in tasks]
     arabic_clips = [c for c in speech.clips if c[0] == "Arabic"]
     assert arabic_clips == [("Arabic", 0, "[Arabic] Meet Gemini.")]
     s = local_store.get(s.id, OWNER)
@@ -1027,14 +1038,14 @@ def test_second_language_rerenders_only_spoken_clips(speech, local_store):
     assert speech.films[1][1][0] == "" and speech.films[1][1][1]
 
     # Rendering again reuses the Arabic clip while it is current.
-    job = _run(story_jobs.start_video(s.id, OWNER))
-    assert "clip_alt" not in {t.kind for t in job.tasks}
+    job, tasks = _run_chain(story_jobs.start_video(s.id, OWNER))
+    assert "clip_alt" not in {t.kind for t in tasks}
 
 
 def test_second_language_without_voiceover_when_scenes_speak(speech, local_store):
     s = _spoken_story(local_store, second_on=True, voice_on=False)
-    job = _run(story_jobs.start_video(s.id, OWNER))
-    assert job.status == "done", [(t.label, t.error) for t in job.tasks]
+    job, tasks = _run_chain(story_jobs.start_video(s.id, OWNER))
+    assert all(t.status == "done" for t in tasks), [(t.label, t.error) for t in tasks]
     assert local_store.get(s.id, OWNER).final_alt_uri
 
 
@@ -1048,8 +1059,8 @@ def test_failed_spoken_alt_clip_skips_second_film(speech, local_store):
 
     speech.generate_clip = flaky
     s = _spoken_story(local_store, second_on=True)
-    job = _run(story_jobs.start_video(s.id, OWNER))
-    kinds = {t.kind: t.status for t in job.tasks}
+    job, tasks = _run_chain(story_jobs.start_video(s.id, OWNER))
+    kinds = {t.kind: t.status for t in tasks}
     assert kinds["stitch"] == "done" and kinds["stitch_alt"] == "skipped"
     assert not local_store.get(s.id, OWNER).final_alt_uri
 

@@ -46,9 +46,17 @@ from services.story_models import (
     resolution_options,
     voice_label,
 )
+from services.story_autoset import SHOTS
 from services.story_service import display_url
 from state.story_state import StoryState
 
+# Who speaks, as Setup chips (Auto: Gemini picks per scene).
+SPEECH_CHIPS = {
+    "auto": "Auto",
+    "on_camera": "On camera",
+    "narrator": "Narrator",
+    "none": "None",
+}
 # Pacing chips, calm to fast.
 PACING_CHIPS = ("documentary", "cinematic", "dynamic")
 # Menu order of "Add reference".
@@ -64,6 +72,8 @@ class SetupHandlers:
     on_duration_live: Callable
     on_duration_blur: Callable
     on_pacing: Callable
+    on_shots: Callable
+    on_speech: Callable
     on_video_model: Callable
     on_aspect: Callable
     on_language: Callable
@@ -121,7 +131,10 @@ def film_seconds(s: StoryState) -> tuple[int, str]:
 
 
 def one_take_of(s: StoryState) -> bool:
-    """The idea (or script) asks for one continuous shot."""
+    """One continuous take: picked in Setup (by hand or read from the idea
+    in any language), else the idea (or script) says so in English."""
+    if s.shots in ("one", "several"):
+        return s.shots == "one"
     text = s.raw_script if s.input_mode == "script" else s.idea
     return story_director.is_one_take(text or "")
 
@@ -134,6 +147,8 @@ def blueprint(s: StoryState) -> dict:
         video_model=engine_of(s),
         resolution=s.resolution,
         one_take=one_take_of(s),
+        voice_on=s.speech_mode != "none",
+        speech_mode=s.speech_mode,
     )
     bp["source"] = source
     return bp
@@ -474,6 +489,20 @@ def render_setup(
 
             _style(s, h)
 
+            with me.box(classes="ss-film-type"):
+                with me.box(classes="ss-pacing"):
+                    _t("Shots", "ss-label")
+                    with me.box(classes="ss-chip-row ss-chip-row-3"):
+                        for sid, label in SHOTS.items():
+                            _chip_button(label, s.shots == sid, h.on_shots, f"shots-{sid}")
+                with me.box(classes="ss-pacing"):
+                    _t("Speech", "ss-label")
+                    with me.box(classes="ss-chip-row ss-chip-row-4"):
+                        for mode, label in SPEECH_CHIPS.items():
+                            _chip_button(
+                                label, s.speech_mode == mode, h.on_speech, f"speech-{mode}"
+                            )
+
             with me.box(classes="ss-pacing"):
                 _t("Pacing", "ss-label")
                 with me.box(classes="ss-chip-row ss-chip-row-3"):
@@ -548,14 +577,16 @@ def _blueprint_card(
                     _money(round(cost["total"] + extra, 2)),
                     style=me.Style(font_weight=700),
                 )
+            parts = [
+                ("Video", cost["video"]),
+                ("Frames", cost["frames"]),
+                ("Voice", cost["voice"] if s.speech_mode != "none" else 0.0),
+                ("Music", cost["music"]),
+            ]
+            if s.second_on:
+                parts.append((other_language(s.language), extra))
             _t(
-                f"Video {_money(cost['video'])} · Frames {_money(cost['frames'])} · "
-                f"Voice {_money(cost['voice'])} · Music {_money(cost['music'])}"
-                + (
-                    f" · {other_language(s.language)} {_money(extra)}"
-                    if s.second_on
-                    else ""
-                ),
+                " · ".join(f"{name} {_money(v)}" for name, v in parts if v > 0),
                 "ss-muted ss-small",
             )
 

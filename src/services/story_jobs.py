@@ -39,7 +39,7 @@ from dataclasses import asdict, dataclass, field, replace
 from common.analytics import get_logger
 from common.error_handling import GenerationError, classify_error
 from common import usage
-from services import story_versions
+from services import story_timeline, story_versions
 from config.default import Default
 from services.story_models import (
     NarrationTooLong,
@@ -72,6 +72,7 @@ from services.story_sets import (
     VIEW_LABELS,
     StorySet,
     anchor_view,
+    build_views,
     aspect_for,
     ensure_views,
     get_set_store,
@@ -135,7 +136,6 @@ HEAVY_KINDS = (
     "storyboard",
     "clips",
     "video",
-    "alt_video",
     "translate",
     "music",
 )
@@ -263,6 +263,61 @@ def _new_job(owner: str, story_id: str, kind: str, params: dict | None = None) -
     return job
 
 
+def _insert_task(
+    job: Job, before: Task, label: str, kind: str, scene_index: int = -1
+) -> Task:
+    """A step added while the job runs, shown before `before`."""
+    task = Task(
+        id=uuid.uuid4().hex[:8], label=label, kind=kind, scene_index=scene_index
+    )
+    with _jobs_lock:
+        try:
+            job.tasks.insert(job.tasks.index(before), task)
+        except ValueError:
+            job.tasks.append(task)
+    return task
+
+
+def _stitch_label(story: Story) -> str:
+    """The stitch step in plain words for this film: one take is only
+    finished (sound, checks), takes joined with no fade are joined, and
+    only a film with fades between its shots is crossfaded."""
+    if len(take_groups(story)) <= 1:
+        return FINISH_LABEL
+    if story.chains_takes and story.seamless_joins:
+        return JOIN_LABEL
+    return CROSSFADE_LABEL
+
+
+FINISH_LABEL = "Finishing the film · sound and checks"
+JOIN_LABEL = "Joining the takes"
+CROSSFADE_LABEL = "Stitching the film · crossfades and mix"
+
+
+def _plan_label(plan) -> str:
+    """The stitch step's label from the real plan (once the clips exist)."""
+    segs = plan.segments
+    if len(segs) <= 1 or all(s.join == "extend" for s in segs[1:]):
+        return FINISH_LABEL
+    if all(not s.fade_in for s in segs[1:]):
+        return JOIN_LABEL
+    return CROSSFADE_LABEL
+
+
+def _save_film_item(backend, story: Story, film: str, owner: str, alt: bool = False) -> str:
+    """Keep one library item per film: update the story's item when it has
+    one, else add it and remember its id."""
+    field_name = "library_alt_id" if alt else "library_id"
+    item_id = backend.save_to_library(
+        replace(story, library_id=getattr(story, field_name)), film, owner
+    )
+    if item_id and item_id != getattr(story, field_name):
+        mutate_story(
+            story.id, owner, lambda s: setattr(s, field_name, item_id)
+        )
+    return ""
+
+
 def _add_task(job: Job, label: str, kind: str, scene_index: int = -1) -> Task:
     task = Task(
         id=uuid.uuid4().hex[:8], label=label, kind=kind, scene_index=scene_index
@@ -287,6 +342,10 @@ def _run_task(
         task.result_uri = fn() or ""
         task.status = DONE
         return True
+    except story_timeline.Cancelled:
+        task.status = SKIPPED
+        task.error = "Cancelled by user."
+        return False
     except Exception as exc:
         logger.exception("Story Studio task failed: %s", task.label)
         task.error = friendly_error(exc)
@@ -328,6 +387,7 @@ class _Pool(ThreadPoolExecutor):
 def _spawn(job: Job, target: Callable[[Job], None]) -> Job:
     def runner():
         _current_job.set(job.id)
+        story_timeline.CANCEL.set(job.cancel_event)
         try:
             with usage.acting_for(job.owner):
                 target(job)
@@ -488,6 +548,8 @@ def start_scenario(story_id: str, owner: str, then_frames: bool = False) -> Job:
                 s.scenes = scenes
                 if scenes and all(sc.spoken for sc in scenes):
                     s.voice_on = False  # all on camera: no narrator
+                if s.speech_mode == "none":
+                    s.voice_on = False  # music and picture only
                 s.cast_json = cast_json
                 s.approved = False
                 s.clear_films()
@@ -789,6 +851,44 @@ def _needs_voice(story: Story, scene) -> bool:
     return story.voice_on and bool(scene.narration.strip())
 
 
+def _voice_key(story: Story, index: int, set_version: int, alt: bool = False) -> str:
+    """What a narrator line is made from: its text, the voice, language and
+    set (the set narrator's pinned voice), the TTS model and the scene's
+    length (a line is fitted to it). Same key, same voice file."""
+    import hashlib
+
+    sc = story.scenes[index]
+    text = (sc.narration_alt if alt else sc.narration).strip()
+    raw = json.dumps(
+        [
+            text,
+            story.voice_name,
+            story.alt_language if alt else story.language,
+            story.set_id,
+            set_version,
+            Default().STORY_TTS_MODEL,
+            sc.duration,
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _keep_voice(
+    story_id: str, owner: str, scene_id: str, uri: str, key: str, alt: bool = False
+) -> None:
+    """Store a scene's voiced line so the next render can reuse it."""
+
+    def apply(s: Story) -> None:
+        for sc in s.scenes:
+            if sc.id == scene_id:
+                if alt:
+                    sc.voice_alt_uri, sc.voice_alt_key = uri, key
+                else:
+                    sc.voice_uri, sc.voice_key = uri, key
+
+    mutate_story(story_id, owner, apply)
+
+
 def _translate_into(story_id: str, owner: str, force: bool = False) -> str:
     """Translate the narration into the story's second language and save it.
 
@@ -901,73 +1001,38 @@ def start_video(story_id: str, owner: str) -> Job:
         for t in story.music_tracks()
         if story.music_on and not t.get("uri")
     }
-    voice_tasks = {
-        i: _add_task(job, f"Scene {i + 1} · voiceover", "voice", i)
+    # Narrator lines: a line voiced before from the same text, voice and
+    # length is reused; only new or changed lines go to text-to-speech.
+    set_version = _set_version(story, owner)
+    voice_keys = {
+        i: _voice_key(story, i, set_version)
         for i, sc in enumerate(story.scenes)
         if _needs_voice(story, sc)
     }
+    cached_voices = {
+        i: story.scenes[i].cached_voice(key)
+        for i, key in voice_keys.items()
+        if story.scenes[i].cached_voice(key)
+    }
+    voice_tasks = {
+        i: _add_task(job, f"Scene {i + 1} · voiceover", "voice", i)
+        for i in voice_keys
+        if i not in cached_voices
+    }
+    # Fitting measures and, if needed, shortens lines: only after new ones.
     fit_task = (
         _add_task(job, "Fitting the narration to its scenes", "voice")
-        if any(not _is_spoken(story.scenes[i]) for i in voice_tasks)
+        if voice_tasks
         else None
     )
-    stitch_task = _add_task(job, "Stitching the film · crossfades and mix", "stitch")
+    stitch_task = _add_task(job, _stitch_label(story), "stitch")
     library_task = _add_task(job, "Saving to your library", "library")
-    # Second-language film: same clips and music, translated voiceover.
-    alt = story.alt_language
-    alt_on = story.makes_alt and any(sc.narration.strip() for sc in story.scenes)
-    translate_task = (
-        _add_task(job, f"Translating the narration into {alt}", "translate")
-        if alt_on and story.needs_translation()
-        else None
-    )
-    alt_voice_tasks = (
-        {
-            i: _add_task(
-                job, f"Scene {i + 1} · {alt} voiceover", "voice_alt", i
-            )
-            for i, sc in enumerate(story.scenes)
-            if _needs_voice(story, sc)
-        }
-        if alt_on
-        else {}
-    )
-    # Spoken scenes: the speech is in the video, so Omni renders the scene
-    # again saying the translated line (skipped while the last one is current).
-    alt_clip_tasks = (
-        {
-            i: _add_task(
-                job, f"Scene {i + 1} · {alt} video clip with speech", "clip_alt", i
-            )
-            for i, sc in enumerate(story.scenes)
-            if _is_spoken(sc) and not (sc.clip_uri and sc.has_alt_clip())
-        }
-        if alt_on
-        else {}
-    )
-    alt_stitch_task = (
-        _add_task(job, f"Stitching the {alt} film", "stitch_alt") if alt_on else None
-    )
-    alt_library_task = (
-        _add_task(job, f"Saving the {alt} film to your library", "library_alt")
-        if alt_on
-        else None
-    )
     cfg = Default()
 
     def work(job: Job) -> None:
         backend = get_backend()
-        voice_uris: dict[int, str] = {}
-        alt_voice_uris: dict[int, str] = {}
+        voice_uris: dict[int, str] = dict(cached_voices)
         music_uri = ""
-        if translate_task and not _run_task(
-            translate_task, lambda: _translate_into(story_id, owner), job.cancel_event
-        ):
-            for t in [*alt_voice_tasks.values(), *alt_clip_tasks.values()]:
-                t.status = SKIPPED
-        if job.cancel_event.is_set():
-            return
-        translated = alt_story(get_store().get(story_id, owner) or story)
 
         def animate(i: int, start_frame: str, from_clip: str = "") -> str:
             """Render scene i's clip. from_clip: the previous clip whose last
@@ -1114,34 +1179,12 @@ def start_video(story_id: str, owner: str) -> Job:
                 for i in clip_tasks
             ]
 
-        def speak(st: Story, i: int, text: str, same_language: bool) -> str:
-            """The narrator's voiceover line (on-camera lines are spoken in
-            the clip itself)."""
-            return backend.generate_voiceover(st, i, text)
-
         def voice(i: int) -> str:
-            uri = speak(story, i, story.scenes[i].narration, True)
+            """The narrator's line (on-camera lines are spoken in the clip)."""
+            uri = backend.generate_voiceover(story, i, story.scenes[i].narration)
             voice_uris[i] = uri
+            _keep_voice(story_id, owner, story.scenes[i].id, uri, voice_keys[i])
             return uri
-
-        def voice_alt(i: int) -> str:
-            text = translated.scenes[i].narration
-            if not text.strip():
-                raise GenerationError(f"Scene {i + 1} has no {alt} line yet.")
-            uri = speak(translated, i, text, False)
-            alt_voice_uris[i] = uri
-            return uri
-
-        # On-camera lines are voiced once their clip exists (they copy how the
-        # person speaks in it); narration can start right away.
-        after_clips = [
-            (t, voice) for i, t in voice_tasks.items() if _is_spoken(story.scenes[i])
-        ] + [
-            (t, voice_alt)
-            for i, t in alt_voice_tasks.items()
-            if _is_spoken(story.scenes[i])
-        ]
-        held = {id(t) for t, _ in after_clips}
 
         with _Pool(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
             futures = []
@@ -1170,19 +1213,9 @@ def start_video(story_id: str, owner: str) -> Job:
             for i, t in voice_tasks.items():
                 if job.cancel_event.is_set():
                     break
-                if id(t) not in held:
-                    futures.append(
-                        pool.submit(_run_task, t, lambda i=i: voice(i), job.cancel_event)
-                    )
-            for i, t in alt_voice_tasks.items():
-                if job.cancel_event.is_set():
-                    break
-                if t.status == QUEUED and id(t) not in held:
-                    futures.append(
-                        pool.submit(
-                            _run_task, t, lambda i=i: voice_alt(i), job.cancel_event
-                        )
-                    )
+                futures.append(
+                    pool.submit(_run_task, t, lambda i=i: voice(i), job.cancel_event)
+                )
             if sequential:
                 clips_continuity()
             else:
@@ -1191,25 +1224,12 @@ def start_video(story_id: str, owner: str) -> Job:
                 f.result()
         if job.cancel_event.is_set():
             return
-        pending_lines = [(t, fn) for t, fn in after_clips if t.status == QUEUED]
-        if pending_lines:
-            with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
-                for f in [
-                    pool.submit(
-                        _run_task,
-                        t,
-                        lambda fn=fn, i=t.scene_index: fn(i),
-                        job.cancel_event,
-                    )
-                    for t, fn in pending_lines
-                ]:
-                    f.result()
-        if job.cancel_event.is_set():
-            return
         if fit_task:
             _run_task(
                 fit_task,
-                lambda: _fit_voice_lines(story_id, owner, backend, voice_uris),
+                lambda: _fit_voice_lines(
+                    story_id, owner, backend, voice_uris, set_version
+                ),
                 job.cancel_event,
             )
         if music_task and music_task.status == DONE:
@@ -1218,20 +1238,220 @@ def start_video(story_id: str, owner: str) -> Job:
         elif story.music_on and story.music_uri:
             music_uri = story.music_uri
 
-        def animate_alt(i: int) -> str:
+        if job.cancel_event.is_set():
+            return
+        final = get_store().get(story_id, owner)
+        missing = [i + 1 for i, s in enumerate(final.scenes) if not s.clip_uri]
+        if missing:
+            stitch_task.status = library_task.status = SKIPPED
+            stitch_task.error = f"Waiting for scene {', '.join(map(str, missing))}."
+            return
+        made: dict = {}
+
+        def stitch_now() -> str:
+            plan = build_stitch_plan(
+                final.scenes,
+                cfg.STORY_CROSSFADE_SECONDS,
+                seamless=final.chains_takes and final.seamless_joins,
+            )
+            voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
+            film_uri, made["timeline"] = _film_and_timeline(
+                backend.stitch(final, plan, music_uri, voices)
+            )
+            return film_uri
+
+        stitch_task.label = _plan_label(
+            build_stitch_plan(
+                final.scenes,
+                cfg.STORY_CROSSFADE_SECONDS,
+                seamless=final.chains_takes and final.seamless_joins,
+            )
+        )
+        if not _run_task(stitch_task, stitch_now, job.cancel_event):
+            library_task.status = SKIPPED
+            return
+
+        def remake(label: str, fn) -> bool:
+            """A paid remake the checks asked for, shown as its own step,
+            then the film stitched again."""
+            nonlocal final
+            task = _insert_task(job, library_task, label, "clip")
+            ok = _run_task(task, fn, job.cancel_event)
+            final = get_store().get(story_id, owner) or final
+            again = None
+            if ok:
+                again = _insert_task(
+                    job, library_task, "Stitching the film again", "stitch"
+                )
+                ok = _run_task(again, stitch_now, job.cancel_event)
+            if ok:
+                stitch_task.result_uri = again.result_uri
+                return True
+            # A failed try never fails the film: it keeps the first one.
+            for t in (task, again):
+                if t is not None and t.status == FAILED:
+                    t.status = SKIPPED
+                    t.error = "Could not improve it; the film keeps the first try."
+            return False
+
+        # A join meant to be invisible that still jumps: make the clip after
+        # it again (a new take of the same prompt) and re-stitch.
+        retries = 0 if is_mock_mode() else max(0, int(cfg.STORY_SEAM_RETRIES))
+        for _ in range(retries):
+            redo = seams_to_redo(final, (made.get("timeline") or {}).get("seams"))
+            if not redo or job.cancel_event.is_set():
+                break
+
+            def smooth(redo=redo) -> str:
+                for i in redo:
+                    prev_clip = final.scenes[i - 1].clip_uri
+                    if final.continues_take(i):
+                        extend(i, prev_clip)
+                    else:
+                        current = get_store().get(story_id, owner) or final
+                        animate(i, backend.last_frame(current, prev_clip, i), prev_clip)
+                return ""
+
+            scenes = ", ".join(str(i + 1) for i in redo)
+            if not remake(f"Scene {scenes} · making a rough join again", smooth):
+                break
+        # A cut the video model put inside a take: make that turn again.
+        for _ in range(max(0, int(getattr(cfg, "STORY_TURN_REDOS", 1)))):
+            redo = turns_to_redo(final, (made.get("timeline") or {}).get("cuts"))
+            if not redo or job.cancel_event.is_set():
+                break
+
+            def return_turns(redo=redo) -> str:
+                for i, turn in redo:
+                    _redo_turn(story_id, owner, backend, i, turn)
+                return ""
+
+            turns = ", ".join(f"scene {i + 1} turn {t + 1}" for i, t in redo)
+            if not remake(f"Making {turns} again · a cut inside the take", return_turns):
+                break
+        if job.cancel_event.is_set():
+            # Cancelled during the checks: keep the last film.
+            library_task.status = SKIPPED
+            return
+        film = stitch_task.result_uri
+
+        def apply(s: Story) -> None:
+            s.final_uri = film
+            s.final_parts_json = json.dumps(s.film_parts())
+            s.film_edited = False
+            s.set_version = _set_version(s, owner)
+            s.step = "video"
+            if made.get("timeline"):
+                s.timeline_json = json.dumps(made["timeline"])
+            # What the cut scan and sound checks found, shown on each take.
+            cuts = (made.get("timeline") or {}).get("cuts") or []
+            sound = (made.get("timeline") or {}).get("sound") or {}
+            for i, sc in enumerate(s.scenes):
+                mine = [
+                    {"t": c.get("t", 0), "turn": c.get("turn", -1)}
+                    for c in cuts
+                    if c.get("scene") == i
+                ]
+                sc.cuts_json = json.dumps(mine) if mine else ""
+                flags = sound.get(str(i)) or []
+                sc.sound_json = json.dumps(flags) if flags else ""
+            story_versions.remember(s, "render")
+
+        saved = mutate_story(story_id, owner, apply)
+        _run_task(
+            library_task,
+            lambda: _save_film_item(backend, saved, film, owner),
+            job.cancel_event,
+        )
+        # The second-language film is its own job, after this one.
+        if saved.makes_alt and not job.cancel_event.is_set():
+            try:
+                job.params["next_job"] = start_alt_video(story_id, owner).id
+            except Exception:
+                logger.exception("Could not start the second-language film")
+
+    return _spawn(job, work)
+
+
+def start_alt_video(story_id: str, owner: str) -> Job:
+    """The second-language film on its own: the same clips and music, the
+    narration translated and voiced again, and spoken takes made again
+    saying the translated lines. The main film is left as it is."""
+    ensure_free(story_id)
+    story = get_store().get(story_id, owner)
+    if story is None:
+        raise StoryAccessError("Story not found.")
+    if not story.scenes or any(not sc.clip_uri for sc in story.scenes):
+        raise GenerationError("Make the film first.")
+    if not any(sc.narration.strip() for sc in story.scenes):
+        raise GenerationError("There are no lines to translate.")
+    alt = story.alt_language
+    job = _new_job(owner, story_id, "video", {"alt": True})
+    translate_task = (
+        _add_task(job, f"Translating the narration into {alt}", "translate")
+        if story.needs_translation()
+        else None
+    )
+    music_task = (
+        _add_task(job, "Music · Lyria score", "music")
+        if story.music_on and not story.music_uri
+        else None
+    )
+    voice_tasks = {
+        i: _add_task(job, f"Scene {i + 1} · {alt} voiceover", "voice_alt", i)
+        for i, sc in enumerate(story.scenes)
+        if _needs_voice(story, sc)
+    }
+    # Spoken takes: the speech is in the picture, so the take is made again
+    # saying the translated line (kept while the last one is current).
+    clip_tasks = {
+        i: _add_task(job, f"Scene {i + 1} · {alt} video clip with speech", "clip_alt", i)
+        for i, sc in enumerate(story.scenes)
+        if _is_spoken(sc) and not sc.has_alt_clip()
+    }
+    stitch_task = _add_task(job, f"Making the {alt} film", "stitch_alt")
+    library_task = _add_task(job, f"Saving the {alt} film to your library", "library_alt")
+    set_version = _set_version(story, owner)
+    cfg = Default()
+
+    def work(job: Job) -> None:
+        backend = get_backend()
+        if translate_task and not _run_task(
+            translate_task, lambda: _translate_into(story_id, owner), job.cancel_event
+        ):
+            for t in [*voice_tasks.values(), *clip_tasks.values(), stitch_task, library_task]:
+                t.status = SKIPPED
+            return
+        if job.cancel_event.is_set():
+            return
+        latest = get_store().get(story_id, owner) or story
+        translated = alt_story(latest)
+        voice_uris: dict[int, str] = {}
+
+        def voice(i: int) -> str:
+            sc = latest.scenes[i]
+            text = translated.scenes[i].narration
+            if not text.strip():
+                raise GenerationError(f"Scene {i + 1} has no {alt} line yet.")
+            key = _voice_key(latest, i, set_version, alt=True)
+            uri = sc.cached_voice(key, alt=True)
+            if not uri:
+                uri = backend.generate_voiceover(translated, i, text)
+                _keep_voice(story_id, owner, sc.id, uri, key, alt=True)
+            voice_uris[i] = uri
+            return uri
+
+        def animate(i: int) -> str:
             current = get_store().get(story_id, owner)
             if current is None:
                 raise StoryAccessError("Story not found.")
             sc = current.scenes[i]
-            if not sc.clip_uri:
-                raise GenerationError(f"Scene {i + 1} has no clip yet.")
             second = alt_story(current)
             if not second.scenes[i].narration.strip():
                 raise GenerationError(f"Scene {i + 1} has no {alt} line yet.")
-            # With continuity, start from the last frame of the clip that
-            # comes before it in the second film (that scene's own second-
-            # language clip when it has one), so the joins match there too.
-            # Otherwise start from the scene's storyboard frame, like the main clip.
+            # With continuity, start from the last frame of the clip before it
+            # in the second film, so the joins match there too; otherwise
+            # from the scene's own frame, like the main clip.
             start_from = ""
             if sc.continues_from and i > 0:
                 prev = second.scenes[i - 1]
@@ -1253,181 +1473,83 @@ def start_video(story_id: str, owner: str) -> Job:
             mutate_story(story_id, owner, apply)
             return uri
 
-        pending_alt = [i for i, t in alt_clip_tasks.items() if t.status == QUEUED]
-        if pending_alt and story.chains_takes:
-            # One after another: each may start from the previous one.
-            for i in sorted(pending_alt):
-                if job.cancel_event.is_set():
-                    break
-                _run_task(alt_clip_tasks[i], lambda i=i: animate_alt(i), job.cancel_event)
-        elif pending_alt:
-            with _Pool(max_workers=max(1, cfg.STORY_MAX_PARALLEL)) as pool:
-                for f in [
+        with _Pool(max_workers=max(2, cfg.STORY_MAX_PARALLEL)) as pool:
+            futures = []
+            if music_task:
+                seconds = sum(s.duration for s in latest.scenes)
+                prompt = latest.music_prompt or default_music_prompt(latest)
+                futures.append(
                     pool.submit(
                         _run_task,
-                        alt_clip_tasks[i],
-                        lambda i=i: animate_alt(i),
+                        music_task,
+                        lambda: backend.generate_music(latest, prompt, seconds),
                         job.cancel_event,
                     )
-                    for i in pending_alt
-                ]:
-                    f.result()
-
+                )
+            for i, t in voice_tasks.items():
+                futures.append(
+                    pool.submit(_run_task, t, lambda i=i: voice(i), job.cancel_event)
+                )
+            if latest.chains_takes:
+                # One after another: each may start from the one before.
+                for i in sorted(clip_tasks):
+                    if job.cancel_event.is_set():
+                        break
+                    _run_task(clip_tasks[i], lambda i=i: animate(i), job.cancel_event)
+            else:
+                futures.extend(
+                    pool.submit(_run_task, t, lambda i=i: animate(i), job.cancel_event)
+                    for i, t in clip_tasks.items()
+                )
+            for f in futures:
+                f.result()
         if job.cancel_event.is_set():
             return
-        final = get_store().get(story_id, owner)
-        missing = [i + 1 for i, s in enumerate(final.scenes) if not s.clip_uri]
-        later = [stitch_task, library_task, alt_stitch_task, alt_library_task]
-        if missing:
-            for t in later:
-                if t:
-                    t.status = SKIPPED
-            stitch_task.error = f"Waiting for scene {', '.join(map(str, missing))}."
-            return
-        plan = build_stitch_plan(
-            final.scenes,
-            cfg.STORY_CROSSFADE_SECONDS,
-            seamless=final.chains_takes and final.seamless_joins,
-        )
-        voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
-        made: dict = {}
-
-        def stitch() -> str:
-            nonlocal final, plan, voices
-            film_uri, made["timeline"] = _film_and_timeline(
-                backend.stitch(final, plan, music_uri, voices)
-            )
-            # A join meant to be invisible that still jumps: make the clip
-            # after it again (a new take of the same prompt) and re-stitch.
-            retries = 0 if is_mock_mode() else max(0, int(cfg.STORY_SEAM_RETRIES))
-            for _ in range(retries):
-                redo = seams_to_redo(final, (made.get("timeline") or {}).get("seams"))
-                if not redo or job.cancel_event.is_set():
-                    break
-                for i in redo:
-                    prev_clip = final.scenes[i - 1].clip_uri
-                    try:
-                        if final.continues_take(i):
-                            extend(i, prev_clip)
-                        else:
-                            current = get_store().get(story_id, owner) or final
-                            animate(i, backend.last_frame(current, prev_clip, i), prev_clip)
-                    except Exception:
-                        logger.exception("Remaking scene %s for a smoother join failed", i + 1)
-                final = get_store().get(story_id, owner) or final
-                plan = build_stitch_plan(
-                    final.scenes,
-                    cfg.STORY_CROSSFADE_SECONDS,
-                    seamless=final.chains_takes and final.seamless_joins,
-                )
-                voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
-                film_uri, made["timeline"] = _film_and_timeline(
-                    backend.stitch(final, plan, music_uri, voices)
-                )
-            # A cut Omni put inside a take: make that turn again and re-stitch.
-            for _ in range(max(0, int(getattr(cfg, "STORY_TURN_REDOS", 1)))):
-                redo = turns_to_redo(final, (made.get("timeline") or {}).get("cuts"))
-                if not redo or job.cancel_event.is_set():
-                    break
-                for i, turn in redo:
-                    try:
-                        _redo_turn(story_id, owner, backend, i, turn)
-                    except Exception:
-                        logger.exception(
-                            "Making scene %s turn %s again failed", i + 1, turn + 1
-                        )
-                final = get_store().get(story_id, owner) or final
-                plan = build_stitch_plan(
-                    final.scenes,
-                    cfg.STORY_CROSSFADE_SECONDS,
-                    seamless=final.chains_takes and final.seamless_joins,
-                )
-                voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
-                film_uri, made["timeline"] = _film_and_timeline(
-                    backend.stitch(final, plan, music_uri, voices)
-                )
-            return film_uri
-
-        if not _run_task(stitch_task, stitch, job.cancel_event):
-            for t in later[1:]:
-                if t:
-                    t.status = SKIPPED
-            return
-        film = stitch_task.result_uri
-
-        def apply(s: Story) -> None:
-            s.final_uri = film
-            s.film_edited = False
-            s.set_version = _set_version(s, owner)
-            s.step = "video"
-            if made.get("timeline"):
-                s.timeline_json = json.dumps(made["timeline"])
-            # What the cut scan and sound checks found, shown on each take.
-            cuts = (made.get("timeline") or {}).get("cuts") or []
-            sound = (made.get("timeline") or {}).get("sound") or {}
-            for i, sc in enumerate(s.scenes):
-                mine = [
-                    {"t": c.get("t", 0), "turn": c.get("turn", -1)}
-                    for c in cuts
-                    if c.get("scene") == i
-                ]
-                sc.cuts_json = json.dumps(mine) if mine else ""
-                flags = sound.get(str(i)) or []
-                sc.sound_json = json.dumps(flags) if flags else ""
-            story_versions.remember(s, "render")
-
-        mutate_story(story_id, owner, apply)
-        _run_task(
-            library_task,
-            lambda: backend.save_to_library(final, film, owner),
-            job.cancel_event,
-        )
-        if not alt_stitch_task or job.cancel_event.is_set():
-            return
-        latest = get_store().get(story_id, owner) or final
+        music_uri = ""
+        if music_task and music_task.status == DONE:
+            music_uri = music_task.result_uri
+            mutate_story(story_id, owner, lambda s: setattr(s, "music_uri", music_uri))
+        elif latest.music_on:
+            music_uri = latest.music_uri
+        latest = get_store().get(story_id, owner) or latest
         no_speech = [
-            i + 1 for i, sc in enumerate(latest.scenes)
+            i + 1
+            for i, sc in enumerate(latest.scenes)
             if _is_spoken(sc) and not sc.has_alt_clip()
         ]
         if no_speech:
-            alt_stitch_task.status = alt_library_task.status = SKIPPED
-            alt_stitch_task.error = (
-                f"Scene {', '.join(map(str, no_speech))} has no {alt} clip."
-            )
+            stitch_task.status = library_task.status = SKIPPED
+            stitch_task.error = f"Scene {', '.join(map(str, no_speech))} has no {alt} clip."
             return
-        if alt_voice_tasks and not any(
-            t.status == DONE for t in alt_voice_tasks.values()
-        ) and not latest.has_spoken:
-            alt_stitch_task.status = alt_library_task.status = SKIPPED
-            alt_stitch_task.error = f"No {alt} voiceover was made."
+        if voice_tasks and not voice_uris and not latest.has_spoken:
+            stitch_task.status = library_task.status = SKIPPED
+            stitch_task.error = f"No {alt} voiceover was made."
             return
         second = alt_story(latest)
-        alt_plan = build_stitch_plan(
+        plan = build_stitch_plan(
             second.scenes,
             cfg.STORY_CROSSFADE_SECONDS,
             seamless=second.chains_takes and second.seamless_joins,
         )
-        alt_voices = [alt_voice_uris.get(seg.index, "") for seg in alt_plan.segments]
+        voices = [voice_uris.get(seg.index, "") for seg in plan.segments]
         if not _run_task(
-            alt_stitch_task,
+            stitch_task,
             lambda: _film_and_timeline(
-                backend.stitch(
-                    replace(second, timeline_json=""), alt_plan, music_uri, alt_voices
-                )
+                backend.stitch(replace(second, timeline_json=""), plan, music_uri, voices)
             )[0],
             job.cancel_event,
-        ):
-            alt_library_task.status = SKIPPED
+        ) or job.cancel_event.is_set():
+            library_task.status = SKIPPED
             return
-        alt_film = alt_stitch_task.result_uri
-
-        def apply_alt(s: Story) -> None:
-            s.final_alt_uri = alt_film
-
-        mutate_story(story_id, owner, apply_alt)
+        alt_film = stitch_task.result_uri
+        saved = mutate_story(
+            story_id, owner, lambda s: setattr(s, "final_alt_uri", alt_film)
+        )
         _run_task(
-            alt_library_task,
-            lambda: backend.save_to_library(second, alt_film, owner),
+            library_task,
+            lambda: _save_film_item(
+                backend, alt_story(saved), alt_film, owner, alt=True
+            ),
             job.cancel_event,
         )
 
@@ -1837,11 +1959,11 @@ def start_export(story_id: str, owner: str, options: dict | None = None) -> Job:
                 _mark_film_timeline(s, current.timeline_json)
                 story_versions.remember(s, "export")
 
-        mutate_story(story_id, owner, apply)
+        saved = mutate_story(story_id, owner, apply)
         if library_task:
             _run_task(
                 library_task,
-                lambda: backend.save_to_library(current, uri, owner),
+                lambda: _save_film_item(backend, saved, uri, owner),
                 job.cancel_event,
             )
 
@@ -1958,7 +2080,13 @@ def _takes_label(track: dict) -> str:
     return ", ".join(str(int(k) + 1) for k in sorted(track.get("takes") or []))
 
 
-def _fit_voice_lines(story_id: str, owner: str, backend, voice_uris: dict[int, str]) -> str:
+def _fit_voice_lines(
+    story_id: str,
+    owner: str,
+    backend,
+    voice_uris: dict[int, str],
+    set_version: int = 0,
+) -> str:
     """Fit the narrator's lines to their scenes, so none is cut off and all
     play at one speed: measure every voiced line, store the narrator's pace
     (Story.narrator_wps, which sets the word limits from now on), then
@@ -2032,13 +2160,15 @@ def _fit_voice_lines(story_id: str, owner: str, backend, voice_uris: dict[int, s
             sc.narration_alt = ""  # translated from the old, longer line
             uri = backend.generate_voiceover(story, i, line)
             voice_uris[i] = uri
+            key = _voice_key(story, i, set_version)
             redone += 1
 
-            def save(s: Story, scene_id=scene_id, line=line) -> None:
+            def save(s: Story, scene_id=scene_id, line=line, uri=uri, key=key) -> None:
                 for x in s.scenes:
                     if x.id == scene_id:
                         x.narration = line
                         x.narration_alt = ""
+                        x.voice_uri, x.voice_key = uri, key
 
             mutate_story(story_id, owner, save)
     logger.info(
@@ -2135,7 +2265,8 @@ def attach_set(
 
 def _set_work(story_set: StorySet, targets: list | None) -> list[tuple]:
     """(kind, asset id, view) pieces to make: the given targets, else every
-    empty image slot and missing voice sample. Locked images never."""
+    empty slot of the views frames use (story_sets.BUILD_VIEWS) and missing
+    voice sample. Locked images never."""
     wanted = {tuple(t) for t in targets} if targets else None
     out: list[tuple] = []
     for kind in KINDS:
@@ -2145,7 +2276,8 @@ def _set_work(story_set: StorySet, targets: list | None) -> list[tuple]:
                 if img.view not in views_for(asset) or img.locked:
                     continue
                 key = (kind, asset.id, img.view)
-                if (wanted is None and not img.uri) or (wanted and key in wanted):
+                build = img.view in build_views(asset) and not img.uri
+                if (wanted is None and build) or (wanted and key in wanted):
                     out.append(key)
             if kind == "character":
                 key = (kind, asset.id, "voice")
@@ -2384,6 +2516,8 @@ def retry(job_id: str, owner: str) -> Job | None:
         ]
         # A failed casting call has no targets: start over from the story.
         return start_set(job.story_id, owner, failed or job.params.get("targets"))
+    if job.params.get("alt"):
+        return start_alt_video(job.story_id, owner)
     return start_video(job.story_id, owner)
 
 

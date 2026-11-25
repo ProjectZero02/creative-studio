@@ -21,6 +21,7 @@ stitching plan.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import re
 import uuid
@@ -220,6 +221,7 @@ SPEECH_MODES: dict[str, str] = {
     "auto": "Auto: Gemini picks per scene",
     "narrator": "Narrator voiceover",
     "on_camera": "People speak on camera",
+    "none": "No speech",
 }
 SPEECH_HINTS: dict[str, str] = {
     "auto": "Gemini has the person on screen speak when the idea calls for it "
@@ -228,6 +230,7 @@ SPEECH_HINTS: dict[str, str] = {
     "narrator": "A narrator speaks over every scene. Nobody on screen talks.",
     "on_camera": "The person on screen says every line, lips in sync. "
     "No narrator.",
+    "none": "Music and picture only: nobody speaks and there is no narrator.",
 }
 # Speech pace used to warn about lines that will not fit a scene.
 WORDS_PER_SECOND = 2.5
@@ -563,6 +566,21 @@ class Scene:
     # "interaction_id", "uri"}]}. Retry continues from them instead of
     # paying for them again (see `saved_turns`).
     partial_turns_json: str = ""
+    # The narrator's voiced line and what it was made from (see voice_key):
+    # a render reuses it while the line, voice and length are the same.
+    voice_uri: str = ""
+    voice_key: str = ""
+    voice_alt_uri: str = ""
+    voice_alt_key: str = ""
+
+    def cached_voice(self, key: str, alt: bool = False) -> str:
+        """The stored voice line when it was made from `key`, else ""."""
+        uri, made = (
+            (self.voice_alt_uri, self.voice_alt_key)
+            if alt
+            else (self.voice_uri, self.voice_key)
+        )
+        return uri if uri and key and made == key else ""
 
     def saved_turns(self, key: str) -> list[dict]:
         """The turns kept from a failed try at this take, when they were made
@@ -658,6 +676,12 @@ class Story:
     # same moment twice). Has no effect when continuity is off.
     seamless_joins: bool = True
     final_uri: str = ""
+    # What the last film was made from, part by part (see film_parts), so the
+    # editor can say what changed since. Kept when the film is cleared.
+    final_parts_json: str = ""
+    # The film's library item (one per film, updated on each render).
+    library_id: str = ""
+    library_alt_id: str = ""
     # The timeline was edited after final_uri was made: Download still gives
     # the old film until the edit is exported.
     film_edited: bool = False
@@ -703,6 +727,9 @@ class Story:
     # Who speaks (SPEECH_MODES) and the on-screen speaker's voice, described
     # the same way in every spoken clip so it stays consistent.
     speech_mode: str = "auto"
+    # Setup fields the user set by hand (JSON list): auto settings read from
+    # the idea leave them alone, also after the story is opened again.
+    pinned_json: str = "[]"
     speaker_voice: str = ""
     # Back-to-back spoken scenes continue the previous clip (one Omni thread),
     # so the person, shot and voice carry on. Those clips render in order.
@@ -789,6 +816,55 @@ class Story:
     def needs_translation(self) -> bool:
         """Some narrated scene has no second-language line yet."""
         return any(sc.narration.strip() and not sc.narration_alt.strip() for sc in self.scenes)
+
+    def film_parts(self) -> dict[str, str]:
+        """A short key per part of the film (shots, narration, music, look):
+        equal keys mean that part is what the last film was made from."""
+
+        def key(*values) -> str:
+            raw = json.dumps(values, sort_keys=True, default=str)
+            return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+        tracks = [
+            (t.get("id"), (t.get("prompt") or "").strip(), t.get("takes"))
+            for t in self.music_tracks()
+        ] if self.music_tracks_json else []
+        try:
+            logo = json.loads(self.brand_json or "{}").get("logo_uri", "")
+        except (ValueError, AttributeError):
+            logo = ""
+        return {
+            "shots": key(
+                [(sc.clip_uri, round(sc.clip_in, 3), sc.transition) for sc in self.scenes]
+            ),
+            "lines": key(
+                self.voice_on,
+                self.voice_name,
+                [sc.narration.strip() for sc in self.scenes if not sc.spoken],
+            ),
+            "music": key(
+                self.music_on,
+                (self.music_prompt or "").strip() or default_music_prompt(self),
+                tracks,
+            ),
+            "look": key(self.aspect_ratio, self.resolution, logo),
+        }
+
+    def film_changes(self) -> list[str]:
+        """What changed since the last film, in plain words ([] when nothing
+        did, or when no film was made with part keys)."""
+        try:
+            made = json.loads(self.final_parts_json or "{}")
+        except ValueError:
+            made = {}
+        if not isinstance(made, dict) or not made:
+            return []
+        now = self.film_parts()
+        return [
+            label
+            for part, label in FILM_PART_LABELS
+            if part in made and made[part] != now.get(part)
+        ]
 
     def clear_films(self) -> None:
         """Forget both rendered films (call when anything they used changes)."""
@@ -1161,6 +1237,8 @@ def parse_scenario(
         if not isinstance(raw, dict):
             raise ScenarioError("Each scene must be an object.")
         narration = str(raw.get("narration") or raw.get("voiceover") or "").strip()
+        if speech_mode == "none":
+            narration = ""  # music and picture only
         visual = str(
             raw.get("visual")
             or raw.get("visual_description")
@@ -1670,6 +1748,12 @@ def _speech_rules(story: Story) -> str:
         "fill it. Back-to-back spoken scenes are filmed as one continuous take."
     )
     limits = narrator_limits(float(getattr(story, "narrator_wps", 0) or 0))
+    if story.speech_mode == "none":
+        return (
+            "- There is no speech: \"narration\" is \"\" for every scene, "
+            "\"spoken\" is false and \"voice\" is \"\". The picture and music tell "
+            "the story; nobody on screen talks."
+        )
     if story.speech_mode == "narrator":
         return (
             '- Every line is a narrator voiceover: "spoken" is false for every '
@@ -1803,16 +1887,22 @@ def scenario_prompt(story: Story, story_set=None) -> str:
             f"each about {story.duration} seconds long. Visual style: {style['label']}."
         )
         take_rules = ""
+    if story.speech_mode == "none":
+        narration_rule = (
+            f"- Write the title in {story.language}. Leave every narration empty."
+        )
+    else:
+        narration_rule = f"""- Write the title and every narration line in {story.language}.
+- Narration: what is said in each scene (one sentence for a short scene, a few
+  for a long one) that can be spoken in under
+  {story.duration} seconds (at most {max_words(story.duration)} words), or in
+  its "seconds" for a longer spoken scene."""
     return f"""{opening}
 
 Idea: \"\"\"{story.idea.strip()}\"\"\"{brief}{_main_character(story, story_set)}
 
 Rules:
-- Write the title and every narration line in {story.language}.
-- Narration: what is said in each scene (one sentence for a short scene, a few
-  for a long one) that can be spoken in under
-  {story.duration} seconds (at most {max_words(story.duration)} words), or in
-  its "seconds" for a longer spoken scene.
+{narration_rule}
 {_speech_rules(story)}
 - Visual: a detailed, self-contained description of what the camera sees
   (subject, action, expression, framing, setting details, lighting). Call
@@ -2123,6 +2213,8 @@ Return only JSON: {{"narration": str, "spoken": bool, "visual": str, "camera": s
 
 
 def _scene_speech_rule(story: Story, current: Scene) -> str:
+    if story.speech_mode == "none":
+        return "\"narration\" is \"\" and \"spoken\" is false: the film has no speech."
     if story.speech_mode == "narrator":
         return '"spoken" is false: the line is a narrator voiceover.'
     if story.speech_mode == "on_camera" or current.spoken:
@@ -2624,6 +2716,14 @@ def parse_translation(text: str, count: int) -> tuple[str, list[str]]:
 # Former switches that are now always on. Continuity and straight cuts keep
 # their stored value (new films start with the defaults); each join can still
 # be picked per shot.
+# film_parts keys and how the editor names a change to each.
+FILM_PART_LABELS = (
+    ("shots", "Shots changed"),
+    ("lines", "Narration changed"),
+    ("music", "Music changed"),
+    ("look", "Picture or brand changed"),
+)
+
 FIXED_JOIN_SETTINGS = {
     "continuous_takes": True,
     "color_match": True,

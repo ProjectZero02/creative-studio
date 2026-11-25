@@ -27,6 +27,7 @@ import json
 import re
 
 from config.default import Default
+from services.story_director import is_one_take
 from services.story_models import (
     CAMERA_IDS,
     LANGUAGES,
@@ -47,10 +48,14 @@ FIELDS = (
     "language",
     "style",
     "speech_mode",
+    "shots",
     "camera",
     "pacing",
     "video_model",
 )
+
+# Setup choice: one continuous take, or a film of several shots.
+SHOTS = {"auto": "Auto", "one": "One take", "several": "Several shots"}
 
 # Preferred scene length when only the film length is known.
 TARGET_SCENE_SECONDS = 10
@@ -211,6 +216,13 @@ def _style(t: str) -> str | None:
 
 def _speech(t: str) -> str | None:
     if re.search(
+        r"\b(?:no (?:speech|voice\w*|narration|narrator|dialogue|talking|words)|"
+        r"music only|only music|without (?:speech|words|voice\w*|narration|a narrator)|"
+        r"silent film|wordless)\b",
+        t,
+    ):
+        return "none"
+    if re.search(
         r"\b(?:presenter|spokes(?:person|man|woman)|talking to (?:the )?camera|to camera|"
         r"talking head|interview\w*|vlog\w*|testimonial|host(?:ed)? by|keynote|pitch(?:es)? to)\b",
         t,
@@ -309,6 +321,7 @@ def infer_settings(text: str) -> dict:
         ("language", _language(raw, t)),
         ("style", _style(t)),
         ("speech_mode", _speech(t)),
+        ("shots", "one" if is_one_take(raw) else None),
         ("camera", _camera(t)),
         ("pacing", _pacing(t)),
         ("video_model", _video_model(t)),
@@ -337,12 +350,16 @@ Idea: \"\"\"{text.strip()}\"\"\"
 - "language": one of {langs}: the language the film is spoken in.
 - "style": one of {styles}.
 - "speech_mode": "on_camera" when a person talks to camera (presenter,
-  interview, pitch, vlog), "narrator" for a voiceover, else null.
+  interview, pitch, vlog), "narrator" for a voiceover, "none" when nobody
+  speaks (music only, no voice), else null.
+- "shots": "one" when the idea asks for one continuous shot with no cuts
+  (a single take, one shot, the camera never cuts), "several" when it asks
+  for different shots or scenes, else null.
 - "camera": one of {cams} if the idea asks for a camera move.
 - "pacing": one of {pacings} if the idea asks for fast/dynamic, cinematic, or documentary pacing.
 - "video_model": one of {engines} if the idea names Veo, Omni, or Hybrid.
 
-Return only JSON: {{"film_seconds": int|null, "scene_count": int|null, "scene_seconds": int|null, "aspect_ratio": str|null, "language": str|null, "style": str|null, "speech_mode": str|null, "camera": str|null, "pacing": str|null, "video_model": str|null}}"""
+Return only JSON: {{"film_seconds": int|null, "scene_count": int|null, "scene_seconds": int|null, "aspect_ratio": str|null, "language": str|null, "style": str|null, "speech_mode": str|null, "shots": str|null, "camera": str|null, "pacing": str|null, "video_model": str|null}}"""
 
 
 def parse_live_settings(text: str) -> dict:
@@ -383,6 +400,7 @@ def parse_live_settings(text: str) -> dict:
         "language": tuple(LANGUAGES),
         "style": tuple(STYLE_BY_ID),
         "speech_mode": tuple(k for k in SPEECH_MODES if k != "auto"),
+        "shots": ("one", "several"),
         "camera": tuple(CAMERA_IDS),
         "pacing": tuple(PACING_IDS),
         "video_model": tuple(STORY_VIDEO_ENGINES),
@@ -436,6 +454,8 @@ def describe(found: dict) -> str:
         parts.append(STYLE_BY_ID[found["style"]]["label"])
     if "speech_mode" in found:
         parts.append(SPEECH_MODES[found["speech_mode"]].replace("Auto: ", ""))
+    if found.get("shots") in ("one", "several"):
+        parts.append(SHOTS[found["shots"]])
     if "camera" in found:
         from services.story_models import CAMERA_PRESETS
 

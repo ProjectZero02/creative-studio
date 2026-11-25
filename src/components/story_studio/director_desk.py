@@ -293,7 +293,10 @@ def turn_rows(story: Story, index: int) -> list[dict]:
 
 def _render_turn_split(story: Story, index: int) -> None:
     rows = turn_rows(story, index)
-    if len(rows) < 2:
+    # The split shows who says what in each turn: a narrated or silent take
+    # has no lines there, so it only shows when a turn has a cut to fix.
+    sc = story.scenes[index]
+    if len(rows) < 2 or not (sc.spoken or any(r["cuts"] for r in rows)):
         return
     with me.box(classes="ss-turn-split"):
         for row in rows:
@@ -363,7 +366,8 @@ def _render_take_facts(
             f"{CAMERA_PRESETS.get(sc.camera, CAMERA_PRESETS['static'])['label']}",
             "ss-muted ss-small",
         )
-        if sc.narration.strip():
+        # A narrated line is only shown while the narrator is on.
+        if sc.narration.strip() and (sc.spoken or story.voice_on):
             me.text(
                 ("On camera: " if sc.spoken else "Voiceover: ") + sc.narration.strip(),
                 style=me.Style(font_size=14),
@@ -403,7 +407,10 @@ def _render_strip(
             ):
                 with me.box(classes="ss-take-head"):
                     _t(f"Take {k + 1}", "ss-take-name")
-                    _t(f"continuous · {secs}s", "ss-take-badge")
+                    _t(
+                        f"continuous · {secs}s" if len(group) > 1 else f"{secs}s",
+                        "ss-take-badge",
+                    )
                 with me.box(classes="ss-take-shots"):
                     for pos, i in enumerate(group):
                         sc = story.scenes[i]
@@ -985,7 +992,7 @@ def _render_animatic(s: StoryState, story: Story, h: DeskHandlers) -> None:
                     f"{sc.duration}s",
                     "ss-muted ss-small",
                 )
-                if sc.narration.strip():
+                if sc.narration.strip() and (sc.spoken or story.voice_on):
                     me.text(
                         ("On camera: " if sc.spoken else "Voiceover: ")
                         + sc.narration.strip(),

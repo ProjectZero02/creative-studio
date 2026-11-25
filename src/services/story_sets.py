@@ -163,6 +163,17 @@ def views_for(asset: Asset) -> list[str]:
     return PROP_VIEWS
 
 
+# The views frames and clips are made from (story_models.scene_refs): a set
+# build makes only these. The others (3/4, profile, angle) are made when the
+# user asks for one.
+BUILD_VIEWS = ("front", "face", "plate", "item")
+
+
+def build_views(asset: Asset) -> list[str]:
+    """The views a set build makes for an asset."""
+    return [v for v in views_for(asset) if v in BUILD_VIEWS]
+
+
 def image_of(asset: Asset, view: str) -> SetImage | None:
     """The asset's image for `view` (with a URI), or None."""
     for img in asset.images:
@@ -308,14 +319,14 @@ class StorySet:
     def image_count(self) -> int:
         """How many images a full build makes (shown before running it)."""
         return sum(
-            len(views_for(a)) for a in [*self.characters, *self.locations, *self.props]
+            len(build_views(a)) for a in [*self.characters, *self.locations, *self.props]
         )
 
     def missing_images(self) -> int:
         """Image slots still without a picture."""
         total = 0
         for a in [*self.characters, *self.locations, *self.props]:
-            total += sum(1 for v in views_for(a) if image_of(a, v) is None)
+            total += sum(1 for v in build_views(a) if image_of(a, v) is None)
         return total
 
     def summary(self) -> str:

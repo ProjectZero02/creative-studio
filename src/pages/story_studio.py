@@ -334,6 +334,7 @@ def _load_form(story: Story) -> None:
     s.language = story.language
     s.second_on = story.second_on
     s.speech_mode = story.speech_mode
+    s.shots = "one" if story.one_take else ("several" if story.scenes else "auto")
     s.brand_id = story.brand_id or ("none" if not story.brand_json else "")
     s.duration_text = (
         f"{story.target_seconds}s" if getattr(story, "target_seconds", 0) else ""
@@ -351,7 +352,8 @@ def _load_form(story: Story) -> None:
     # A set made from Setup references is shown again as its references.
     s.create_set_id = "" if s.refs_json != "[]" else story.set_id
     s.auto_json = ""
-    s.pinned_json = "[]"
+    # Fields set by hand stay as they are when the idea is edited again.
+    s.pinned_json = story.pinned_json or "[]"
 
 
 def _open_story(story_id: str) -> None:
@@ -956,6 +958,8 @@ def _setup_handlers() -> setup_view.SetupHandlers:
             on_duration_live=on_duration_live,
             on_duration_blur=on_duration_blur,
             on_pacing=on_pacing,
+            on_shots=on_shots,
+            on_speech=on_speech,
             on_video_model=on_video_model,
             on_aspect=on_aspect,
             on_language=on_language,
@@ -1031,6 +1035,28 @@ def on_pacing(e: me.ClickEvent):
         _pin("pacing")
 
 
+def on_shots(e: me.ClickEvent):
+    value = (e.key or "").split("-", 1)[-1]
+    if value in ("auto", "one", "several"):
+        me.state(StoryState).shots = value
+        if value == "auto":
+            _unpin("shots")
+            _reapply_auto()
+        else:
+            _pin("shots")
+
+
+def on_speech(e: me.ClickEvent):
+    value = (e.key or "").split("-", 1)[-1]
+    if value in SPEECH_MODES:
+        me.state(StoryState).speech_mode = value
+        if value == "auto":
+            _unpin("speech_mode")
+            _reapply_auto()
+        else:
+            _pin("speech_mode")
+
+
 def on_video_model(e: me.SelectSelectionChangeEvent):
     if e.value in STORY_VIDEO_ENGINES:
         s = me.state(StoryState)
@@ -1056,6 +1082,11 @@ def _pinned() -> set[str]:
         return set()
 
 
+def _unpin(field: str) -> None:
+    s = me.state(StoryState)
+    s.pinned_json = json.dumps(sorted(_pinned() - {field}))
+
+
 def _pin(field: str) -> None:
     """The user set this field by hand: auto settings leave it alone."""
     s = me.state(StoryState)
@@ -1067,6 +1098,11 @@ def _apply_auto(found: dict) -> None:
     current = {f: getattr(s, f) for f in story_autoset.FIELDS}
     for field, value in story_autoset.merge_settings(current, found, _pinned()).items():
         setattr(s, field, value)
+    # Read from the idea, not picked: back to Auto when the idea stops
+    # asking for it.
+    for field in ("shots", "speech_mode"):
+        if field not in found and field not in _pinned():
+            setattr(s, field, "auto")
     if found.get("film_seconds"):  # the note shows the plan actually used
         found = {**found, "scene_count": s.scene_count, "duration": s.duration}
     s.auto_json = json.dumps(found) if found else ""
@@ -1075,19 +1111,37 @@ def _apply_auto(found: dict) -> None:
 def on_idea_live(e: me.WebEvent):
     """Typing paused in the idea field: update the settings from it."""
     text = str((e.value or {}).get("value", ""))
+    s = me.state(StoryState)
+    s.live_text = text
     rules = story_autoset.infer_settings(text)
     _apply_auto(rules)
     yield
     if len(text.strip()) < 20:
         return
     try:
-        refined = get_backend().live_settings(text)
+        refined = _live_settings(text)
     except Exception:
         logger.exception("Story Studio: live settings failed")
         return
+    if s.live_text != text:
+        return  # the idea changed while Gemini read it: a newer reply comes
     if refined:
         _apply_auto({**rules, **refined})
         yield
+
+
+_LIVE_CACHE: dict[str, dict] = {}
+
+
+def _live_settings(text: str) -> dict:
+    """Gemini read of the idea, cached by its text (a pause in typing on
+    the same text does not ask again)."""
+    key = " ".join(text.split())
+    if key not in _LIVE_CACHE:
+        if len(_LIVE_CACHE) > 200:
+            _LIVE_CACHE.clear()
+        _LIVE_CACHE[key] = get_backend().live_settings(text) or {}
+    return dict(_LIVE_CACHE[key])
 
 
 def _reapply_auto() -> None:
@@ -1394,6 +1448,7 @@ def on_generate_scenario(e: me.ClickEvent):
         # Who speaks and the camera move come from the idea (read while
         # typing, story_autoset); the director reads the idea text too.
         story.speech_mode = s.speech_mode if s.speech_mode in SPEECH_MODES else "auto"
+        story.pinned_json = s.pinned_json or "[]"
         story.camera = s.camera if s.camera in CAMERA_IDS else "auto"
         story.brand_id, story.brand_json = _brand_snapshot(owner, s.brand_id)
         story.scene_count = caps.scene_count
@@ -2728,7 +2783,7 @@ def on_make_alt(e: me.ClickEvent):
     if _edit(lambda st: setattr(st, "second_on", True)) is None:
         return
     try:
-        job = story_jobs.start_video(s.story_id, _owner())
+        job = story_jobs.start_alt_video(s.story_id, _owner())
     except Exception as exc:
         s.error = story_jobs.friendly_error(exc)
         return

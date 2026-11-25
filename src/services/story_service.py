@@ -2900,13 +2900,16 @@ class VertexStoryBackend:
             add_media_item_to_firestore,
         )
 
+        # The model that really made the clips (a film can mix engines).
+        used = [s.video_model_used for s in story.scenes if s.video_model_used]
         item = MediaItem(
+            id=story.library_id or None,
             user_email=owner,
             gcsuri=final_uri,
             mime_type="video/mp4",
             media_type="video",
             mode="story_studio",
-            model=self.cfg.STORY_VIDEO_MODEL,
+            model=max(set(used), key=used.count) if used else self.cfg.STORY_VIDEO_MODEL,
             prompt=story.idea,
             original_prompt=story.idea,
             aspect=story.aspect_ratio,
@@ -2919,7 +2922,16 @@ class VertexStoryBackend:
             comment=f"Film Studio: {story.title} ({STYLE_BY_ID.get(story.style, {}).get('label', story.style)})",
             status="complete",
         )
-        add_media_item_to_firestore(item)
+        try:
+            # Updates the film's item in place (one per film).
+            add_media_item_to_firestore(item)
+        except Exception:
+            if not item.id:
+                raise
+            # Its old item was deleted or can't be written: add a new one.
+            logger.warning("Library item %s not updated; adding a new one", item.id)
+            item.id = None
+            add_media_item_to_firestore(item)
         return item.id or ""
 
     def save_upload(self, data: bytes, mime_type: str) -> str:

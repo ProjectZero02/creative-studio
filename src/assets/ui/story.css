@@ -182,6 +182,10 @@ html body.dark-theme .ss-root { --story-ring: #ffffff; }
 .ss-field-error { font-size: 13px; color: var(--sys-error); margin-top: -4px; }
 .ss-chip-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr)); gap: 6px; }
 .ss-chip-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ss-chip-row-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* Shots and Speech side by side; stacked on phones. */
+.ss-film-type { display: grid; grid-template-columns: 3fr 4fr; gap: 12px; }
+@media (max-width: 640px) { .ss-film-type { grid-template-columns: minmax(0, 1fr); } }
 .ss-style, .ss-pacing { display: flex; flex-direction: column; gap: 8px; }
 .ss-pacing { gap: 6px; }
 

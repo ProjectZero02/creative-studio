@@ -317,6 +317,7 @@ def setup_blueprint(
     voice_on: bool = True,
     music_on: bool = True,
     one_take: bool = False,
+    speech_mode: str = "on_camera",
 ) -> dict:
     """What Setup's live blueprint shows for a film of about `seconds`:
     shots, takes and cuts, resolution, an estimated cost (catalog
@@ -345,7 +346,14 @@ def setup_blueprint(
         length = min(length, asked)
     caps = apply_caps(shots, shot_secs, resolution=resolution, model_id=video_model)
     take_max = int(getattr(cfg, "STORY_TAKE_MAX_SECONDS", 40) or 40)
-    takes = [1] * shots if one_take else _pack_takes(shots, shot_secs, take_max)
+    # Only back-to-back on-camera shots join into one take; narrated shots
+    # are takes of their own (as the breakdown makes them).
+    if one_take:
+        takes = [1] * shots
+    elif speech_mode == "on_camera":
+        takes = _pack_takes(shots, shot_secs, take_max)
+    else:
+        takes = [1] * shots
     take_count = len(takes)
 
     video_rate = _video_price(video_model)
