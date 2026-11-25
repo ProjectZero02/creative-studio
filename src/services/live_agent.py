@@ -46,6 +46,7 @@ from typing import Any
 
 from google.genai import types
 
+from common.lang_detect import detect_lang, follow_user_rule, lang_name, speech_code
 from config.voice import DEFAULT_LANGUAGE, DEFAULT_VOICE, VOICES as VOICE_NAMES
 from services.live_jobs import DONE, FAILED, JobLimitError, LiveJob, LiveJobs
 from services.story_models import ASPECT_RATIOS as STORY_ASPECTS
@@ -149,9 +150,11 @@ PAGE_NOTE = """
 - You can also fill the page in front of the presenter: read_page shows its fields and fill_fields sets them, without pressing Generate. Use this when they ask you to fill or set up the page rather than to make something."""
 
 
-def system_prompt(mode: str = FILL) -> str:
-    """Instructions for a call in `mode` (FILL or ACT)."""
-    return FILL_PROMPT if mode == FILL else SYSTEM_PROMPT + PAGE_NOTE
+def system_prompt(mode: str = FILL, lang: str = "en") -> str:
+    """Instructions for a call in `mode` (FILL or ACT). `lang` is the site
+    language, used when the presenter's own language is not clear yet."""
+    base = FILL_PROMPT if mode == FILL else SYSTEM_PROMPT + PAGE_NOTE
+    return base + "\n\n" + follow_user_rule(lang)
 
 
 def _resolve_voice(voice: str) -> str:
@@ -279,7 +282,8 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                         ),
                         "language": (
                             "STRING",
-                            f"Optional BCP-47 language code, e.g. 'en-US', 'ar-EG'. Default {DEFAULT_LANGUAGE}.",
+                            "BCP-47 code of the script's language: 'ar-EG' for Arabic, "
+                            "'en-US' for English. Empty means the script's own language.",
                         ),
                     },
                     ["script"],
@@ -301,7 +305,8 @@ def _all_declarations(async_tools: bool = True) -> list[types.Tool]:
                         "style": ("STRING", "Optional visual style.", STORY_STYLES),
                         "language": (
                             "STRING",
-                            "Optional language name or code, e.g. 'English', 'Arabic', 'en-US'.",
+                            "Optional language the film is spoken in, e.g. 'English' or "
+                            "'Arabic'. Empty means the language of the idea.",
                         ),
                     },
                     ["idea"],
@@ -493,8 +498,12 @@ class Deferred:
 class LiveCall:
     """Tool handling for one call. ``send`` pushes JSON to the browser."""
 
-    def __init__(self, owner: str, send: Send, jobs: LiveJobs, mode: str = ACT):
+    def __init__(
+        self, owner: str, send: Send, jobs: LiveJobs, mode: str = ACT, lang: str = "en"
+    ):
         self.owner = owner
+        # The site language: the fallback when a request has no letters.
+        self.lang = lang if lang in ("en", "ar") else "en"
         self.send = send
         self.jobs = jobs
         self.mode = mode if mode in MODES else FILL
@@ -618,7 +627,10 @@ class LiveCall:
     ) -> Deferred:
         params = {
             "voice": _resolve_voice(voice),
-            "language": (language or "").strip() or DEFAULT_LANGUAGE,
+            # Spoken in the script's own language (Arabic text, Arabic voice).
+            "language": (language or "").strip()
+            or speech_code(detect_lang(script) or self.lang)
+            or DEFAULT_LANGUAGE,
         }
         return await self._start("voice", script, params=params)
 
@@ -696,7 +708,8 @@ class LiveCall:
             length=length,
             aspect_ratio=aspect_ratio,
             style=style,
-            language=language,
+            # Unset: the idea's own language (Arabic idea, Arabic film).
+            language=language or lang_name(detect_lang(idea) or self.lang),
             **{k: v for k, v in setup.items() if k in allowed},
         )
         return await self._start_story(story, "scenario", "scenario", story.idea)
@@ -996,14 +1009,26 @@ class LiveCall:
 class ScriptedAgent:
     """Maps simple typed requests to the same tools the model would call."""
 
-    def __init__(self, call: LiveCall, say: Callable[[str], Awaitable[None]]):
+    def __init__(
+        self,
+        call: LiveCall,
+        say: Callable[[str], Awaitable[None]],
+        lang: str = "",
+    ):
         self.call = call
         self.say = say
+        # Language of the last request (the site language before the first),
+        # so job updates come in the language the presenter types in.
+        self.lang = lang if lang in ("en", "ar") else getattr(call, "lang", "en")
 
     async def handle(self, text: str) -> None:
         said = (text or "").strip()
         low = said.lower()
         if not low:
+            return
+        self.lang = detect_lang(said) or self.lang
+        if detect_lang(said) == "ar":
+            await self._handle_ar(said)
             return
         if any(w in low for w in ("bye", "hang up", "end call")):
             await self.say("Thanks, talk soon.")
@@ -1119,17 +1144,263 @@ class ScriptedAgent:
                 "edit…, show image 1, download, open video."
             )
 
+    async def _handle_ar(self, said: str) -> None:
+        """The same requests typed in Arabic, answered in Arabic. Prompts,
+        ideas and scripts keep the presenter's own Arabic words."""
+        n = _ar_norm(said)
+        starts = lambda *words: bool(re.match(rf"^\s*(?:{'|'.join(words)})(?!\w)", n))  # noqa: E731
+        has = lambda *words: bool(re.search(rf"(?<!\w)(?:{'|'.join(words)})", n))  # noqa: E731
+        browsing = starts("اعرض", "ارني", "اريني", "ورني", "ارجع", "افتح")
+        if has(
+            "مع السلامه",
+            "وداعا",
+            "باي",
+            "انه المكالمه",
+            "انهي المكالمه",
+            "انهاء المكالمه",
+            "اقفل المكالمه",
+            "اغلق المكالمه",
+        ):
+            await self.say("شكراً، إلى اللقاء.")
+            await self.call.run_tool("end_call", {})
+        elif re.search(
+            r"(?<!\w)(?:نزل|نزلي|حمل|حملي|تنزيل|تحميل)(?!\w)", n
+        ) and not has("اصنع", "اعمل", "ارسم", "انشئ", "ولد"):
+            out = await self.call.run_tool("download", {"job": _ref_ar(n)})
+            await self.say(
+                _ar_error(out["error"])
+                if out.get("error")
+                else f"جارٍ تنزيل {_ar_handle(out['downloaded'])}."
+            )
+        elif has("حاله القصه", "حاله الفيلم"):
+            out = await self.call.run_tool("story_status", {})
+            if "error" in out:
+                await self.say(_ar_error(out["error"]))
+            else:
+                film = (
+                    "الفيلم جاهز"
+                    if out.get("has_film")
+                    else f"التالي: {out['next_action']}"
+                )
+                await self.say(f"«{out['title']}» عند خطوة {out['step']} ({film}).")
+        elif has(
+            "الفيلم كامل",
+            "الفيلم كله",
+            "كامل الفيلم",
+            "كل الخطوات",
+            "اكمل الفيلم",
+            "كمل الفيلم",
+        ):
+            out = await self.call.run_tool("continue_story", {"all_steps": True})
+            if isinstance(out, Deferred):
+                await self.say(f"جارٍ صنع الفيلم كاملاً: {_ar_handle(out.job.handle)}.")
+            else:
+                await self.say(
+                    _ar_error(out.get("error") or out.get("note") or "") or "تم."
+                )
+        elif has("صدر الفيلم", "انتج الفيلم", "اخرج الفيلم", "رندر", "ارندر"):
+            out = await self.call.run_tool("render_film", {})
+            await self._started(out, "جارٍ إخراج الفيلم")
+        elif has("الخطوه التاليه", "تابع القصه", "اكمل القصه", "كمل القصه"):
+            out = await self.call.run_tool("continue_story", {})
+            if isinstance(out, Deferred):
+                await self.say(f"متابعة القصة: {_ar_handle(out.job.handle)}.")
+            else:
+                await self.say(
+                    _ar_error(out.get("error") or out.get("note") or "") or "تم."
+                )
+        elif has("قصه", "فيلم") and not browsing:
+            m = re.search(r"(?:قصة|قصه|فيلم)[ًٌٍَُِّْـ]*\s*(?:(?:عن|حول)\s+)?(.*)$", said)
+            idea = (m.group(1).strip() if m else "") or said
+            out = await self.call.run_tool(
+                "create_story", {"idea": idea, "language": "Arabic"}
+            )
+            await self._started(out, "بدء القصة")
+        elif starts("قل", "قولي", "انطق", "اقرا"):
+            script = re.sub(r"^\s*\S+\s*", "", said, count=1).strip() or said
+            out = await self.call.run_tool("generate_voice", {"script": script})
+            await self._started(out, "بدء الصوت")
+        elif has("موسيقي", "اغنيه", "لحن", "مقطوعه") and not browsing:
+            prompt = (
+                _ar_after(
+                    said,
+                    r"موسيقى|موسيقي|أغنية|اغنية|أغنيه|اغنيه|لحن|لحنًا|مقطوعة|مقطوعه",
+                )
+                or said
+            )
+            out = await self.call.run_tool("generate_music", {"prompt": prompt})
+            await self._started(out, "بدء الموسيقى")
+        elif starts("عدل", "غير", "اجعلها", "اجعله", "خليها", "خليه"):
+            instruction = re.sub(r"^\s*\S+\s*", "", said, count=1).strip() or said
+            out = await self.call.run_tool("edit_image", {"instruction": instruction})
+            await self._started(out, "جارٍ التعديل")
+        elif has("فيديو", "مقطع") and not browsing:
+            prompt = _ar_after(said, r"فيديو|فيديوًا|مقطع|مقطعًا") or said
+            out = await self.call.run_tool("generate_video", {"prompt": prompt})
+            await self._started(out, "بدء الفيديو")
+        elif has("صوره", "رسمه", "لوحه") and not browsing:
+            prompt = _ar_after(said, r"صورة|صوره|رسمة|رسمه|لوحة|لوحه") or said
+            out = await self.call.run_tool("generate_image", {"prompt": prompt})
+            await self._started(out, "بدء الصورة")
+        elif starts("اعرض", "ارني", "اريني", "ورني", "ارجع"):
+            out = await self.call.run_tool("show_job", {"job": _ref_ar(n)})
+            await self.say(
+                _ar_error(out["error"])
+                if out.get("error")
+                else f"هذه {_ar_handle(out['job'])}."
+            )
+        elif starts("افتح"):
+            if has("القصه", "الفيلم") and self.call.latest_story_id:
+                out = await self.call.run_tool("open_story", {})
+                await self.say(
+                    _ar_error(out["error"])
+                    if out.get("error")
+                    else f"فتح «{out['title']}»."
+                )
+            else:
+                page = next((p for words, p in _AR_PAGES if has(*words)), "home")
+                await self.call.run_tool("open_page", {"page": page})
+                await self.say(f"فتح {_AR_PAGE_NAMES[page]}.")
+        elif has("الحاله", "المهام", "الاعمال", "شو صار", "وين وصل"):
+            out = await self.call.run_tool("list_jobs", {})
+            parts = [
+                f"{_ar_handle(j['job'])} {_AR_STATUS.get(j['status'], j['status'])}"
+                for j in out["jobs"]
+            ] or ["لا شيء قيد التشغيل"]
+            await self.say("، ".join(parts) + ".")
+        else:
+            await self.say(
+                "الوضع دون اتصال يفهم: صورة لـ…، فيديو لـ…، موسيقى…، قل …، "
+                "قصة عن …، الخطوة التالية، الفيلم كاملاً، صدّر الفيلم، حالة القصة، "
+                "عدّل…، اعرض الصورة 1، نزّل، افتح الفيديو."
+            )
+
     async def _started(self, out: dict | Deferred, verb: str) -> None:
+        arabic = self.lang == "ar"
         if isinstance(out, Deferred):
-            await self.say(f"{verb}: {out.job.handle}.")
+            handle = _ar_handle(out.job.handle) if arabic else out.job.handle
+            await self.say(f"{verb}: {handle}.")
+        elif arabic:
+            await self.say(_ar_error(out.get("error", "")) or "تم.")
         else:
             await self.say(out.get("error", "Done."))
 
     async def on_job_done(self, job: LiveJob) -> None:
+        if self.lang == "ar":
+            handle = _ar_handle(job.handle)
+            if job.status == DONE:
+                await self.say(f"{handle} جاهزة.")
+            else:
+                await self.say(f"فشلت {handle}: {_ar_error(job.error or '')}")
+            return
         if job.status == DONE:
             await self.say(f"{job.handle.capitalize()} is ready.")
         else:
             await self.say(f"{job.handle.capitalize()} failed: {job.error}")
+
+
+# Arabic for the offline agent (job handles stay "image 1" for the tools).
+_AR_KIND = {
+    "image": "الصورة",
+    "video": "الفيديو",
+    "music": "الموسيقى",
+    "voice": "الصوت",
+    "story": "القصة",
+}
+_AR_STATUS = {
+    "queued": "في الانتظار",
+    "running": "قيد التشغيل",
+    "done": "جاهزة",
+    "failed": "فشلت",
+}
+# (words, page) in the order they are checked, on normalised text.
+_AR_PAGES = (
+    (("الصور", "صوره", "صور"), "image"),
+    (("الفيديو", "فيديو"), "video"),
+    (("الموسيقي", "موسيقي"), "music"),
+    (("الصوت", "صوت"), "voice"),
+    (("القصه", "قصه", "الفيلم", "فيلم", "الافلام"), "story"),
+    (("المكتبه", "مكتبه"), "library"),
+    (("الرئيسيه", "البدايه"), "home"),
+)
+_AR_PAGE_NAMES = {
+    "home": "الصفحة الرئيسية",
+    "image": "استوديو الصور",
+    "video": "استوديو الفيديو",
+    "music": "استوديو الموسيقى",
+    "voice": "استوديو الصوت",
+    "story": "استوديو الأفلام",
+    "library": "المكتبة",
+}
+_AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+
+
+def _ar_norm(text: str) -> str:
+    """Arabic text for matching: no diacritics or tatweel, one alef, one
+    yeh, teh marbuta as heh, Western digits."""
+    t = re.sub(r"[ً-ْٰـ]", "", text or "")
+    t = re.sub(r"[أإآٱ]", "ا", t).replace("ى", "ي").replace("ة", "ه")
+    return t.translate(_AR_DIGITS).strip()
+
+
+def _ar_after(said: str, keywords: str) -> str:
+    """What follows the media word: "اصنع صورة لثعلب في الثلج" -> "ثعلب في الثلج".
+    Keeps the presenter's own words (diacritics and all)."""
+    m = re.search(rf"(?:{keywords})[ً-ْـ]*\s*(.*)$", said, re.S)
+    rest = (m.group(1) if m else "").strip()
+    rest = re.sub(r"^(?:عن|من|حول|فيها|فيه)\s+", "", rest)
+    if rest.startswith("لل"):
+        rest = "ال" + rest[2:]  # للقمر -> القمر
+    elif re.match(r"^ل[^\sيوا]\S{1,}", rest):
+        rest = rest[1:]  # لثعلب -> ثعلب (but ليلية, لون stay)
+    elif rest.startswith("لـ"):
+        rest = rest[2:].lstrip()
+    return rest.strip(" .،")
+
+
+def _ref_ar(norm: str) -> str:
+    """ "الصوره 2" -> "image 2" (for LiveJobs.resolve)."""
+    kinds = (
+        (("صوره", "الصوره", "صور"), "image"),
+        (("فيديو", "الفيديو", "مقطع"), "video"),
+        (("موسيقي", "الموسيقي", "اغنيه", "لحن"), "music"),
+        (("صوت", "الصوت"), "voice"),
+        (("قصه", "القصه", "فيلم", "الفيلم"), "story"),
+    )
+    kind = next(
+        (
+            k
+            for words, k in kinds
+            if re.search(rf"(?<!\w)(?:{'|'.join(words)})(?!\w)", norm)
+        ),
+        "",
+    )
+    number = re.search(r"\d+", norm)
+    if kind and number:
+        return f"{kind} {number.group(0)}"
+    return kind or (number.group(0) if number else "")
+
+
+def _ar_handle(handle: str) -> str:
+    """ "image 1" -> "الصورة 1"."""
+    kind, _, number = (handle or "").partition(" ")
+    name = _AR_KIND.get(kind)
+    return f"{name} {number}".strip() if name else handle
+
+
+def _ar_error(message: str) -> str:
+    """A tool's English error in Arabic (common/i18n_ar/live.py), else as is."""
+    if not message:
+        return ""
+    from common.i18n import tx_lang  # pylint: disable=import-outside-toplevel
+    from common.i18n_ar.live import AR_TEXT  # pylint: disable=import-outside-toplevel
+
+    text = AR_TEXT.get(message) or tx_lang("ar", message)
+    return re.sub(
+        r"\b(image|video|music|voice|story) (\d+)\b",
+        lambda m: _ar_handle(m.group(0)),
+        text,
+    )
 
 
 def _ref(text: str) -> str:

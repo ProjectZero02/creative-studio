@@ -52,7 +52,7 @@ export class ContentCredentialsViewer extends LitElement {
     .popover {
       position: absolute;
       top: 100%;
-      right: 0;
+      inset-inline-end: 0;
       margin-top: 8px;
       width: 300px;
       background: white;

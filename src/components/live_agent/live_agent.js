@@ -57,15 +57,24 @@ const DEFAULT_STRINGS = {
   noJobs: 'Things you ask for show up here.',
   avatarOn: 'Turn the avatar off',
   avatarOff: 'Turn the avatar on',
+  toolRead: 'Reading the page',
+  toolFill: 'Filling the page',
+  toolOpen: 'Opening the page',
+  toolWatch: 'Watching the film',
+  toolFix: 'Starting the fix',
+  signin: 'Sign in again to use the voice agent.',
+  disabled: 'The voice agent is turned off on this server.',
+  failed: 'Failed',
 };
 const CALL_POS_KEY = 'gm-live-pos';
 // What the dock says while the agent runs a tool (instead of "Listening").
+// Values are keys of the strings (translated on the server).
 const TOOL_ACTIVITY = {
-  read_page: 'Reading the page',
-  fill_fields: 'Filling the page',
-  open_page: 'Opening the page',
-  plan_film_fix: 'Watching the film',
-  run_film_fix: 'Starting the fix',
+  read_page: 'toolRead',
+  fill_fields: 'toolFill',
+  open_page: 'toolOpen',
+  plan_film_fix: 'toolWatch',
+  run_film_fix: 'toolFix',
 };
 const CAPTION_FADE_MS = 8000;
 // Live Avatar: the model streams one fragmented MP4 (H.264 Constrained
@@ -706,7 +715,7 @@ class GmLive {
       img.draggable = false;
     } else {
       const wait = this._el('div', 'gml-vwait', media);
-      if (job.status === 'failed') wait.textContent = job.error || 'Failed';
+      if (job.status === 'failed') wait.textContent = job.error || s.failed || DEFAULT_STRINGS.failed;
       else wait.innerHTML = done ? ICON_STORY : '<i class="gml-spin"></i>';
     }
     const tools = this._el('div', 'gml-vtools', media);
@@ -1116,6 +1125,8 @@ class GmLive {
     }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const params = new URLSearchParams({ agent: 'act' });
+    // Site language: the agent's fallback until the presenter's own shows.
+    if (this.strings.lang) params.set('lang', this.strings.lang);
     if (new URLSearchParams(location.search).get('live') === 'offline') params.set('mode', 'offline');
     if (this.avatar && this.strings.avatarName && !this.avatarBlocked) {
       if (avatarSupported()) { params.set('avatar', '1'); this._openAvatar(); }
@@ -1127,8 +1138,8 @@ class GmLive {
     ws.onmessage = (e) => { try { this._onMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } };
     ws.onclose = (e) => {
       if (this.ws !== ws) return;
-      if (e.code === 4403) this._caption('agent', 'Sign in again to use the voice agent.', true);
-      if (e.code === 4404) this._caption('agent', 'The voice agent is turned off on this server.', true);
+      if (e.code === 4403) this._caption('agent', this.strings.signin || DEFAULT_STRINGS.signin, true);
+      if (e.code === 4404) this._caption('agent', this.strings.disabled || DEFAULT_STRINGS.disabled, true);
       this._teardown();
     };
     this._renderState();
@@ -1249,7 +1260,11 @@ class GmLive {
         this._setActivity('');
         if (this.av) setTimeout(() => this._renderState(false), 1500);
         break;
-      case 'tool': this._setActivity(TOOL_ACTIVITY[m.name] || ''); break;
+      case 'tool': {
+        const key = TOOL_ACTIVITY[m.name];
+        this._setActivity(key ? (this.strings[key] || DEFAULT_STRINGS[key]) : '');
+        break;
+      }
       case 'job': this._job(m.job); break;
       case 'ui': this._ui(m); break;
       case 'error': this._caption('agent', m.message, true); break;

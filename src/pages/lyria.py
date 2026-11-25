@@ -22,13 +22,13 @@ import mesop as me
 from common.metadata import MediaItem, add_media_item_to_firestore  # Updated import
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common import prompt_settings
-from common.i18n import t, tr
+from common.i18n import t, tr, tx
 from common.auto_enhance import enhance_on_send
 from common.prompt_prefill import prefill_prompt, take_autostart
 from common.studio_history import has_cached_owner_rows, hydrate_studio_history
 from common.prompt_settings import SettingLimits
 from common.utils import create_display_url
-from components.composer.chip_menu import change_value, chip_menu, chip_options
+from components.studio_chips import change_value, chip_menu, chip_options
 from components.composer.composer import (
     composer,
     composer_add_menu,
@@ -250,7 +250,7 @@ def _track_meta(pagestate: PageState, index: int) -> str:
     model_config = get_lyria_model_config(pagestate.selected_model_id)
     name = model_config.display_name if model_config else pagestate.selected_model_id
     if len(pagestate.music_display_urls) > 1:
-        return f"{name} · Track {index + 1}"
+        return tx(f"{name} · Track {index + 1}")
     return name
 
 
@@ -288,7 +288,7 @@ def _render_music_references():
         for i, uri in enumerate(pagestate.uploaded_image_display_urls):
             composer_attachment(
                 src=uri,
-                label=f"reference image {i + 1}",
+                label=tx(f"reference image {i + 1}"),
                 index=i,
                 on_remove=on_remove_image,
             )

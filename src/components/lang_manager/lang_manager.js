@@ -98,10 +98,39 @@ export function applyDocumentLang(lang) {
   if (document.body) watchIcons(dir === 'rtl');
 }
 
+// Tab title in the page language. Mesop sets document.title from @me.page
+// (English) on each navigation, so a set title is re-applied when it changes.
+let wantTitle = '';
+let pageTitle = ''; // the last title Mesop set, restored when switching back
+let titleObserver = null;
+
+function applyTitle(title) {
+  const before = wantTitle;
+  wantTitle = title || '';
+  if (!wantTitle) {
+    if (titleObserver) titleObserver.disconnect();
+    titleObserver = null;
+    if (before && document.title === before && pageTitle) document.title = pageTitle;
+    return;
+  }
+  if (document.title !== wantTitle) {
+    if (document.title !== before) pageTitle = document.title;
+    document.title = wantTitle;
+  }
+  if (titleObserver || !document.head) return;
+  titleObserver = new MutationObserver(() => {
+    if (!wantTitle || document.title === wantTitle) return;
+    pageTitle = document.title;
+    document.title = wantTitle;
+  });
+  titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+}
+
 class LangManager extends LitElement {
   static properties = {
     current: { type: String },
     chosen: { type: Boolean },
+    title: { type: String },
     langLoaded: { type: String },
   };
 
@@ -109,6 +138,7 @@ class LangManager extends LitElement {
     super();
     this.current = 'en';
     this.chosen = false;
+    this.title = '';
     this.langLoaded = '';
   }
 
@@ -131,6 +161,7 @@ class LangManager extends LitElement {
 
   updated(changed) {
     if (changed.has('current')) applyDocumentLang(this.current);
+    if (changed.has('title')) applyTitle(this.title);
     if ((changed.has('current') || changed.has('chosen')) && this.chosen && LANGS.includes(this.current)) {
       try {
         localStorage.setItem(KEY, this.current);

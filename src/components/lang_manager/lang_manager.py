@@ -17,7 +17,7 @@ import typing
 
 import mesop as me
 
-from common.i18n import apply_lang
+from common.i18n import AR, apply_lang, route_key, tx_lang
 from state.state import AppState
 
 
@@ -27,11 +27,13 @@ def lang_manager(
     current: str,
     chosen: bool,
     on_lang_load: typing.Callable[[me.WebEvent], typing.Any],
+    title: str = "",
 ):
+    """`title`: the browser tab title in the page language ("" keeps Mesop's)."""
     return me.insert_web_component(
         key="gm-lang-manager",
         name="lang-manager",
-        properties={"current": current, "chosen": chosen},
+        properties={"current": current, "chosen": chosen, "title": title},
         events={"langLoaded": on_lang_load},
     )
 
@@ -45,3 +47,30 @@ def on_lang_load(e: me.WebEvent):
         chosen=bool(value.get("chosen")),
     )
     yield
+
+
+# Page names (as passed to page_scaffold) whose tab title is not nav.<name>.
+_TITLE_KEYS = {
+    "gemini_image_generation": "nav.nano_banana",
+    "interior_design_v2": "nav.interior_design",
+    "library": "nav.library_v2",
+    "settings": "settings.title",
+    "config": "settings.title",
+    "account": "account.title",
+    "gemini-omni": "nav.gemini_omni",
+    "gemini-tts": "nav.gemini_tts",
+    "gemini-writers-workshop": "nav.gemini_writers_workshop",
+    "starter-pack": "nav.starter_pack",
+}
+
+
+def page_title(page_name: str, lang: str) -> str:
+    """The tab title for a page in Arabic; "" in English (keep @me.page's)."""
+    if lang != "ar":
+        return ""
+    if page_name == "not_found":
+        name = tx_lang(lang, "Page not found")
+    else:
+        key = _TITLE_KEYS.get(page_name) or f"nav.{route_key(page_name)}"
+        name = AR.get(key, "")
+    return f"{name} | Creative Studio" if name else ""

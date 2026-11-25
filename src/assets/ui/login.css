@@ -192,6 +192,11 @@ body {
 .tile-music { grid-column: span 3; grid-row: span 1; }
 .tile-speech { grid-column: span 6; grid-row: span 1; }
 
+/* Arabic: the labels sit on the right, so the art moves to the left. The play
+   triangle is flipped back: media symbols are never mirrored. */
+[dir="rtl"] .tile svg.art { transform: scaleX(-1); }
+[dir="rtl"] .tile-video svg.art path { transform: scaleX(-1); transform-box: fill-box; transform-origin: center; }
+
 .visual-foot {
   font-size: 13px;
   color: var(--panel-muted);
@@ -262,6 +267,8 @@ input[type="text"] {
 [dir="rtl"] input[type="text"] { direction: ltr; text-align: right; }
 /* The input is LTR but the Show button sits on its left in RTL. */
 [dir="rtl"] .input-wrap input { padding-left: 76px; padding-right: 14px; }
+/* One Show button: hide Edge's own password reveal eye. */
+input::-ms-reveal { display: none; }
 
 /* Language switch (top corner of the form side) */
 .lang-switch {

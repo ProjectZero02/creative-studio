@@ -27,6 +27,7 @@ ScriptedAgent answers simple typed requests, so the page demos at no cost.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import threading
 import time
@@ -36,6 +37,7 @@ from typing import Any
 from google.genai import types
 
 from common.analytics import extract_usage_metadata, track_model_call
+from common.lang_detect import follow_user_rule, resolve_lang
 from services.live_agent import (
     ACT,
     Deferred,
@@ -68,6 +70,41 @@ MAX_TOOL_ROUNDS = 5
 MAX_HISTORY = 30  # contents kept per conversation
 MAX_MESSAGE = 4000
 
+# The site language of the request being handled. The chat runs in FastAPI
+# routes, where common.i18n.current_lang() has no Mesop state and says "en",
+# so the routes pass the gm_lang cookie in (see routers/chat_router.py).
+_LANG: contextvars.ContextVar[str] = contextvars.ContextVar("studio_chat_lang", default="")
+
+
+def _set_lang(lang: str | None) -> str:
+    """Remember the request's site language; returns it (Mesop's, or "en",
+    when the caller gave none)."""
+    from common.lang_detect import ui_lang
+
+    value = lang if lang in ("en", "ar") else ""
+    _LANG.set(value)
+    return value or ui_lang()
+
+
+def _tr(key: str, english: str) -> str:
+    """common.i18n.tr for the request's language (the cookie, else Mesop's)."""
+    from common.i18n import tl, tr
+
+    lang = _LANG.get()
+    if not lang:
+        return tr(key, english)
+    if lang == "en":
+        return english
+    out = tl(lang, key, english)
+    return _tx(english) if out == english else out
+
+
+def _tx(english: str) -> str:
+    """A fixed English line (trace steps) in the request's language."""
+    from common.i18n import current_lang, tx_lang
+
+    return tx_lang(_LANG.get() or current_lang(), english) if english else english
+
 CHAT_PROMPT = """You are Creative Studio, a studio built on Google's media models (Nano Banana for images, Gemini Omni and Veo for video, Lyria for music, Gemini TTS for voice, and Film Studio for short films). People type what they want and you make it.
 
 How you work:
@@ -83,8 +120,13 @@ How you work:
 How you write:
 - Short and warm: one or two sentences. Say what you started, e.g. "Making image 1: a red fox in deep snow at golden hour."
 - Plain words, no markdown headings, no URLs or ids.
-- Reply in the language the person writes in (for example Arabic or English); prompts for the models may stay in English.
 - Only creative and media work. Politely decline anything else."""
+
+
+def chat_prompt(lang: str = "en") -> str:
+    """The chat's instructions; `lang` is the site language (the fallback
+    when the message's own language is not clear)."""
+    return CHAT_PROMPT + "\n\n" + follow_user_rule(lang)
 
 
 def chat_tools() -> list[types.Tool]:
@@ -164,6 +206,7 @@ def make(
     source: str = "",
     jobs: LiveJobs | None = None,
     inputs: Any = None,
+    lang: str = "",
 ) -> dict:
     """Start one job straight from the Home box's type controls.
 
@@ -177,9 +220,10 @@ def make(
     "settings", "summary", "trace"}. Raises ValueError for a bad request and
     live_jobs.JobLimitError when too many jobs run.
     """
-    from common.i18n import tr
     from services.live_jobs import LiveJob, video_missing_media
     from services.studio_options import KINDS, clean, summary
+
+    site_lang = _set_lang(lang)
 
     if kind not in KINDS:
         raise ValueError("Pick Image, Video, Music, Voice or Film.")
@@ -190,12 +234,13 @@ def make(
         # Upscale sends no prompt (as Video Studio); the thread still needs a line.
         prompt, auto_prompt = f"Upscale to {picked.get('resolution', '')}".strip(), True
     if not prompt:
-        raise ValueError(tr("home.chat.need_prompt", "Write what to make first."))
+        raise ValueError(_tr("home.chat.need_prompt", "Write what to make first."))
     s = session_for(owner, jobs)
+    s.call.lang = site_lang
     line = summary(kind, picked)
     trace = [_step(*_picked_label(kind, picked))]
     if line:
-        trace.append(_step(tr("home.trace.settings", "Settings: {line}").format(line=line)))
+        trace.append(_step(_tr("home.trace.settings", "Settings: {line}").format(line=line)))
     if kind == "film":
         out = _start_film(s, prompt, picked, line)
         trace.append(_step(_started_label(out["job"]["handle"])))
@@ -204,7 +249,7 @@ def make(
     for slot, items in slots.items():
         trace.append(
             _step(
-                tr("home.trace.using", "Using {items} as {slot}").format(
+                _tr("home.trace.using", "Using {items} as {slot}").format(
                     items=", ".join(i["handle"] for i in items), slot=_slot_label(kind, slot)
                 )
             )
@@ -236,9 +281,9 @@ def make(
         params=params,
     )
     trace.append(_step(_started_label(job.handle)))
-    reply = tr("home.chat.making_job", "Making {job}.").format(job=job.handle)
+    reply = _tr("home.chat.making_job", "Making {job}.").format(job=job.handle)
     if src is not None:
-        reply = tr("home.chat.making_from", "Making {job} from {source}.").format(
+        reply = _tr("home.chat.making_from", "Making {job} from {source}.").format(
             job=job.handle, source=src.handle
         )
     said = f"[{kind}{': ' + line if line else ''}{', from ' + src.handle if src else ''}] {prompt}"
@@ -274,7 +319,6 @@ def _resolve_inputs(
     job to record as the source (the first picture used), or raises
     ValueError when a slot or handle is unknown.
     """
-    from common.i18n import tr
     from services.studio_options import inputs as slot_list
 
     slots = {sl["name"]: sl for sl in slot_list(kind)}
@@ -315,7 +359,7 @@ def _resolve_inputs(
                     if want == "video"
                     else "That picture is gone. Add it again."
                 )
-                raise ValueError(tr(f"home.chat.{want}_gone", gone))
+                raise ValueError(_tr(f"home.chat.{want}_gone", gone))
             items.append(
                 {
                     "handle": job.handle,
@@ -346,23 +390,21 @@ def _step(label: str, detail: str = "") -> dict:
 
 def _picked_label(kind: str, settings: dict[str, str]) -> tuple[str, str]:
     """("Picked Image · Nano Banana 2.1 · 16:9", why) for a type and its settings."""
-    from common.i18n import tr
     from services.studio_options import option_label, summary
 
     kind = "film" if kind == "story" else kind
-    parts = [tr(f"home.kind.{kind}", _KIND_LABELS.get(kind, kind.title()))]
+    parts = [_tr(f"home.kind.{kind}", _KIND_LABELS.get(kind, kind.title()))]
     if settings.get("model"):
         parts.append(option_label(kind, "model", settings))
     if settings.get("aspect") and settings["aspect"] != "auto":
         parts.append(settings["aspect"])
     detail = summary(kind, settings) if settings else ""
-    return tr("home.trace.picked", "Picked {what}").format(what=" · ".join(parts)), detail
+    return _tr("home.trace.picked", "Picked {what}").format(what=" · ".join(parts)), detail
 
 
 def _started_label(handle: str) -> str:
-    from common.i18n import tr
 
-    return tr("home.trace.started", "Started {job}").format(job=handle)
+    return _tr("home.trace.started", "Started {job}").format(job=handle)
 
 
 def _slot_label(kind: str, slot: str) -> str:
@@ -376,14 +418,13 @@ def _slot_label(kind: str, slot: str) -> str:
 
 def _job_steps(job: LiveJob) -> list[dict]:
     """The trace for a job the chat started: what, the prompt, started."""
-    from common.i18n import tr
     from services.live_jobs import job_settings
 
     settings = job_settings(job) if job.kind != "story" else {}
     label, detail = _picked_label(job.kind, settings)
     return [
         _step(label, detail),
-        _step(tr("home.trace.prompt", "Wrote the prompt"), job.prompt),
+        _step(_tr("home.trace.prompt", "Wrote the prompt"), job.prompt),
         _step(_started_label(job.handle)),
     ]
 
@@ -417,7 +458,7 @@ class _Trace:
         self._on_step = on_step
 
     def step(self, label: str, detail: str = "") -> None:
-        item = _step(label, detail)
+        item = _step(_tx(label), _tx(detail))
         self.steps.append(item)
         if self._on_step is not None:
             try:
@@ -446,7 +487,6 @@ def _remember(s: ChatSession, said: str, reply: str, job: LiveJob | None) -> Non
 
 def _start_film(s: ChatSession, idea: str, picked: dict, line: str) -> dict:
     """Film: write the scenario (the cheap first step) of a new Story Studio story."""
-    from common.i18n import tr
 
     args: dict[str, Any] = {"idea": idea}
     for key, arg in (
@@ -472,7 +512,7 @@ def _start_film(s: ChatSession, idea: str, picked: dict, line: str) -> dict:
     if not isinstance(out, Deferred):
         raise ValueError(str((out or {}).get("error") or "The film could not start."))
     job = out.job
-    reply = tr(
+    reply = _tr(
         "home.chat.film_started",
         "Writing the scenario for {job}. Check it, then go to the next step.",
     ).format(job=job.handle)
@@ -480,14 +520,20 @@ def _start_film(s: ChatSession, idea: str, picked: dict, line: str) -> dict:
     return {"reply": reply, "job": job.public(), "settings": picked, "summary": line}
 
 
-def film_next(owner: str, story_id: str, all_steps: bool = False, jobs: LiveJobs | None = None) -> dict:
+def film_next(
+    owner: str,
+    story_id: str,
+    all_steps: bool = False,
+    jobs: LiveJobs | None = None,
+    lang: str = "",
+) -> dict:
     """Run a film's next step (approving the scenario first), or all of them.
 
     Returns {"reply", "job"}; job is None when the film is already done.
     """
-    from common.i18n import tr
-
+    site_lang = _set_lang(lang)
     s = session_for(owner, jobs)
+    s.call.lang = site_lang
     story_id = str(story_id or "").strip()[:64]
     if not story_id:
         raise ValueError("Which film?")
@@ -500,13 +546,13 @@ def film_next(owner: str, story_id: str, all_steps: bool = False, jobs: LiveJobs
         job = out.job
         key = "home.chat.film_all" if all_steps else "home.chat.film_next"
         english = "Making the whole film: {job}." if all_steps else "Next step started: {job}."
-        reply = tr(key, english).format(job=job.handle)
+        reply = _tr(key, english).format(job=job.handle)
         _remember(s, "[film] whole film" if all_steps else "[film] next step", reply, job)
         return {"reply": reply, "job": job.public()}
     out = out if isinstance(out, dict) else {}
     if out.get("error"):
         raise ValueError(str(out["error"]))
-    return {"reply": tr("home.chat.film_done", "The film is already finished."), "job": None}
+    return {"reply": _tr("home.chat.film_done", "The film is already finished."), "job": None}
 
 
 def chat_jobs(owner: str, jobs: LiveJobs | None = None) -> list[dict]:
@@ -541,7 +587,7 @@ def _offline_reply(
     async def say(text: str) -> None:
         said.append(text)
 
-    asyncio.run(ScriptedAgent(s.call, say).handle(message))
+    asyncio.run(ScriptedAgent(s.call, say, lang=s.call.lang).handle(message))
     started = [j for j in s.call.jobs.list(s.owner) if j.id not in before]
     if trace is not None:
         trace.jobs(started)
@@ -570,7 +616,7 @@ def _model_reply(
         types.Content(role="user", parts=[types.Part.from_text(text=message)])
     ]
     config = types.GenerateContentConfig(
-        system_instruction=CHAT_PROMPT,
+        system_instruction=chat_prompt(s.call.lang),
         tools=chat_tools(),
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         temperature=0.6,
@@ -609,7 +655,11 @@ def _model_reply(
     if text and not started:
         trace.step("Wrote the reply")
     if not text:
-        text = "On it." if started else "Sorry, I could not answer that. Try again?"
+        arabic = resolve_lang(message, lang=s.call.lang) == "ar"
+        if started:
+            text = "حاضر." if arabic else "On it."
+        else:
+            text = "عذراً، لم أستطع الرد على ذلك. حاول مرة أخرى؟" if arabic else "Sorry, I could not answer that. Try again?"
     return text, started
 
 
@@ -702,8 +752,12 @@ def send(
     message: str,
     client_and_model: tuple[Any, str] | None | bool = True,
     on_step: Any = None,
+    lang: str = "",
 ) -> dict:
     """Handle one chat message. Returns {"reply", "jobs", "offline", "trace"}.
+
+    ``lang``: the site language (the ``gm_lang`` cookie), for replies when
+    the message itself does not show a language.
 
     ``client_and_model``: True picks the app's client (or offline in mock
     mode); None forces the offline agent; a (client, model) pair is used as is.
@@ -715,6 +769,7 @@ def send(
         return {"reply": "", "jobs": [], "offline": False, "trace": []}
     trace = _Trace(on_step)
     s = session_for(owner)
+    s.call.lang = _set_lang(lang)
     picked = _default_client() if client_and_model is True else client_and_model
     offline = picked is None
     trace.step(
@@ -733,9 +788,10 @@ def send(
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Studio chat: the model call failed")
             reply = (
-                "I couldn't reach Gemini just now, so nothing was started. "
-                f"Please try again. ({str(exc)[:120]})"
-            )
+                "تعذّر الوصول إلى Gemini الآن، لذلك لم يبدأ أي شيء. حاول مرة أخرى. "
+                if resolve_lang(message, lang=s.call.lang) == "ar"
+                else "I couldn't reach Gemini just now, so nothing was started. Please try again. "
+            ) + f"({str(exc)[:120]})"
             started = []
             trace.step("Could not reach Gemini", str(exc)[:200])
         s.job_ids.extend(j.id for j in started)

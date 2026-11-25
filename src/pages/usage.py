@@ -30,6 +30,7 @@ from dataclasses import field
 import mesop as me
 
 from common import usage
+from common.i18n import format_date, tx
 from components.header import header
 from components.page_scaffold import page_frame, page_scaffold
 from state.state import AppState
@@ -74,7 +75,7 @@ def _is_admin() -> bool:
 
 def money(value: float | None) -> str:
     if value is None:
-        return "Unavailable"
+        return tx("Unavailable")
     if value and value < 0.01:
         return "< $0.01"
     return f"${value:,.2f}"
@@ -130,7 +131,7 @@ def _stat(label: str, value: str) -> None:
 
 def _day_label(day: str) -> str:
     try:
-        return datetime.date.fromisoformat(day).strftime("%a %d %b")
+        return format_date(datetime.date.fromisoformat(day), "%a %d %b")
     except ValueError:
         return day
 

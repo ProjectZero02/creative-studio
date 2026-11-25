@@ -16,6 +16,7 @@ import mesop as me
 import mesop.labs as mel
 
 from common.analytics import log_ui_click, track_click
+from common.i18n import tx
 
 from components.header import header
 from components.library.events import LibrarySelectionChangeEvent
@@ -52,6 +53,7 @@ from components.demo_flow.demo_flow import (  # noqa: E402
     demo_segmented,
     demo_steps,
     demo_upload_button,
+    tx_ctx,
 )
 from components.edit_button.edit_button import edit_button  # noqa: E402
 from components.generation_progress.generation_progress import (  # noqa: E402
@@ -122,7 +124,7 @@ def _image_well(url: str, alt: str, empty_icon: str, empty_text: str, busy: bool
             ctext("Working on it…", "gm-demo-drop-text")
         elif url:
             with me.box(classes="gm-demo-img"):
-                me.image(src=url, alt=alt)
+                me.image(src=url, alt=tx(alt))
         else:
             cicon(empty_icon, "gm-demo-drop-icon")
             ctext(empty_text, "gm-demo-drop-text")
@@ -154,7 +156,11 @@ def _kit_from_look_flow():
 
     with me.box(classes="gm-demo-pair"):
         with me.box(classes="gm-demo-card"):
-            _card_head("1", "Look", "A photo of a product, outfit or campaign shot.")
+            _card_head(
+                "1",
+                tx_ctx("Look", "Look (outfit)"),
+                "A photo of a product, outfit or campaign shot.",
+            )
             _image_well(state.look_image_display_url, "Chosen look", "add_photo_alternate", "No photo yet")
             with me.box(classes="gm-demo-actions"):
                 demo_upload_button(
@@ -199,7 +205,7 @@ def _kit_from_look_flow():
         work_stage=1,
         aspect="1:1",
         count=1,
-        media_label="brand kit",
+        media_label=tx("brand kit"),
         on_retry=on_brand_progress_retry,
         on_dismiss=on_brand_progress_dismiss,
     )
@@ -243,7 +249,11 @@ def _look_from_kit_flow():
                 if mock_enabled():
                     me.button("Use a sample", on_click=on_brand_mock_sample, key="kit", type="stroked")
         with me.box(classes="gm-demo-card"):
-            _card_head("2", "Model", "Who should wear or hold the look.")
+            _card_head(
+                "2",
+                tx_ctx("Model", "Model (person)"),
+                "Who should wear or hold the look.",
+            )
             _image_well(
                 state.model_image_display_url,
                 "Chosen model",
@@ -289,7 +299,7 @@ def _look_from_kit_flow():
         work_stage=1,
         aspect="3:4",
         count=1,
-        media_label="look",
+        media_label=tx("look"),
         on_retry=on_brand_progress_retry,
         on_dismiss=on_brand_progress_dismiss,
     )
@@ -299,7 +309,7 @@ def _look_from_kit_flow():
             with me.box(classes="gm-title gm-title-section"):
                 me.markdown("## Result")
             with me.box(classes="gm-demo-media"):
-                me.image(src=state.generated_look_display_url, alt="Generated look")
+                me.image(src=state.generated_look_display_url, alt=tx("Generated look"))
             _result_actions(state.generated_look_uri)
 
 

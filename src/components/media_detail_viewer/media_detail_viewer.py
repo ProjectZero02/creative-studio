@@ -14,8 +14,43 @@
 
 """Python wrapper for the Media Detail Viewer Lit component."""
 
-import mesop as me
+import json
 import typing
+
+import mesop as me
+
+from common.i18n import current_lang, tx_lang
+
+# Text the viewer shows, keyed by its English (Arabic in common/i18n_ar/shell.py).
+_STRINGS = (
+    "Prompt",
+    "Model",
+    "Timestamp",
+    "Generation Time (s)",
+    "seconds",
+    "Details",
+    "Raw",
+    "Sources",
+    "Firestore Document ID",
+    "Edit",
+    "Extend",
+    "Copy Link",
+    "Copied!",
+    "Converted GIF",
+    "Unknown or unsupported media type.",
+    "Could not parse metadata.",
+    "Could not parse raw metadata.",
+    "Copy to clipboard is only available on secure (HTTPS) sites.",
+    "Previous",
+    "Next",
+)
+
+
+def viewer_strings(lang: str) -> str:
+    """English -> shown text for the viewer, as JSON ({} in English)."""
+    if lang == "en":
+        return "{}"
+    return json.dumps({s: tx_lang(lang, s) for s in _STRINGS}, ensure_ascii=False)
 
 
 @me.web_component(path="./media_detail_viewer.js")
@@ -44,6 +79,8 @@ def media_detail_viewer(
             "metadataJson": metadata_json,
             "id": id,
             "rawMetadataJson": raw_metadata_json,
+            "lang": current_lang(),
+            "stringsJson": viewer_strings(current_lang()),
         },
         events={
             "editClickEvent": on_edit_click,

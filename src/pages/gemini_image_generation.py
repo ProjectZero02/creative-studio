@@ -22,7 +22,7 @@ import mesop as me
 from common import brand_kit, prompt_settings
 from common.analytics import analytics_logger, log_ui_click
 from common.auto_enhance import enhance_on_send
-from common.i18n import t, tr
+from common.i18n import t, tr, tx
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, placeholder_image
 from common.prompt_prefill import prefill_prompt, take_autostart
@@ -31,7 +31,7 @@ from common.prompt_settings import SettingLimits
 from common.prompt_template_service import prompt_template_service
 from common.storage import store_to_gcs
 from common.utils import create_display_url, https_url_to_gcs_uri
-from components.composer.chip_menu import change_value, chip_menu, chip_options
+from components.studio_chips import change_value, chip_menu, chip_options
 from components.composer.composer import (
     composer,
     composer_add_menu,
@@ -353,7 +353,7 @@ def _render_attachments():
         for i, uri in enumerate(state.uploaded_image_display_urls):
             composer_attachment(
                 src=uri,
-                label=f"reference image {i + 1}",
+                label=tx(f"reference image {i + 1}"),
                 index=i,
                 on_remove=on_remove_image,
             )

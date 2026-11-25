@@ -29,6 +29,7 @@ from common.analytics import (
     track_model_call,
 )
 from common.error_handling import GenerationError
+from common.lang_detect import lang_name, ui_lang
 from config.default import Default
 from config.rewriters import VTO_PLACEMENT_CRITIQUE_PROMPT
 from models.model_setup import GeminiModelSetup
@@ -73,13 +74,17 @@ def evaluate_vto_placement(
     apparel_image_gcs: str,
     result_image_gcs: str,
     feature: str | None = None,
+    lang: str | None = None,
 ) -> VTOPlacementCritique:
     """Evaluate garment placement quality in a VTO result image using Gemini."""
     model_name = cfg.GEMINI_CRITIQUE_MODEL_ID
     critique_client = GeminiModelSetup.init(location=cfg.GEMINI_CRITIQUE_LOCATION)
 
+    # placement_analysis and reasoning are shown on Fashion results.
+    reader = lang_name(lang or ui_lang())
     prompt_parts = [
-        VTO_PLACEMENT_CRITIQUE_PROMPT,
+        VTO_PLACEMENT_CRITIQUE_PROMPT
+        + f" Write placement_analysis and reasoning in {reader}.",
         types.Part.from_uri(
             file_uri=apparel_image_gcs,
             mime_type=_infer_image_mime_type(apparel_image_gcs),

@@ -333,6 +333,15 @@ EN: dict[str, str] = {
     "home.eyebrow": "Google Cloud · Gemini",
     "home.title": "Google's creative AI, in one studio",
     "home.chat.about": "about {n} s",
+    "home.chat.secs": "{n} s",
+    "home.chat.mins": "{m} min {n} s",
+    "home.chat.audio": "Audio",
+    "home.chat.audio_play": "Play {name}",
+    "home.chat.audio_pause": "Pause {name}",
+    "home.chat.audio_position": "{name} position",
+    "home.chat.audio_of": "{a} of {b}",
+    "home.chat.audio_speed": "Playback speed {rate}",
+    "home.chat.audio_download": "Download {name}",
     "home.chat.add": "Add",
     "home.chat.add_files": "Add files or photos",
     "home.chat.advanced": "Advanced settings",
@@ -602,8 +611,8 @@ AR: dict[str, str] = {
     "nav.lyria.desc": "موسيقى أصلية، مع كلمات أو بدونها.",
     "nav.fashion": "الأزياء",
     "nav.fashion.desc": "ألبِس العارضة أي زيّ، أو أنشئ مجموعة «تسوّق الإطلالة».",
-    "nav.object_rotation": "المنتج 360°",
-    "nav.object_rotation.desc": "حوّل صورة منتج واحدة إلى فيديو دوّار بزاوية 360°.",
+    "nav.object_rotation": "المنتج ⁦360°⁩",
+    "nav.object_rotation.desc": "حوّل صورة منتج واحدة إلى فيديو دوّار بزاوية ⁦360°⁩.",
     "nav.interior_design": "التصميم الداخلي",
     "nav.interior_design.desc": "من مخطط الطابق إلى غرف مفروشة وجولة مصوّرة.",
     "nav.starter_pack": "حزمة العلامة",
@@ -646,7 +655,7 @@ AR: dict[str, str] = {
     "page.voice.purpose": "حوّل النص المكتوب إلى كلام طبيعي بأكثر من 130 لغة.",
     "page.lyria.purpose": "ألّف الموسيقى والأغاني من وصف نصي، مع كلمات اختيارية.",
     "page.fashion.purpose": "ألبِس العارضة أي قطعة ملابس، أو نسّق إطلالة كاملة من الكتالوج.",
-    "page.object_rotation.purpose": "حوّل صورة منتج واحدة إلى أربع لقطات استوديو وفيديو دوّار بزاوية 360°.",
+    "page.object_rotation.purpose": "حوّل صورة منتج واحدة إلى أربع لقطات استوديو وفيديو دوّار بزاوية ⁦360°⁩.",
     "page.interior_design.purpose": "حوّل مخطط الطابق إلى عرض ثلاثي الأبعاد، وأعد تصميم كل غرفة، وأنشئ جولة بالفيديو.",
     "page.starter_pack.purpose": "أنشئ مجموعة صور تناسب علامتك التجارية لمنتج أو حملة من فكرة واحدة.",
     "page.admin_users.purpose": "أضف الأشخاص وحدّد أدوارهم وأعد تعيين كلمات المرور. هذه الصفحة للمشرفين فقط.",
@@ -984,6 +993,15 @@ AR: dict[str, str] = {
     "home.chat.p_out_music": "مقطوعة موسيقية",
     "home.chat.p_out_voice": "تعليق صوتي",
     "home.chat.p_saved": "يُحفظ في المكتبة",
+    "home.chat.audio": "صوت",
+    "home.chat.secs": "{n} ث",
+    "home.chat.mins": "{m} د {n} ث",
+    "home.chat.audio_play": "تشغيل {name}",
+    "home.chat.audio_pause": "إيقاف {name} مؤقتًا",
+    "home.chat.audio_position": "موضع التشغيل في {name}",
+    "home.chat.audio_of": "{a} من {b}",
+    "home.chat.audio_speed": "سرعة التشغيل {rate}",
+    "home.chat.audio_download": "تنزيل {name}",
     "home.chat.film_started": "جارٍ كتابة السيناريو لـ {job}. راجعه ثم انتقل إلى الخطوة التالية.",
     "home.chat.film_next": "بدأت الخطوة التالية: {job}.",
     "home.chat.film_all": "جارٍ صنع الفيلم كاملًا: {job}.",
@@ -1196,6 +1214,19 @@ _AR_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
+def _merge_page_text() -> None:
+    """Add the per-page Arabic in common/i18n_ar/ (entries here win)."""
+    global _AR_PATTERNS  # pylint: disable=global-statement
+    from common import i18n_ar  # pylint: disable=import-outside-toplevel
+
+    for english, arabic in i18n_ar.merged_text().items():
+        AR_TEXT.setdefault(english, arabic)
+    _AR_PATTERNS = _AR_PATTERNS + tuple(i18n_ar.merged_patterns())
+
+
+_merge_page_text()
+
+
 # --------------------------------------------------------------------------- #
 # Lookup                                                                      #
 # --------------------------------------------------------------------------- #
@@ -1292,6 +1323,52 @@ def tx(english: str) -> str:
 def plural(key: str, n: int) -> str:
     """`key`_one or `key`_other, formatted with n."""
     return t(f"{key}_one" if n == 1 else f"{key}_other", n=n)
+
+
+_AR_MONTHS = (
+    "يناير",
+    "فبراير",
+    "مارس",
+    "أبريل",
+    "مايو",
+    "يونيو",
+    "يوليو",
+    "أغسطس",
+    "سبتمبر",
+    "أكتوبر",
+    "نوفمبر",
+    "ديسمبر",
+)
+# Monday first, like date.weekday().
+_AR_WEEKDAYS = (
+    "الاثنين",
+    "الثلاثاء",
+    "الأربعاء",
+    "الخميس",
+    "الجمعة",
+    "السبت",
+    "الأحد",
+)
+
+
+def format_date(value, fmt: str, lang: str | None = None) -> str:
+    """``value.strftime(fmt)`` with Arabic day and month names in Arabic.
+
+    Supports %a/%A (weekday) and %b/%B (month); other codes are left to
+    strftime, so English output is exactly ``strftime(fmt)``. In Arabic a
+    ", " in the format becomes the Arabic comma "، ".
+    """
+    lang = lang or current_lang()
+    if lang != "ar":
+        return value.strftime(fmt)
+    fmt = (
+        fmt.replace(", ", "، ")
+        .replace("%a", _AR_WEEKDAYS[value.weekday()])
+        .replace("%A", _AR_WEEKDAYS[value.weekday()])
+        .replace("%b", _AR_MONTHS[value.month - 1])
+        .replace("%B", _AR_MONTHS[value.month - 1])
+    )
+    return value.strftime(fmt)
 
 
 def route_key(route: str | None) -> str:

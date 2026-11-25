@@ -23,13 +23,24 @@ import typing
 
 import mesop as me
 
-from common.i18n import tx
+from common.i18n import current_lang, tx, tx_lang
 
 from components.generation_progress.generation_progress import (
     generation_progress_card,
+    progress_labels,
 )
 
 DEMO_STYLESHEETS = ["/ui/demos.css"]
+
+
+def tx_ctx(english: str, key: str) -> str:
+    """``english``, or the translation of ``key`` when the word alone is ambiguous.
+
+    "Model" means an AI model on other pages and a person here, so the page
+    passes ``tx_ctx("Model", "Model (person)")``. English is unchanged.
+    """
+    text = tx(key)
+    return english if text == key else text
 
 
 def ctext(text: str, cls: str) -> None:
@@ -94,21 +105,23 @@ def demo_steps(steps: list[str], current: int):
     items = []
     for i, label in enumerate(steps, start=1):
         if i < current:
-            cls, mark, note = "is-done", "&#10003;", " (done)"
+            cls, mark, note = "is-done", "&#10003;", " " + tx("(done)")
         elif i == current:
-            cls, mark, note = "is-current", str(i), " (current step)"
+            cls, mark, note = "is-current", str(i), " " + tx("(current step)")
         else:
             cls, mark, note = "is-next", str(i), ""
         current_attr = ' aria-current="step"' if i == current else ""
         items.append(
             f'<li class="gm-step {cls}"{current_attr}>'
             f'<span class="gm-step-num" aria-hidden="true">{mark}</span>'
-            f'<span class="gm-step-label">{html.escape(label)}'
-            f'<span class="gm-sr-only">{note}</span></span></li>'
+            f'<span class="gm-step-label">{html.escape(tx(label))}'
+            f'<span class="gm-sr-only">{html.escape(note)}</span></span></li>'
         )
     with me.box(classes="gm-steps-wrap"):
         me.html(
-            '<ol class="gm-steps" aria-label="Steps">' + "".join(items) + "</ol>",
+            f'<ol class="gm-steps" aria-label="{html.escape(tx("Steps"))}">'
+            + "".join(items)
+            + "</ol>",
             mode="sanitized",
         )
 
@@ -194,16 +207,18 @@ def demo_progress(
     """
     if status not in ("running", "error"):
         return
+    lang = current_lang()
     with me.box(classes="gm-progress-slot"):
         generation_progress_card(
             key="gm_generation_progress",
-            stages=list(stages),
+            stages=[tx_lang(lang, s) for s in stages],
             current=current,
             status=status,
             run_id=run_id,
             typical_seconds=typical_seconds,
             work_stage=work_stage,
-            message=message,
+            message=tx_lang(lang, message),
+            labels=progress_labels(lang, tx_lang(lang, media_label)),
             aspect=aspect,
             count=count,
             media_label=media_label,

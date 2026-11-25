@@ -466,13 +466,13 @@ class GmChatNav extends LitElement {
 
     .search { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; margin: 0 0 6px; border-radius: 18px;
       background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface-variant, #9aa0a6); }
-    .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--sys-on-surface, #e8eaed); font: inherit; font-size: 13.5px; }
+    .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--sys-on-surface, #e8eaed); font: inherit; font-size: 13.5px; unicode-bidi: plaintext; }
     .search input::-webkit-search-cancel-button { filter: grayscale(1); }
     .search input::-webkit-search-decoration { display: none; -webkit-appearance: none; }
     .search svg { flex: none; }
     .search:focus-within { outline: 2px solid var(--sys-primary, #8ab4f8); outline-offset: -2px; }
 
-    .head { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 10px 6px 0 12px;
+    .head { display: flex; align-items: center; justify-content: space-between; height: 32px; padding-block: 10px 0; padding-inline: 12px 6px;
       font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--sys-on-surface-variant, #9aa0a6); }
     .head-btn { width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center; color: var(--sys-on-surface-variant, #9aa0a6); }
     .head-btn:hover { background: var(--gm-hover, rgba(127, 127, 127, 0.12)); color: var(--sys-on-surface, #e8eaed); }
@@ -480,13 +480,15 @@ class GmChatNav extends LitElement {
     .empty { margin: 2px 12px 6px; font-size: 12.5px; line-height: 1.4; color: var(--sys-on-surface-variant, #9aa0a6); }
 
     .chat { position: relative; display: flex; align-items: center; height: 34px; border-radius: 17px; }
-    .chat.in { padding-left: 22px; }
+    .chat.in { padding-inline-start: 22px; }
     .chat:hover, .chat.menuing { background: var(--gm-hover, rgba(127, 127, 127, 0.12)); }
     .chat.active { background: var(--gm-active-nav, rgba(127, 127, 127, 0.18)); }
-    .chat-open { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 12px; border: 0; background: transparent;
+    .chat-open { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; padding-block: 0; padding-inline: 12px 4px; border: 0; background: transparent;
       cursor: pointer; text-align: start; font-size: 13.5px; }
-    .chat.in .chat-open { padding-left: 10px; }
-    .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat.in .chat-open { padding-inline-start: 10px; }
+    .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+    /* Arabic has no capitals and is not letter-spaced. */
+    :host(:lang(ar)) .head { text-transform: none; letter-spacing: 0; font-size: 12px; }
     .pin { display: inline-flex; color: var(--sys-on-surface-variant, #9aa0a6); }
     .proj .chat-open { padding-inline: 2px 4px; gap: 6px; }
     .proj svg { color: var(--sys-on-surface-variant, #9aa0a6); }
@@ -498,23 +500,23 @@ class GmChatNav extends LitElement {
     .caret { display: inline-flex; transition: transform 160ms ease; }
     .caret.down { transform: rotate(90deg); }
     :host(:dir(rtl)) .caret:not(.down) { transform: scaleX(-1); }
-    .more { width: 30px; height: 30px; margin-right: 2px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center;
+    .more { width: 30px; height: 30px; margin-inline-end: 2px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center;
       color: var(--sys-on-surface-variant, #9aa0a6); opacity: 0; }
     .chat:hover .more, .chat.menuing .more, .more:focus-visible { opacity: 1; }
     .more:hover { color: var(--sys-on-surface, #e8eaed); }
-    .add-here { gap: 6px; padding-right: 8px; border: 0; background: transparent; cursor: pointer; font-size: 13px; color: var(--sys-on-surface-variant, #9aa0a6); width: 100%; }
-    .add-here svg { margin-left: 10px; }
+    .add-here { gap: 6px; padding-inline-end: 8px; border: 0; background: transparent; cursor: pointer; font-size: 13px; color: var(--sys-on-surface-variant, #9aa0a6); width: 100%; }
+    .add-here svg { margin-inline-start: 10px; }
     .project.over { outline: 2px dashed var(--sys-primary, #8ab4f8); outline-offset: -2px; border-radius: 17px; }
-    .edit { width: 100%; height: 30px; margin: 0 2px; padding: 0 10px; border: 0; border-radius: 15px; outline: 2px solid var(--sys-primary, #8ab4f8);
+    .edit { unicode-bidi: plaintext; width: 100%; height: 30px; margin: 0 2px; padding: 0 10px; border: 0; border-radius: 15px; outline: 2px solid var(--sys-primary, #8ab4f8);
       background: var(--gm-tonal, rgba(127, 127, 127, 0.1)); color: var(--sys-on-surface, #e8eaed); font: inherit; font-size: 13.5px; }
 
-    .menu { position: absolute; right: 4px; z-index: 5; min-width: 190px; max-width: 230px; padding: 6px; border-radius: 14px;
+    .menu { position: absolute; inset-inline-end: 4px; z-index: 5; min-width: 190px; max-width: 230px; padding: 6px; border-radius: 14px;
       background: var(--gm-menu-bg, var(--sys-surface-container-high, #2b2f36)); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
       display: flex; flex-direction: column; animation: fade 140ms ease both; }
     .menu button { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent;
       cursor: pointer; text-align: start; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .menu button:hover { background: var(--gm-hover, rgba(127, 127, 127, 0.14)); }
-    .menu .sub { padding-left: 14px; color: var(--sys-on-surface, #e8eaed); }
+    .menu .sub { padding-inline-start: 14px; color: var(--sys-on-surface, #e8eaed); }
     .menu .sub svg { color: var(--sys-on-surface-variant, #9aa0a6); }
     .menu-label { padding: 8px 10px 2px; font-size: 11px; color: var(--sys-on-surface-variant, #9aa0a6); }
     .menu .danger { color: #f28b82; }

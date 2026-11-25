@@ -17,6 +17,8 @@
 import mesop as me
 import typing
 
+from common.i18n import tx
+
 
 @me.web_component(path="./scroll_sentinel.js")
 def scroll_sentinel(
@@ -33,6 +35,8 @@ def scroll_sentinel(
         properties={
             "isLoading": is_loading,
             "allItemsLoaded": all_items_loaded,
+            "loadingLabel": tx("Loading..."),
+            "endLabel": tx("End of list"),
         },
         events={
             "visible": on_visible,

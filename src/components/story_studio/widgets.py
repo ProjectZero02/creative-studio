@@ -18,6 +18,51 @@ import typing
 
 import mesop as me
 
+from common.i18n import tx
+
+# English text the web components show, sent to them translated (see _T in
+# each .js file). Templates use {0}, {1} for numbers and names.
+_STEPPER_TEXT = ("Film steps", "Step {0}: {1}", "Step {0}: {1} (done)")
+_COMPARE_TEXT = ("Pause both", "Play both", "Position")
+_TIMELINE_TEXT = (
+    "Video", "Voice", "Music", "Titles", "Title", "Clip", "Scene {0}",
+    "New title", "{0} to {1}", "{0} speech", "{0} speech (muted)",
+    "Speech recorded in {0}. It moves with the shot; select it to change its volume.",
+    "Clip settings", "Select a clip to edit it", "{0} s", "Text", "Position",
+    "Top", "Center", "Bottom", "Size", "Small", "Medium", "Large", "Huge",
+    "Volume", "Clip sound", "Transition in", "Cut", "Crossfade 0.25 s",
+    "Crossfade 0.5 s", "Crossfade 1 s", "Dip to black", "Earlier", "Later",
+    "Lower under speech", "Updating preview", "Preview not updated",
+    "No timeline yet.", "Preview", "Back to start", "Pause", "Play",
+    "Play or pause (Space)", "Exit full screen", "Full screen", "Full screen (F)",
+    "Edit", "Split at playhead (S)", "Split", "Delete (Del)", "Delete",
+    "Add a title at the playhead", "Add title", "Undo (Ctrl+Z)", "Undo",
+    "Redo (Ctrl+Shift+Z)", "Redo", "Zoom out", "Zoom", "Zoom in", "Timeline",
+    "Video track", "Voice track", "Music track", "Titles track",
+)
+
+
+def strings_json(texts: typing.Iterable[str]) -> str:
+    """{english: translation} for the texts that change in the current
+    language ("{}" in English), for a web component's stringsJson."""
+    out = {}
+    for text in texts:
+        local = tx(text)
+        if local != text:
+            out[text] = local
+    return json.dumps(out, ensure_ascii=False)
+
+
+def tx_dots(text: str) -> str:
+    """tx() for a line of parts joined by " · " ("4 takes · 32s"): the whole
+    line if it has a translation, else each part on its own."""
+    if not text:
+        return text
+    local = tx(text)
+    if local != text or " · " not in text:
+        return local
+    return " · ".join(tx(part) for part in text.split(" · "))
+
 
 @me.web_component(path="./film_compare.js")
 def film_compare(
@@ -36,9 +81,10 @@ def film_compare(
         properties={
             "leftUrl": left_url,
             "rightUrl": right_url,
-            "leftLabel": left_label,
-            "rightLabel": right_label,
+            "leftLabel": tx_dots(left_label),
+            "rightLabel": tx(right_label),
             "portrait": portrait,
+            "stringsJson": strings_json(_COMPARE_TEXT),
         },
     )
 
@@ -51,10 +97,14 @@ def story_stepper(
     key: str | None = None,
 ):
     """Horizontal stepper. Each step: {id, label, state, enabled}."""
+    steps = [{**step, "label": tx(step.get("label", ""))} for step in steps]
     return me.insert_web_component(
         key=key,
         name="story-stepper",
-        properties={"stepsJson": json.dumps(steps)},
+        properties={
+            "stepsJson": json.dumps(steps, ensure_ascii=False),
+            "stringsJson": strings_json(_STEPPER_TEXT),
+        },
         events={"selectEvent": on_select},
     )
 
@@ -148,6 +198,7 @@ def story_timeline(
             "previewState": preview_state,
             "aspect": aspect,
             "busy": busy,
+            "stringsJson": strings_json(_TIMELINE_TEXT),
         },
         events=events,
     )

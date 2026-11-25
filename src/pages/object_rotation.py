@@ -22,6 +22,7 @@ from typing import Callable
 import mesop as me
 
 from common import authz
+from common.i18n import tx
 from common.storage import store_to_gcs
 from common.utils import create_display_url
 from components.header import header
@@ -132,6 +133,7 @@ from components.demo_flow.demo_flow import (
     demo_progress,
     demo_steps,
     demo_upload_button,
+    tx_ctx,
 )
 from components.generation_progress.generation_progress import friendly_error
 from models.object_rotation import generate_product_views, save_object_rotation_project
@@ -317,7 +319,9 @@ def step1_content():
             with me.box(classes="gm-demo-drop"):
                 if main_uri:
                     with me.box(classes="gm-demo-img"):
-                        me.image(src=create_display_url(main_uri), alt="Product photo")
+                        me.image(
+                            src=create_display_url(main_uri), alt=tx("Product photo")
+                        )
                 else:
                     cicon("add_photo_alternate", "gm-demo-drop-icon")
                     ctext("No photo yet", "gm-demo-drop-text")
@@ -499,12 +503,15 @@ def step2_content():
 
 def _view_tile(view: str, uri: str | None, on_remove: Callable, on_upload: Callable):
     label, _ = _VIEW_UPLOADS[view]
+    # "Back" is also the back button, so the side label is looked up as
+    # "Back view"; English keeps the short label.
+    view_alt = tx(f"{label} view")
     with me.box(classes="gm-demo-view"):
-        ctext(label, "gm-demo-view-label")
+        ctext(tx_ctx(label, f"{label} view"), "gm-demo-view-label")
         with me.box(classes="gm-demo-drop gm-demo-drop-square"):
             if uri:
                 with me.box(classes="gm-demo-img"):
-                    me.image(src=create_display_url(uri), alt=f"{label} view")
+                    me.image(src=create_display_url(uri), alt=view_alt)
             else:
                 cicon("image", "gm-demo-drop-icon")
         with me.box(classes="gm-demo-actions"):

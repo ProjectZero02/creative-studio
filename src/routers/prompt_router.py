@@ -86,6 +86,10 @@ def enhance_text(prompt: str, kind: str = "") -> str:
     from common.mock_generation import mock_enabled
 
     if mock_enabled():
+        from common.lang_detect import detect_lang
+
+        if detect_lang(prompt) == "ar":  # keep the person's language
+            return f"{prompt}، بتفاصيل غنية وإضاءة طبيعية ناعمة ولقطة سينمائية"
         return f"{prompt}, rich detail, soft natural light, cinematic framing"
     from models.gemini import rewriter
 

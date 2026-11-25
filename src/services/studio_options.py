@@ -38,7 +38,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.i18n import tr
+from common.i18n import current_lang, tx
+from common.i18n import tr as _tr_key
+
+
+def tr(key: str, english: str, **fmt) -> str:
+    """Text under `key`; else the English through the page dictionaries
+    (common/i18n_ar/studios.py), so labels without a key still translate."""
+    return tx(_tr_key(key, english, **fmt))
+
 
 KINDS = ("image", "video", "music", "voice", "film")
 
@@ -121,7 +129,7 @@ def _label(name: str) -> str:
 
 
 def _opts(pairs) -> list[dict]:
-    return [{"value": str(v), "label": str(lbl)} for v, lbl in pairs]
+    return [{"value": str(v), "label": tx(str(lbl))} for v, lbl in pairs]
 
 
 def _toggle_opts() -> list[dict]:
@@ -564,7 +572,6 @@ def _music_inputs() -> list[dict]:
 def _voice_fields() -> list[dict]:
     from config.voice import (
         CHIRP_ENGINE,
-        DEFAULT_LANGUAGE,
         DEFAULT_PACE,
         DEFAULT_SECOND_VOICE,
         DEFAULT_SPEAKERS,
@@ -574,6 +581,7 @@ def _voice_fields() -> list[dict]:
         PACES,
         STYLES,
         VOICES,
+        default_language,
         engine_options,
         engine_supports_dialogue,
         is_chirp,
@@ -584,12 +592,15 @@ def _voice_fields() -> list[dict]:
     gemini = [e for e in engines if not is_chirp(e)]
     dialogue = [e for e in engines if engine_supports_dialogue(e)]
     languages = {}
+    lang = current_lang()
     for e in engines:
         langs = languages_for(e)
         codes = list(langs.values())
+        start = default_language(e, lang)  # Arabic on the Arabic site
+        by_name = sorted(langs.items(), key=lambda item: tx(item[0]))
         languages[e] = {
-            "default": DEFAULT_LANGUAGE if DEFAULT_LANGUAGE in codes else codes[0],
-            "options": _opts((code, name) for name, code in sorted(langs.items())),
+            "default": start if start in codes else codes[0],
+            "options": _opts((code, name) for name, code in by_name),
         }
     d = DEFAULT_VOICE_ENGINE
     voices = _opts((v, v) for v in VOICES)

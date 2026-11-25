@@ -2,6 +2,7 @@ import json
 import mesop as me
 import typing
 
+from common.i18n import tx
 from common.metadata import MediaItem
 
 
@@ -47,6 +48,9 @@ def get_pills_for_item(item: MediaItem, https_url: str) -> str:
     elif effective_media_type == "interior_design_tour":
         pills.append({"label": "Interior Design"})
 
+    # Pill text in the page language (common/i18n_ar/shell.py).
+    for p in pills:
+        p["label"] = tx(p["label"])
     return json.dumps(pills)
 
 

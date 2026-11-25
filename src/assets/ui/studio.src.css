@@ -274,8 +274,9 @@ html body .mdc-tooltip__surface,
 html body .mat-mdc-tooltip .mdc-tooltip__surface { border-radius: var(--gm-radius-sm); font-size: 12px; }
 
 /* Material form fields: rounder outline, clearer labels. */
-html body .mdc-text-field--outlined .mdc-notched-outline__leading { border-radius: var(--gm-radius-sm) 0 0 var(--gm-radius-sm); }
-html body .mdc-text-field--outlined .mdc-notched-outline__trailing { border-radius: 0 var(--gm-radius-sm) var(--gm-radius-sm) 0; }
+/* Logical corners: the leading piece sits on the right in Arabic. */
+html body .mdc-text-field--outlined .mdc-notched-outline__leading { border-radius: 0; border-start-start-radius: var(--gm-radius-sm); border-end-start-radius: var(--gm-radius-sm); }
+html body .mdc-text-field--outlined .mdc-notched-outline__trailing { border-radius: 0; border-start-end-radius: var(--gm-radius-sm); border-end-end-radius: var(--gm-radius-sm); }
 /* Material gives the label notch a transparent side border; the field colours
    above would paint it, leaving a stray vertical line where a floating label
    starts. Keep it invisible in every state. */
@@ -664,7 +665,8 @@ html body .gm-composer {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 18px 18px 12px 22px;
+  padding-block: 18px 12px;
+  padding-inline: 22px 18px;
   border-radius: 24px;
   border: 1px solid var(--gm-border);
   background: var(--sys-surface-container-lowest);
@@ -700,7 +702,7 @@ html body .gm-composer-tools {
   flex: 1 1 auto;
   min-width: 0;
 }
-html body .gm-composer-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+html body .gm-composer-actions { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; }
 html body .gm-composer-attach { display: flex; align-items: center; gap: 2px; }
 html body .gm-composer-add { flex: none; display: flex; align-items: center; align-self: flex-end; }
 html body .gm-composer-mic,
@@ -712,7 +714,7 @@ html body .gm-add-menu { position: relative; display: flex; }
 html body .gm-add-pop {
   position: absolute;
   bottom: calc(100% + 8px);
-  left: 0;
+  inset-inline-start: 0;
   z-index: 30;
   min-width: 232px;
   padding: 6px;
@@ -813,7 +815,7 @@ html body .gm-attach {
   border: 1px solid var(--gm-border);
 }
 html body .gm-attach img { width: 100%; height: 100%; object-fit: cover; border-radius: 0 !important; display: block; }
-html body .gm-attach-remove { position: absolute; top: 2px; right: 2px; }
+html body .gm-attach-remove { position: absolute; top: 2px; inset-inline-end: 2px; }
 html body .gm-attach-remove .mat-mdc-icon-button {
   width: 24px !important; height: 24px !important; padding: 2px !important;
   background: rgba(18, 20, 24, 0.7) !important; color: #fff !important;
@@ -870,7 +872,7 @@ html body .gm-segmented .mat-button-toggle {
   color: var(--sys-on-surface-variant);
   transition: background-color var(--gm-fast) var(--gm-ease), color var(--gm-fast) var(--gm-ease);
 }
-html body .gm-segmented .mat-button-toggle + .mat-button-toggle { border-left: none !important; }
+html body .gm-segmented .mat-button-toggle + .mat-button-toggle { border-inline-start: none !important; }
 html body .gm-segmented .mat-button-toggle-checked {
   background: var(--sys-surface-container-lowest) !important;
   color: var(--sys-on-surface) !important;
@@ -954,7 +956,7 @@ html body .gm-empty-icon {
   html body .gm-hero-titlerow { gap: 10px; }
   html body .gm-hero-icon { width: 40px; height: 40px; border-radius: 12px; }
   html body .gm-hero-purpose { font-size: 15px; }
-  html body .gm-composer { padding: 14px 12px 10px 14px; border-radius: 20px; }
+  html body .gm-composer { padding-block: 14px 10px; padding-inline: 14px 12px; border-radius: 20px; }
   html body .gm-composer-tools { flex-basis: 100%; }
   html body .gm-composer-btn .mat-mdc-icon-button,
   html body .gm-composer-btn .mdc-icon-button,

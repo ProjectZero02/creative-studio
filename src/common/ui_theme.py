@@ -57,6 +57,12 @@ SHARED_STYLESHEETS = [
 
 _original_page = me.page
 
+# Arabic: route the English text pages pass to Mesop components through
+# common.i18n.tx (common/i18n_mesop.py). Runs before any page module loads.
+from common.i18n_mesop import install as _install_i18n  # noqa: E402
+
+_install_i18n()
+
 
 _VERSIONS: dict[str, str] = {}
 

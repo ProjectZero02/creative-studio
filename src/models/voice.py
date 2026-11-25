@@ -66,16 +66,34 @@ def validate(request: VoiceRequest) -> str:
     return ""
 
 
+def speech_language(engine: str, text: str, code: str) -> str:
+    """The language code to speak `text` with: Arabic text gets the engine's
+    Arabic code when the chosen one is not Arabic (the default is en-US),
+    and an Arabic code the engine lacks becomes the one it has."""
+    from common.lang_detect import detect_lang
+    from config.voice import languages_for
+
+    codes = list(languages_for(engine).values())
+    arabic = next((c for c in codes if c.startswith("ar")), "")
+    if arabic and code.lower().startswith("ar") and code not in codes:
+        return arabic
+    if arabic and detect_lang(text) == "ar" and not code.lower().startswith("ar"):
+        return arabic
+    return code
+
+
 def synthesize_voice(request: VoiceRequest) -> bytes:
     """Return WAV bytes for the request. Raises ValueError for a bad request."""
     problem = validate(request)
     if problem:
         raise ValueError(problem)
+    # Arabic script with the default en-US code would be read badly.
+    language_code = speech_language(request.engine, request.text, request.language_code)
     if is_chirp(request.engine):
         return chirp_3hd.synthesize_chirp_speech(
             text=request.text,
             voice_name=request.voice,
-            language_code=request.language_code,
+            language_code=language_code,
             speaking_rate=pace_rate(request.pace),
             volume_gain_db=request.volume_gain_db,
             pronunciations=request.pronunciations or None,
@@ -86,7 +104,7 @@ def synthesize_voice(request: VoiceRequest) -> bytes:
         prompt=style_direction(request.style, request.pace, request.style_notes),
         model_name=request.engine,
         voice_name=request.voice,
-        language_code=request.language_code,
+        language_code=language_code,
         speakers=list(request.speakers) if request.multi_speaker else None,
     )
 
