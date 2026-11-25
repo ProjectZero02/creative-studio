@@ -78,6 +78,17 @@ def pcm_to_wav(pcm: bytes, rate: int = 24000, channels: int = 1) -> bytes:
     return buf.getvalue()
 
 
+def wav_seconds(data: bytes | None) -> float:
+    """Length of WAV audio in seconds (raw bytes: 24 kHz 16-bit mono)."""
+    if not data:
+        return 0.0
+    try:
+        with wave.open(io.BytesIO(data), "rb") as wav:
+            return wav.getnframes() / float(wav.getframerate() or 24000)
+    except (wave.Error, EOFError):
+        return len(data) / (24000 * 2)
+
+
 def _as_wav(data: bytes, mime_type: str) -> bytes:
     """Gemini returns WAV or raw PCM (e.g. "audio/L16;codec=pcm;rate=24000")."""
     if data[:4] == b"RIFF":
@@ -261,4 +272,6 @@ def synthesize_speech(
                 speakers,
             )
         ctx["billing_units"]["audio_bytes"] = len(audio_content) if audio_content else 0
+        # Audio output is billed per token, 25 a second.
+        ctx["billing_units"]["audio_seconds"] = round(wav_seconds(audio_content), 3)
         return audio_content

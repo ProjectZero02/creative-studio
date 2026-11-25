@@ -21,35 +21,18 @@ from common import usage
 from config import pricing
 
 
-def test_estimates_follow_the_billing_units(monkeypatch):
-    rates = {
-        "gemini-3.5-flash": pricing.TokenRates(0.30, 2.50, "2026-11-23T00:00:00Z"),
-        "gemini-4-neon": pricing.TokenRates(3.00, 15.00, "2026-11-23T00:00:00Z"),
-    }
-    monkeypatch.setattr(
-        pricing,
-        "get_token_rates",
-        lambda model: rates.get(model),
-    )
-    unit_rates = {
-        ("veo-3.1-generate", "video"): pricing.UnitRate(0.40, "s", "2026-11-23T00:00:00Z"),
-        ("veo-3.1-fast-generate", "video"): pricing.UnitRate(0.15, "s", "2026-11-23T00:00:00Z"),
-        ("gemini-3-pro-image", "image"): pricing.UnitRate(0.039, "image", "2026-11-23T00:00:00Z"),
-        ("lyria-002", "music"): pricing.UnitRate(0.06, "track", "2026-11-23T00:00:00Z"),
-        ("chirp-3-hd", "speech"): pricing.UnitRate(30 / 1e6, "character", "2026-11-23T00:00:00Z"),
-    }
-    monkeypatch.setattr(
-        pricing,
-        "get_unit_rate",
-        lambda model, kind: unit_rates.get((model, kind)),
-    )
-    assert pricing.estimate("veo-3.1-generate", {"video_seconds_generated": 8}) == pytest.approx(3.2)
-    assert pricing.estimate("veo-3.1-fast-generate", {"video_seconds_generated": 8}) == pytest.approx(1.2)
-    assert pricing.estimate("gemini-3-pro-image", {"sample_count": 2}) == pytest.approx(0.078)
+def test_estimates_follow_the_billing_units():
+    # List prices from the price book (no catalog in tests).
+    veo = {"video_seconds_generated": 8, "resolution": "720p", "generate_audio": True}
+    assert pricing.estimate("veo-3.1-generate", veo) == pytest.approx(3.2)
+    assert pricing.estimate("veo-3.1-fast-generate", veo) == pytest.approx(0.8)
+    assert pricing.estimate(
+        "gemini-3-pro-image", {"images_generated": 2, "image_size": "1K"}
+    ) == pytest.approx(2 * 1120 * 120 / 1e6)
     assert pricing.estimate("lyria-002", {"sample_count": 3}) == pytest.approx(0.18)
     assert pricing.estimate("chirp-3-hd", {"characters_synthesized": 1_000_000}) == pytest.approx(30)
     text = pricing.estimate("gemini-3.5-flash", {"prompt_tokens": 1_000_000, "candidates_tokens": 1_000_000})
-    assert text == pytest.approx(2.8)
+    assert text == pytest.approx(1.5 + 9.0)
     text_with_reasoning = pricing.estimate(
         "gemini-3.5-flash",
         {
@@ -59,7 +42,7 @@ def test_estimates_follow_the_billing_units(monkeypatch):
             "thoughts_tokens": 500_000,
         },
     )
-    assert text_with_reasoning == pytest.approx(4.2)
+    assert text_with_reasoning == pytest.approx(1.5 * 1.5 + 1.5 * 9.0)
     neon = pricing.estimate("gemini-4-neon", {"prompt_tokens": 1_000_000, "candidates_tokens": 1_000_000})
     assert neon == pytest.approx(18.0)
     assert pricing.estimate("veo-3.1", {"video_seconds_generated": 8}, "failure") == 0
@@ -111,16 +94,7 @@ def test_kinds():
     assert pricing.kind_of("gemini-3.5-flash", {}) == "text"
 
 
-def test_summary_fills_every_day_and_sorts_by_cost(monkeypatch):
-    monkeypatch.setattr(
-        pricing,
-        "get_unit_rate",
-        lambda model, kind: pricing.UnitRate(
-            0.40 if kind == "video" else 0.06,
-            "s" if kind == "video" else "track",
-            "2026-11-23T00:00:00Z",
-        ),
-    )
+def test_summary_fills_every_day_and_sorts_by_cost():
     now = 1_800_000_000.0  # fixed clock
     events = [
         usage.event("a@x", "veo-3.1", "success", {"video_seconds_generated": 8}, at=now),
@@ -135,12 +109,7 @@ def test_summary_fills_every_day_and_sorts_by_cost(monkeypatch):
     assert [o["owner"] for o in out["owners"]] == ["a@x", "b@x"]
 
 
-def test_summary_groups_costs_by_feature(monkeypatch):
-    monkeypatch.setattr(
-        pricing,
-        "get_token_rates",
-        lambda model: pricing.TokenRates(1.0, 1.0, "2026-11-23T00:00:00Z"),
-    )
+def test_summary_groups_costs_by_feature():
     now = 1_800_000_000.0
     events = [
         usage.event(
@@ -177,14 +146,14 @@ def test_summary_groups_costs_by_feature(monkeypatch):
             "calls": 2,
             "failed": 0,
             "unpriced": 0,
-            "cost": pytest.approx(3.0),
+            "cost": pytest.approx(4.5),  # 3M input tokens at $1.50/M
         },
         {
             "feature": "interior_design",
             "calls": 1,
             "failed": 0,
             "unpriced": 0,
-            "cost": pytest.approx(0.5),
+            "cost": pytest.approx(0.75),
         },
     ]
 
@@ -199,11 +168,6 @@ def test_background_calls_are_counted_for_the_job_owner(monkeypatch):
         done.set()
 
     monkeypatch.setattr(usage, "_write", fake_write)
-    monkeypatch.setattr(
-        pricing,
-        "get_unit_rate",
-        lambda model, kind: pricing.UnitRate(0.40, "s", "2026-11-23T00:00:00Z"),
-    )
     with usage.acting_for("owner@x"):
         usage.record("", "veo-3.1", "success", {"video_seconds_generated": 4}, task="story")
     assert done.wait(2)

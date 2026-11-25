@@ -261,40 +261,70 @@ def parse_duration_text(text: str) -> int | None:
     return min(cap, round(total))
 
 
-# List prices (USD) for the Setup blueprint when the Cloud Billing Catalog
-# price is not cached yet. The blueprint must answer instantly, so it never
-# waits on the catalog; the Usage page prices real calls from the catalog.
-_FALLBACK_VIDEO_PER_SECOND = (("lite", 0.10), ("fast", 0.15), ("omni", 0.40), ("veo", 0.40))
-_FALLBACK_IMAGE = 0.039
-_FALLBACK_TTS_PER_MILLION_CHARS = 10.0
-_FALLBACK_MUSIC_PER_TRACK = 0.06
-
-
-def _catalog_rate(model: str, kind: str) -> float | None:
-    try:
-        from config import pricing
-
-        rate = pricing.cached_unit_rate(model, kind)
-    except Exception:  # pricing must never break Setup
-        return None
-    return rate.price_per_unit if rate else None
-
-
-def _video_price(video_model: str) -> float:
+def _video_model_name(video_model: str) -> str:
+    """The billed model name of a Story video engine id."""
     from services.story_models import _video_model_spec
 
     mid = (video_model or "").strip() or Default().STORY_VIDEO_MODEL
     spec, _ = _video_model_spec(mid)
-    name = getattr(spec, "model_name", "") or {
-        "hybrid": "gemini-omni",
-        "3.1": "veo-3.1",
-        "3.1-fast": "veo-3.1-fast",
-    }.get(mid, mid)
-    live = _catalog_rate(name, "video")
-    if live:
-        return live
-    lowered = name.lower()
-    return next((p for key, p in _FALLBACK_VIDEO_PER_SECOND if key in lowered), 0.40)
+    return getattr(spec, "model_name", "") or mid
+
+
+def blueprint_cost(
+    video_model: str,
+    resolution: str,
+    takes_parts: list[list[int]],
+    *,
+    frames: int,
+    narrated_seconds: float,
+    music_on: bool,
+) -> dict:
+    """Estimated cost of a film from the price book (never waits on the
+    billing catalog). `takes_parts`: each take's clip lengths, the first
+    clip and then its extension turns.
+
+    Veo bills each second it makes. Gemini Omni bills its output video per
+    token by resolution, and a chat take sends every earlier turn's clip
+    again as input, so long takes also pay for what they re-read."""
+    from config import pricing
+
+    cfg = Default()
+    name = _video_model_name(video_model)
+    seconds = sum(sum(parts) for parts in takes_parts)
+    rate = pricing.video_rate_per_second(name, resolution, audio=True, fetch=False) or 0.0
+    video = seconds * rate
+    spec = pricing.token_model_for(name, fetch=False)
+    if spec is not None and spec.video_output is not None:
+        per_second = min(
+            pricing.OMNI_TOKENS_PER_SECOND.get(resolution, 5792),
+            pricing.OMNI_TOKENS_PER_SECOND["720p"],
+        )
+        reread = sum(
+            sum(parts[:k]) for parts in takes_parts for k in range(1, len(parts))
+        )
+        video += reread * per_second * spec.input / 1e6
+    image = pricing.image_cost(cfg.GEMINI_IMAGE_GEN_MODEL, "1k", fetch=False) or 0.0
+    voice = 0.0
+    if narrated_seconds > 0:
+        words = narrated_seconds * NARRATOR_WPS
+        voice = pricing.estimate(
+            cfg.STORY_TTS_MODEL,
+            {"characters_synthesized": words * 6, "audio_seconds": narrated_seconds},
+            fetch=False,
+        ) or 0.0
+    music = 0.0
+    if music_on:
+        music = pricing.estimate(
+            cfg.LYRIA_MODEL_VERSION, {"sample_count": 1}, fetch=False
+        ) or 0.0
+    cost = {
+        "video": round(video, 2),
+        "frames": round(frames * image, 2),
+        "voice": round(voice, 4),
+        "music": round(music, 2),
+    }
+    cost["total"] = round(video + frames * image + voice + music, 2)
+    return cost
 
 
 def _pack_takes(shots: int, shot_seconds: int, take_max: int) -> list[int]:
@@ -321,12 +351,9 @@ def setup_blueprint(
     speech_mode: str = "on_camera",
 ) -> dict:
     """What Setup's live blueprint shows for a film of about `seconds`:
-    shots, takes and cuts, resolution, an estimated cost (catalog
-    prices when cached, else list prices) and an estimated time. Gemini makes the real cut list;
+    shots, takes and cuts, resolution, an estimated cost (see
+    blueprint_cost) and an estimated time. Gemini makes the real cut list;
     these are honest estimates for the request.
-
-    Video is priced per generated second: an extension bills only its new
-    seconds, so a take costs its own length once.
     """
     from services.story_models import (
         _video_model_spec,
@@ -357,21 +384,17 @@ def setup_blueprint(
         takes = [1] * shots
     take_count = len(takes)
 
-    video_rate = _video_price(video_model)
-    if caps.resolution == "360p":
-        video_rate *= 0.33  # list price: 360p is about a third of 720p
-    image_rate = _FALLBACK_IMAGE
-    words = length * WORDS_PER_SECOND
-    voice_cost = (
-        words * 6 / 1e6 * _FALLBACK_TTS_PER_MILLION_CHARS if voice_on else 0.0
+    single_max = max(1, single_clip_max(video_model))
+    # Every generated second is billed, even what a one-take film trims.
+    takes_parts = [clip_parts(n * shot_secs, single_max) for n in takes]
+    cost = blueprint_cost(
+        video_model,
+        caps.resolution,
+        takes_parts,
+        frames=take_count,
+        narrated_seconds=length if voice_on else 0,
+        music_on=music_on,
     )
-    cost = {
-        "video": round(length * video_rate, 2),
-        "frames": round(take_count * image_rate, 2),
-        "voice": round(voice_cost, 4),
-        "music": _FALLBACK_MUSIC_PER_TRACK if music_on else 0.0,
-    }
-    cost["total"] = round(sum(cost.values()), 2)
 
     model, _ = _video_model_spec(video_model)
     per_call = int(getattr(model, "typical_generation_seconds", 90) or 90)
@@ -400,6 +423,8 @@ def setup_blueprint(
         "turns": clip_parts(shot_secs, single),
         "shots_per_take": takes,
         "resolution": caps.resolution,
+        # Seconds of video made (and billed); a one-take film trims some.
+        "video_seconds": sum(sum(parts) for parts in takes_parts),
         "cost": cost,
         "time_seconds": int(est_time),
     }
