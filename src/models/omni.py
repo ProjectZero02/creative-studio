@@ -15,6 +15,7 @@
 """Service wrapper for interacting with EAP Gemini Omni Flash model."""
 
 import base64
+import json
 import time
 import uuid
 
@@ -240,7 +241,11 @@ def input_media_units(input_parts: list, request: OmniVideoGenerationRequest) ->
     the API reports no token usage. Each input video (edit, extend, upscale,
     or an earlier clip of a chat) is counted as `duration_seconds` long:
     edit and upscale keep the input's length, and earlier clips were made at
-    the thread's length."""
+    the thread's length.
+
+    A follow-up turn sends only previous_interaction_id, not the earlier
+    clips, but the API still reads them from the stored thread, so they are
+    counted from chat_history_json."""
     images = videos = 0
     items = []
     for part in input_parts:
@@ -248,6 +253,15 @@ def input_media_units(input_parts: list, request: OmniVideoGenerationRequest) ->
             continue
         content = part.get("content")
         items.extend(content if isinstance(content, list) else [part])
+    if request.previous_interaction_id and request.chat_history_json:
+        try:
+            history = json.loads(request.chat_history_json)
+        except (TypeError, ValueError):
+            history = []
+        for turn in history if isinstance(history, list) else []:
+            if isinstance(turn, dict) and turn.get("type") == "model_output":
+                content = turn.get("content")
+                items.extend(content if isinstance(content, list) else [])
     for item in items:
         if not isinstance(item, dict):
             continue
