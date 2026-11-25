@@ -26,7 +26,7 @@ from common.analytics import log_ui_click, track_click
 from common.auto_enhance import enhance_on_send, setting_on, wanted
 from common.error_handling import AsyncVeoPollingFailedError, GenerationError
 from common import prompt_settings
-from common.i18n import t, tr
+from common.i18n import t, tr, tx
 from common.metadata import (
     MediaItem,
     add_media_item_to_firestore,
@@ -43,7 +43,7 @@ from common.mock_generation import fake_wait, mock_enabled, sample_video
 from common.prompt_prefill import prefill_prompt, take_autostart
 from common.studio_history import has_cached_owner_rows, hydrate_studio_history
 from common.prompt_settings import SettingLimits
-from components.composer.chip_menu import change_value, chip_menu, chip_options
+from components.studio_chips import change_value, chip_menu, chip_options
 from components.composer.composer import composer
 from components.dialog import dialog, dialog_actions
 from components.gcs_uploader.gcs_uploader import gcs_uploader
@@ -296,7 +296,9 @@ def veo_content(app_state: me.state):
             me.text(f"Prompt: {state.veo_prompt_input}")
             me.text(f"Negative Prompt: {state.negative_prompt}")
             me.text(f"Model: {model_display_name(state.veo_model)}")
-            me.text(f"Mode: {STUDIO_MODE_LABELS.get(state.veo_mode, state.veo_mode)}")
+            me.text(
+                f"Mode: {tx(STUDIO_MODE_LABELS.get(state.veo_mode, state.veo_mode))}"
+            )
             me.text(f"Duration: {state.video_length}s")
 
             # Mode-specific settings display
@@ -514,7 +516,7 @@ def _render_video_input():
                     gcs_uri=state.video_upload_gcs_uri,
                     accepted_file_types=["video/mp4"],
                     disabled=state.is_loading,
-                    label="Upload video",
+                    label=tx("Upload video"),
                     on_request_signed_url=on_request_signed_url_video,
                     on_upload_complete=on_upload_complete_video,
                     on_upload_progress=on_upload_progress_video,

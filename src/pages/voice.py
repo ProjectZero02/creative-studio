@@ -28,12 +28,12 @@ import mesop as me
 
 from common import storage
 from common.analytics import get_logger
+from common.i18n import current_lang, tx
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.mock_generation import fake_wait, mock_enabled, sample_audio
 from common.prompt_prefill import prefill_prompt, take_autostart
 from common.studio_history import has_cached_owner_rows, hydrate_studio_history
 from common.utils import create_display_url
-from components.composer.chip_menu import change_value, chip_menu, chip_options
 from components.composer.composer import composer
 from components.dialog import dialog, dialog_actions
 from components.generation_progress.generation_progress import (
@@ -53,21 +53,27 @@ from components.result_grid.result_card import (
     result_card,
     result_grid,
 )
+from components.studio_chips import change_value, chip_menu, chip_options
 from config.rewriters import SPEECH_REWRITER
 from config.voice import (
     DEFAULT_DIALOGUE,
+    DEFAULT_DIALOGUE_AR,
     DEFAULT_LANGUAGE,
     DEFAULT_SCRIPT,
+    DEFAULT_SCRIPT_AR,
     ENCODINGS,
     PACES,
+    SAMPLE_SCRIPTS,
     STYLES,
     VOICES,
+    default_language,
     engine_label,
     engine_options,
     engine_supports_dialogue,
     is_chirp,
     is_known_engine,
     languages_for,
+    sample_script,
 )
 from models.gemini import rewriter
 from models.voice import VoiceRequest, describe, synthesize_voice, validate
@@ -88,10 +94,10 @@ def on_voice_load(e: me.LoadEvent):  # pylint: disable=unused-argument
     engine = me.query_params.get("engine", "")
     if engine and is_known_engine(engine):
         _set_engine(state, engine)
+    _localize_language(state)
+    _localize_sample(state)
     # The sample scripts count as empty; the user's own script never does.
-    filled = prefill_prompt(
-        state, "text", empty_values=(DEFAULT_SCRIPT, DEFAULT_DIALOGUE)
-    )
+    filled = prefill_prompt(state, "text", empty_values=SAMPLE_SCRIPTS)
     if filled:
         state.text_key += 1  # redraw the script box with the idea
     owner = getattr(me.state(AppState), "user_email", "")
@@ -259,7 +265,8 @@ def _voice_chips(state: VoiceState, chirp: bool, dialogue: bool):
         icon="language",
         value=state.language,
         options=chip_options(
-            (code, label) for label, code in sorted(languages.items())
+            (code, label)
+            for label, code in sorted(languages.items(), key=lambda kv: tx(kv[0]))
         ),
         on_change=on_chip_language,
     )
@@ -436,11 +443,27 @@ def _pronunciation_panel(state: VoiceState):
 # --- engine and chips -------------------------------------------------------
 
 
+def _localize_language(state: VoiceState) -> None:
+    """Until the user picks a language, speak the site language."""
+    if not state.language_picked:
+        state.language = default_language(state.engine, current_lang())
+
+
+def _localize_sample(state: VoiceState) -> None:
+    """Show the sample script in the site language (never the user's own)."""
+    if state.text.strip() not in SAMPLE_SCRIPTS:
+        return
+    want = sample_script(current_lang(), state.multi_speaker)
+    if state.text != want:
+        state.text = want
+        state.text_key += 1
+
+
 def _set_engine(state: VoiceState, engine: str):
     """Switch engine and keep the language valid for it."""
     state.engine = engine
     if state.language not in languages_for(engine).values():
-        state.language = DEFAULT_LANGUAGE
+        state.language = default_language(engine, current_lang())
     if not engine_supports_dialogue(engine):
         state.multi_speaker = False
     if not is_chirp(engine):
@@ -469,7 +492,9 @@ def on_chip_voice_b(e: me.WebEvent):
 
 def on_chip_language(e: me.WebEvent):
     """Language chip."""
-    me.state(VoiceState).language = change_value(e) or DEFAULT_LANGUAGE
+    state = me.state(VoiceState)
+    state.language = change_value(e) or DEFAULT_LANGUAGE
+    state.language_picked = True
     yield
 
 
@@ -489,11 +514,19 @@ def on_chip_dialogue(e: me.WebEvent):
     """Dialogue toggle. Swaps in a sample dialogue if the script is the default."""
     state = me.state(VoiceState)
     state.multi_speaker = change_value(e) == "true"
-    if state.multi_speaker and state.text.strip() in ("", DEFAULT_SCRIPT):
-        state.text = DEFAULT_DIALOGUE
+    lang = current_lang()
+    if state.multi_speaker and state.text.strip() in (
+        "",
+        DEFAULT_SCRIPT,
+        DEFAULT_SCRIPT_AR,
+    ):
+        state.text = sample_script(lang, dialogue=True)
         state.text_key += 1
-    elif not state.multi_speaker and state.text.strip() == DEFAULT_DIALOGUE:
-        state.text = DEFAULT_SCRIPT
+    elif not state.multi_speaker and state.text.strip() in (
+        DEFAULT_DIALOGUE,
+        DEFAULT_DIALOGUE_AR,
+    ):
+        state.text = sample_script(lang, dialogue=False)
         state.text_key += 1
     yield
 

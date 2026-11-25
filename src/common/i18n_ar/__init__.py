@@ -34,8 +34,11 @@ GROUPS = (shell, studios, film, workflows, live)
 
 def merged_text() -> dict[str, str]:
     out: dict[str, str] = {}
+    # The first group to define a string wins, so the shared wording in
+    # shell.py and studios.py stays the same on every page.
     for mod in GROUPS:
-        out.update(mod.AR_TEXT)
+        for english, arabic in mod.AR_TEXT.items():
+            out.setdefault(english, arabic)
     return out
 
 
