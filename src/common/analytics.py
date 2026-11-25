@@ -169,7 +169,7 @@ def log_page_view(page_name: str, session_id: str = None):
         "session_id": session_id,
         "user_email": user_email,
     }
-    analytics_logger.info(f"Page view: {page_name}", extra={"extra_data": extra_data})
+    analytics_logger.info(f"Page view: {page_name}", extra={"extra_data": extra_data, "json_fields": extra_data})
 
 
 def log_ui_click(
@@ -192,7 +192,7 @@ def log_ui_click(
     if extras:
         extra_data.update(extras)
     analytics_logger.info(
-        f"UI Click: {element_id} on {page_name}", extra={"extra_data": extra_data},
+        f"UI Click: {element_id} on {page_name}", extra={"extra_data": extra_data, "json_fields": extra_data},
     )
 
 
@@ -254,7 +254,7 @@ def log_model_call(
         extra_data["event_id"] = event_id
 
     analytics_logger.info(
-        f"Model Call: {model_name} ({status})", extra={"extra_data": extra_data},
+        f"Model Call: {model_name} ({status})", extra={"extra_data": extra_data, "json_fields": extra_data},
     )
     if not count_usage:
         return

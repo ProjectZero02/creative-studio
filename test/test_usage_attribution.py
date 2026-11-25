@@ -83,3 +83,28 @@ def test_acting_for_restores_the_outer_context():
         "",
         "",
     )
+
+
+def test_model_call_log_is_structured_on_cloud_run(monkeypatch):
+    """Cloud Run's handler only puts json_fields into jsonPayload."""
+    import io
+    import json
+    import logging
+
+    from google.cloud.logging_v2.handlers import StructuredLogHandler
+
+    stream = io.StringIO()
+    handler = StructuredLogHandler(stream=stream, project_id="p")
+    analytics.analytics_logger.addHandler(handler)
+    monkeypatch.setattr(usage, "record", lambda *a, **k: None)
+    try:
+        with usage.acting_for("a@x", page="veo"):
+            analytics.log_model_call(
+                "lyria-002", "success", billing_units={"sample_count": 1}, event_id="e9"
+            )
+    finally:
+        analytics.analytics_logger.removeHandler(handler)
+    line = json.loads(stream.getvalue().strip().splitlines()[-1])
+    assert line["event_type"] == "model_call" and line["event_id"] == "e9"
+    assert line["user_email"] == "a@x" and line["billing_units"] == {"sample_count": 1}
+    assert logging.getLevelName(line["severity"]) == logging.INFO
