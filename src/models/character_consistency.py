@@ -378,31 +378,44 @@ def _generate_video_from_image(
 
     input_image = genai.types.Image(image_bytes=image_bytes, mime_type="image/png")
 
-    operation = veo_client.models.generate_videos(
-        model=cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
-        prompt=video_prompt,
-        config=genai.types.GenerateVideosConfig(
-            duration_seconds=8,
-            aspect_ratio=aspect_ratio,
-            number_of_videos=1,
-            enhance_prompt=True,
-            person_generation="allow_adult",
-        ),
-        image=input_image,
-    )
+    # Veo 3.x makes audio by default; 8 s, one video, 720p.
+    billing_units = {
+        "video_seconds_generated": 8,
+        "sample_count": 1,
+        "duration_seconds": 8,
+        "resolution": "720p",
+        "aspect_ratio": aspect_ratio,
+        "generate_audio": True,
+    }
+    with track_model_call(
+        cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
+        billing_units=billing_units,
+        task="character_consistency_video",
+    ) as ctx:
+        operation = veo_client.models.generate_videos(
+            model=cfg.CHARACTER_CONSISTENCY_VEO_MODEL,
+            prompt=video_prompt,
+            config=genai.types.GenerateVideosConfig(
+                duration_seconds=8,
+                aspect_ratio=aspect_ratio,
+                number_of_videos=1,
+                enhance_prompt=True,
+                person_generation="allow_adult",
+            ),
+            image=input_image,
+        )
 
-    # This is a long running operation, we should not block here in a real app
-    # For this example, we will wait for it to complete
-    import time
+        while not operation.done:
+            time.sleep(10)
+            operation = veo_client.operations.get(operation)
 
-    while not operation.done:
-        time.sleep(10)
-        operation = veo_client.operations.get(operation)
+        if operation.error:
+            raise Exception(f"Error generating video: {operation.error}")
 
-    if operation.error:
-        raise Exception(f"Error generating video: {operation.error}")
-
-    return operation.response.generated_videos[0].video.video_bytes, video_prompt
+        videos = operation.response.generated_videos or []
+        ctx["billing_units"]["videos_generated"] = len(videos)
+        ctx["output_received"] = bool(videos)
+        return videos[0].video.video_bytes, video_prompt
 
 def _reframe_image_to_16_9(
     image_gcs_uri: str,

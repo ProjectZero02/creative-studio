@@ -104,17 +104,23 @@ def write_in(lang: str | None) -> str:
 @functools.lru_cache(maxsize=256)
 def _translate(text: str) -> str:
     from config.default import Default  # pylint: disable=import-outside-toplevel
+    from common.analytics import (  # pylint: disable=import-outside-toplevel
+        extract_usage_metadata,
+        track_model_call,
+    )
     from models.gemini import client  # pylint: disable=import-outside-toplevel
 
-    response = client.models.generate_content(
-        model=Default.MODEL_ID,
-        contents=(
-            "Translate this prompt for a media generation model into natural "
-            "English. Keep names, brand names, numbers and any text that must "
-            "appear on screen exactly as written (in quotes, in its own "
-            "language). Reply with the translation only.\n\n" + text
-        ),
-    )
+    with track_model_call(Default.MODEL_ID, task="translate") as ctx:
+        response = client.models.generate_content(
+            model=Default.MODEL_ID,
+            contents=(
+                "Translate this prompt for a media generation model into natural "
+                "English. Keep names, brand names, numbers and any text that must "
+                "appear on screen exactly as written (in quotes, in its own "
+                "language). Reply with the translation only.\n\n" + text
+            ),
+        )
+        ctx["billing_units"].update(extract_usage_metadata(response))
     return (response.text or "").strip()
 
 
