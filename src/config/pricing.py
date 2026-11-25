@@ -509,6 +509,87 @@ def clear_price_cache() -> None:
     with _lock:
         _catalogs.clear()
         _failed_at.clear()
+        _drift.clear()
+
+
+# service -> issues found when its catalog last loaded
+_drift: dict[str, list[dict]] = {}
+DRIFT_TOLERANCE = 0.01  # a book price more than 1% off the catalog is flagged
+
+
+def price_drift() -> list[dict]:
+    """Book SKUs the last catalog load disagreed with: {"sku", "service",
+    "issue": "missing" | "price", "book", "catalog"} (USD per unit; per
+    million for token rates). For the admin Usage page."""
+    with _lock:
+        return [issue for issues in _drift.values() for issue in issues]
+
+
+def _book_entries(service: str) -> list[tuple[list[str], float, float, str]]:
+    """(candidate descriptions, book price, scale, book label) for every book SKU of a
+    service. Token rates are per million tokens (scale 1e6)."""
+    out = []
+    now = datetime.datetime.now(datetime.UTC).date().isoformat()
+    for spec in TOKEN_MODELS.values():
+        if spec.service != service:
+            continue
+        promo_rates = spec.promo[1] if spec.promo and now < spec.promo[0] else {}
+        for rate in _TOKEN_RATE_FORMS:
+            book = getattr(spec, rate)
+            if book is None or rate in promo_rates:
+                continue
+            if rate in spec.skus:
+                out.append(([spec.skus[rate]], book, 1e6, spec.skus[rate]))
+            elif spec.sku:
+                candidates = _token_sku_candidates(spec.sku, *_TOKEN_RATE_FORMS[rate])
+                out.append((candidates, book, 1e6, _book_label(spec, rate)))
+    prices = [p for p, _ in UNIT_MODELS.values()]
+    prices += [p for table in VEO_PER_SECOND.values() for p in table.values()]
+    prices.append(GROUNDING_PER_QUERY)
+    for price in prices:
+        if price.sku and price.service == service:
+            out.append(([price.sku], price.usd, 1.0, price.sku))
+    return out
+
+
+def check_book(service: str, index: dict[str, dict[str, dict]]) -> list[dict]:
+    """Compare the book with a freshly read catalog: SKUs it does not have,
+    and prices more than DRIFT_TOLERANCE off (global, else any region)."""
+    issues: dict[str, dict] = {}
+    for candidates, book, scale, book_label in _book_entries(service):
+        label = book_label
+        sku = None
+        for description in candidates:
+            by_region = index.get(_normalise(description))
+            if by_region:
+                sku = _pick_region(by_region, "")
+                label = str(sku.get("description") or description)
+                break
+        if sku is None:
+            issues.setdefault(
+                _normalise(book_label),
+                {
+                    "sku": book_label,
+                    "service": service,
+                    "issue": "missing",
+                    "book": book,
+                    "catalog": None,
+                },
+            )
+            continue
+        found = sku_price(sku)
+        if found is None:
+            continue
+        catalog = found[0] * scale
+        if book and abs(catalog - book) / book > DRIFT_TOLERANCE:
+            issues[_normalise(label)] = {
+                "sku": label,
+                "service": service,
+                "issue": "price",
+                "book": book,
+                "catalog": catalog,
+            }
+    return list(issues.values())
 
 
 def _normalise(value: str) -> str:
@@ -549,6 +630,15 @@ def _catalog(service: str, fetch: bool) -> dict[str, dict] | None:
     with _lock:
         _catalogs[service] = (now, index)
         _failed_at.pop(service, None)
+    try:
+        issues = check_book(service, index)
+    except Exception:
+        logger.warning("Could not compare the price book", exc_info=True)
+        issues = []
+    with _lock:
+        _drift[service] = issues
+    for issue in issues:
+        logger.warning("Price book vs catalog: %s", issue)
     return index
 
 
