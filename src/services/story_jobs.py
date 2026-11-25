@@ -2292,10 +2292,20 @@ def attach_set(
     return mutate_story(story_id, owner, apply)
 
 
-def _set_work(story_set: StorySet, targets: list | None) -> list[tuple]:
+def needs_voices(story: Story | None) -> bool:
+    """False for a film nobody speaks in (Speech: None and no spoken scene):
+    its set build makes no voice samples."""
+    if story is None:
+        return True
+    return story.speech_mode != "none" or story.has_spoken
+
+
+def _set_work(
+    story_set: StorySet, targets: list | None, voices: bool = True
+) -> list[tuple]:
     """(kind, asset id, view) pieces to make: the given targets, else every
-    empty slot of the views frames use (story_sets.BUILD_VIEWS) and missing
-    voice sample. Locked images never."""
+    empty slot of the views frames use (story_sets.BUILD_VIEWS) and, when
+    `voices`, every missing voice sample. Locked images never."""
     wanted = {tuple(t) for t in targets} if targets else None
     out: list[tuple] = []
     for kind in KINDS:
@@ -2310,7 +2320,7 @@ def _set_work(story_set: StorySet, targets: list | None) -> list[tuple]:
                     out.append(key)
             if kind == "character":
                 key = (kind, asset.id, "voice")
-                if (wanted is None and not asset.voice.sample_uri) or (
+                if (wanted is None and voices and not asset.voice.sample_uri) or (
                     wanted and key in wanted
                 ):
                     out.append(key)
@@ -2424,7 +2434,9 @@ def start_set(
         story_set = get_set_store().get(set_id, owner)
         if story_set is None:
             raise StoryAccessError("Set not found.")
-        pieces = _set_work(story_set, targets)
+        pieces = _set_work(
+            story_set, targets, voices=needs_voices(get_store().get(story_id, owner))
+        )
         tasks: dict[tuple, Task] = {}
         for kind, aid, view in pieces:
             asset = story_set.asset(kind, aid)

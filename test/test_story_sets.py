@@ -1315,3 +1315,33 @@ def test_a_responsible_ai_refusal_twice_says_what_to_do(monkeypatch, set_store):
         backend.generate_clip(story, 0, story.scenes[0].frame_uri)
     assert str(err.value) == story_service.REFUSED_MESSAGE
     assert story_jobs.friendly_error(err.value) == story_service.REFUSED_MESSAGE
+
+
+def test_a_film_with_no_speech_makes_no_voice_samples(mock_backend, stores):
+    story_db, set_db = stores
+    story = _story_with_scenes(
+        story_db,
+        speech_mode="none",
+        voice_on=False,
+        scenes=[Scene(visual="v1"), Scene(visual="v2")],
+    )
+    job = _run(story_jobs.start_set(story.id, OWNER))
+    assert job.status == "done"
+    assert not [t for t in job.tasks if t.label.endswith("voice sample")]
+    made = set_db.get(story_db.get(story.id, OWNER).set_id, OWNER)
+    assert all(not c.voice.sample_uri for c in made.on_screen())
+    # Asking for one by hand still makes it.
+    lead = made.on_screen()[0]
+    again = _run(story_jobs.start_set(story.id, OWNER, [["character", lead.id, "voice"]]))
+    assert [t.label for t in again.tasks] == [f"{lead.name} · voice sample"]
+
+
+def test_a_spoken_film_still_makes_voice_samples(mock_backend, stores):
+    story_db, _ = stores
+    story = _story_with_scenes(story_db)
+    job = _run(story_jobs.start_set(story.id, OWNER))
+    assert any(t.label.endswith("voice sample") for t in job.tasks)
+    assert story_jobs.needs_voices(story)
+    # A scene marked as spoken wins over Speech: None.
+    story.speech_mode = "none"
+    assert story_jobs.needs_voices(story)
