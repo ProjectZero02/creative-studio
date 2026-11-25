@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from typing import Any
 
@@ -197,6 +198,7 @@ def log_model_call(
     pipeline_id: str = None,
     error: dict = None,
     count_usage: bool = True,
+    event_id: str = "",
 ):
     """Logs a generative model call event. `count_usage=False` logs it
     without a usage event (a wrapper whose real model call is logged on
@@ -231,6 +233,8 @@ def log_model_call(
         extra_data["feature"] = feature
     if error:
         extra_data["error"] = error
+    if event_id:
+        extra_data["event_id"] = event_id
 
     analytics_logger.info(
         f"Model Call: {model_name} ({status})", extra={"extra_data": extra_data},
@@ -248,9 +252,10 @@ def log_model_call(
             page_name if page_name != "unknown" else "",
             str((details or {}).get("task") or ""),
             feature=feature,
+            event_id=event_id,
         )
     except Exception:  # usage is best effort
-        pass
+        analytics_logger.warning("usage: could not queue a usage event", exc_info=True)
 
 
 def track_click(element_id: str):
@@ -289,6 +294,7 @@ def track_model_call(
         "billing_units": billing_units or {},
         "details": kwargs,
         "pipeline_id": pipeline_id,
+        "event_id": uuid.uuid4().hex,
     }
     try:
         yield ctx
@@ -301,6 +307,7 @@ def track_model_call(
             billing_units=ctx["billing_units"] if ctx["billing_units"] else None,
             pipeline_id=ctx["pipeline_id"],
             count_usage=count_usage,
+            event_id=ctx["event_id"],
         )
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
@@ -316,5 +323,6 @@ def track_model_call(
             pipeline_id=ctx["pipeline_id"],
             error=err_dict,
             count_usage=count_usage,
+            event_id=ctx["event_id"],
         )
         raise  # Re-raise the exception after logging

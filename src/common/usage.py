@@ -16,8 +16,12 @@
 Every model call is already logged by ``common.analytics.log_model_call``;
 it also calls :func:`record`, which stores one small document per call in
 the Firestore collection ``usage_events`` (owner, model, kind, page, status,
-estimated cost, time). Writing is best effort and happens on a background
-thread, so a slow or failing Firestore never slows a generation.
+estimated cost, time). Calls go on one queue that a single writer thread
+prices and stores, so a slow or failing Firestore never slows a generation.
+A failed write is retried; one that still fails is logged with a count, and
+what is queued at exit (atexit, SIGTERM) is flushed for up to 5 seconds.
+Each event has an ``event_id`` (also its document id, so a retry never
+stores it twice).
 
 Background jobs (Story Studio, Live) run in threads where the page state is
 not available. They wrap their work in :func:`acting_for` so their calls are
@@ -28,12 +32,16 @@ counted for the right person.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import contextvars
 import datetime
 import logging
+import queue
+import signal
 import threading
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import Iterator
 
@@ -43,7 +51,6 @@ logger = logging.getLogger(__name__)
 
 COLLECTION = "usage_events"
 _owner: contextvars.ContextVar[str] = contextvars.ContextVar("usage_owner", default="")
-_pending = threading.Semaphore(32)  # never pile up writer threads
 
 
 def current_owner() -> str:
@@ -69,11 +76,16 @@ def event(
     task: str = "",
     at: float | None = None,
     feature: str = "",
+    event_id: str = "",
+    fetch: bool = True,
 ) -> dict:
     at = at if at is not None else time.time()
     units = units or {}
-    cost, pricing_details = pricing.estimate_details(model, units, status, at=at)
+    cost, pricing_details = pricing.estimate_details(
+        model, units, status, at=at, fetch=fetch
+    )
     return {
+        "event_id": event_id or new_event_id(),
         "owner": owner or "unknown",
         "model": model or "unknown",
         "kind": pricing.kind_of(model, units),
@@ -95,22 +107,123 @@ def _db():
     return db
 
 
-def _write(
-    owner: str,
-    model: str,
-    status: str,
-    units: dict | None,
-    page: str,
-    task: str,
-    feature: str,
-) -> None:
-    try:
-        doc = event(owner, model, status, units, page, task, feature=feature)
-        _db().collection(COLLECTION).add(doc)
-    except Exception:  # best effort: usage must never break a generation
-        logger.debug("usage: could not store an event", exc_info=True)
-    finally:
-        _pending.release()
+# ---------------------------------------------------------------------------
+# Writing: one queue, one writer thread, retries, flush at exit
+# ---------------------------------------------------------------------------
+
+WRITE_ATTEMPTS = 3
+WRITE_BACKOFF_SECONDS = (0.5, 1.0, 2.0)
+FLUSH_SECONDS = 5.0
+
+_queue: queue.Queue[dict] = queue.Queue()
+_writer: threading.Thread | None = None
+_writer_lock = threading.Lock()
+_stats = {"stored": 0, "failed": 0}
+_exiting = threading.Event()  # at exit: price from the book, never the network
+
+
+def new_event_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _store(item: dict) -> None:
+    """Price one queued call and write it, retrying with backoff. A call
+    that still cannot be stored is counted and logged, never dropped
+    silently."""
+    doc = None
+    for attempt in range(WRITE_ATTEMPTS):
+        try:
+            if doc is None:
+                doc = event(**item, fetch=not _exiting.is_set())
+            _db().collection(COLLECTION).document(doc["event_id"]).set(doc)
+            _stats["stored"] += 1
+            return
+        except Exception:
+            if attempt + 1 < WRITE_ATTEMPTS and not _exiting.is_set():
+                time.sleep(WRITE_BACKOFF_SECONDS[attempt])
+            elif attempt + 1 < WRITE_ATTEMPTS:
+                continue  # at exit: retry at once
+            else:
+                _stats["failed"] += 1
+                logger.warning(
+                    "usage: could not store a usage event after %d tries "
+                    "(%d not stored so far): %s %s",
+                    WRITE_ATTEMPTS,
+                    _stats["failed"],
+                    item.get("model"),
+                    item.get("event_id"),
+                    exc_info=True,
+                )
+
+
+def _run_writer() -> None:
+    while True:
+        item = _queue.get()
+        try:
+            _store(item)
+        finally:
+            _queue.task_done()
+
+
+def _ensure_writer() -> None:
+    global _writer
+    if _writer is not None and _writer.is_alive():
+        return
+    with _writer_lock:
+        if _writer is None or not _writer.is_alive():
+            _writer = threading.Thread(
+                target=_run_writer, name="usage-writer", daemon=True
+            )
+            _writer.start()
+
+
+def flush(timeout: float = FLUSH_SECONDS) -> int:
+    """Store what is queued (at exit). Prices from the book, so it never
+    waits on the catalog. Returns how many calls were still queued."""
+    _exiting.set()
+    deadline = time.monotonic() + timeout
+    if _writer is None or not _writer.is_alive():
+        while time.monotonic() < deadline:  # no writer: drain here
+            try:
+                item = _queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                _store(item)
+            finally:
+                _queue.task_done()
+    while _queue.unfinished_tasks and time.monotonic() < deadline:
+        time.sleep(0.02)
+    left = _queue.unfinished_tasks
+    if left:
+        logger.warning("usage: %d usage event(s) not stored at exit", left)
+    return left
+
+
+def _on_sigterm(signum, frame) -> None:
+    flush()
+    previous = _previous_sigterm
+    if callable(previous):
+        previous(signum, frame)
+    elif previous != signal.SIG_IGN:
+        raise SystemExit(128 + signum)
+
+
+_previous_sigterm = None
+
+
+def _install_exit_hooks() -> None:
+    global _previous_sigterm
+    atexit.register(flush)
+    try:  # only the main thread may set signal handlers
+        if threading.current_thread() is threading.main_thread():
+            _previous_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError, AttributeError):
+        pass
+
+
+_install_exit_hooks()
 
 
 def record(
@@ -121,17 +234,25 @@ def record(
     page: str = "",
     task: str = "",
     feature: str = "",
+    event_id: str = "",
 ) -> None:
-    """Store one model call (in the background)."""
+    """Queue one model call; the writer thread prices and stores it."""
     if not owner or owner == "unknown":
         owner = current_owner() or "unknown"
-    if not _pending.acquire(blocking=False):
-        return  # too many writes in flight: drop rather than slow down
-    threading.Thread(
-        target=_write,
-        args=(owner, model, status, units, page, task, feature),
-        daemon=True,
-    ).start()
+    _queue.put(
+        {
+            "owner": owner,
+            "model": model,
+            "status": status,
+            "units": dict(units or {}),
+            "page": page,
+            "task": task,
+            "feature": feature,
+            "at": time.time(),
+            "event_id": event_id or new_event_id(),
+        }
+    )
+    _ensure_writer()
 
 
 def load(owner: str | None, days: int, limit: int = 5000) -> list[dict]:

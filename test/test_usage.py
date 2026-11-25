@@ -162,12 +162,11 @@ def test_background_calls_are_counted_for_the_job_owner(monkeypatch):
     stored = []
     done = threading.Event()
 
-    def fake_write(owner, model, status, units, page, task, feature):
-        stored.append(usage.event(owner, model, status, units, page, task))
-        usage._pending.release()
+    def fake_store(item):
+        stored.append(usage.event(**item))
         done.set()
 
-    monkeypatch.setattr(usage, "_write", fake_write)
+    monkeypatch.setattr(usage, "_store", fake_store)
     with usage.acting_for("owner@x"):
         usage.record("", "veo-3.1", "success", {"video_seconds_generated": 4}, task="story")
     assert done.wait(2)
