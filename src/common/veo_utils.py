@@ -16,6 +16,7 @@
 import logging
 import threading
 
+from common import usage
 from common.analytics import track_model_call
 from config.default import Default
 from config.veo_models import get_veo_model_config
@@ -63,7 +64,7 @@ def start_async_veo_job(
             # This mimics the behavior of FastAPI's BackgroundTasks but works
             # directly within the Mesop process without an HTTP call.
             threading.Thread(
-                target=process_veo_generation_task,
+                target=usage.in_context(process_veo_generation_task),
                 args=(job_id, request, user_email),
                 daemon=True,
             ).start()

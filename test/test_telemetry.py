@@ -235,7 +235,8 @@ def test_gemini_tts_telemetry(mock_tts_client, mock_logger):
     extra = kwargs["extra"]["extra_data"]
 
     assert extra["model_name"] == "gemini-tts"
-    assert extra["billing_units"]["characters_synthesized"] == 11
+    # The style prompt is billed input too: "Hello world" + "Prompt".
+    assert extra["billing_units"]["characters_synthesized"] == 11 + 6
     assert extra["billing_units"]["voice_name"] == "en-US-Standard-A"
     assert extra["billing_units"]["audio_bytes"] == len(b"fake_audio_bytes")
 

@@ -83,6 +83,10 @@ def generate_video(
         "duration_seconds": request.duration_seconds,
         "generate_audio": getattr(request, "generate_audio", False),
     }
+    if request.video_input_gcs:
+        # An extension's duration_seconds is the new part only (the output
+        # is longer; see services/veo_service); only those seconds bill.
+        billing_units["is_extension"] = True
 
     with track_model_call(
         model_config.model_name, billing_units=billing_units, feature=feature
@@ -242,6 +246,12 @@ def generate_video(
                     hasattr(operation.result, "rai_media_filtered_count")
                     and operation.result.rai_media_filtered_count > 0
                 ):
+                    # Bill the videos that did come back (see config.pricing).
+                    returned = len(
+                        getattr(operation.result, "generated_videos", None) or []
+                    )
+                    ctx["billing_units"]["videos_generated"] = returned
+                    ctx["output_received"] = returned > 0
                     filter_reason = operation.result.rai_media_filtered_reasons[0]
                     raise GenerationError(f"Content Filtered: {filter_reason}")
 
