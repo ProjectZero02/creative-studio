@@ -6,6 +6,7 @@ from typing import Callable
 
 import mesop as me
 
+from common.i18n import tx
 from common.utils import create_display_url
 from components.demo_flow.demo_flow import (
     cicon,
@@ -32,7 +33,7 @@ def floor_plan_uploader(
     with me.box(classes="gm-demo-drop"):
         if uri:
             with me.box(classes="gm-demo-img"):
-                me.image(src=create_display_url(uri), alt="Floor plan")
+                me.image(src=create_display_url(uri), alt=tx("Floor plan"))
         else:
             cicon("floorplan", "gm-demo-drop-icon")
             ctext("No floor plan yet", "gm-demo-drop-text")
