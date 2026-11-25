@@ -500,16 +500,16 @@ def _normalise(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
-def _index(skus: list[dict]) -> dict[str, dict]:
-    """Description -> SKU, preferring a global SKU over a regional one."""
-    out: dict[str, dict] = {}
+def _index(skus: list[dict]) -> dict[str, dict[str, dict]]:
+    """Description -> {region: SKU}. A SKU with no region counts as global."""
+    out: dict[str, dict[str, dict]] = {}
     for sku in skus:
         key = _normalise(sku.get("description", ""))
         if not key:
             continue
-        regions = sku.get("serviceRegions") or []
-        if key not in out or "global" in regions:
-            out[key] = sku
+        regions = [str(r).lower() for r in (sku.get("serviceRegions") or [])]
+        for region in regions or ["global"]:
+            out.setdefault(key, {}).setdefault(region, sku)
     return out
 
 
@@ -540,7 +540,11 @@ def _catalog(service: str, fetch: bool) -> dict[str, dict] | None:
 def _get_catalog_skus(service: str = VERTEX_SERVICE) -> list[dict]:
     """All SKUs of a billing service (cached as an index)."""
     index = _catalog(service, fetch=True) or {}
-    return list(index.values())
+    unique = {}
+    for by_region in index.values():
+        for sku in by_region.values():
+            unique[id(sku)] = sku
+    return list(unique.values())
 
 
 def _fetch_catalog_skus(service: str = VERTEX_SERVICE) -> list[dict]:
@@ -609,16 +613,38 @@ def sku_price(sku: dict) -> tuple[float, str] | None:
     return amount / conversion, str(pricing_info[-1].get("effectiveTime", ""))
 
 
+def _pick_region(by_region: dict[str, dict], location: str) -> dict | None:
+    """The SKU for the call's location, else the global one. With no
+    location known, any region's SKU (they carry the same list price)."""
+    location = (location or "").strip().lower()
+    if location and location in by_region:
+        return by_region[location]
+    if "global" in by_region:
+        return by_region["global"]
+    if not location and by_region:
+        return next(iter(by_region.values()))
+    return None
+
+
 def _catalog_price(
-    description: str, service: str, fetch: bool
-) -> tuple[float, str] | None:
+    description: str, service: str, fetch: bool, location: str = ""
+) -> tuple[float, str, str] | None:
+    """(USD per base unit, effective time, catalog description) of the SKU
+    for `location`; None when the catalog has none (the book price is
+    used)."""
     if not description:
         return None
     index = _catalog(service, fetch)
     if not index:
         return None
-    sku = index.get(_normalise(description))
-    return sku_price(sku) if sku else None
+    by_region = index.get(_normalise(description))
+    sku = _pick_region(by_region, location) if by_region else None
+    if not sku:
+        return None
+    found = sku_price(sku)
+    if found is None:
+        return None
+    return found[0], found[1], str(sku.get("description") or description)
 
 
 def _token_sku_candidates(
@@ -654,10 +680,30 @@ _TOKEN_RATE_FORMS = {
 
 @dataclass
 class _Quote:
-    """Rates used for one estimate, and whether any came from the catalog."""
+    """Rates used for one estimate, whether any came from the catalog, and
+    the cost under each SKU (catalog description when matched)."""
 
     dynamic: bool = False
     effective_time: str = ""
+    location: str = ""
+    labels: dict = field(default_factory=dict)  # rate name -> SKU description
+    by_sku: dict = field(default_factory=dict)  # SKU description -> USD
+
+    def add(self, label: str, usd: float) -> None:
+        if usd:
+            self.by_sku[label] = self.by_sku.get(label, 0.0) + usd
+
+
+def _book_label(model: TokenModel, rate: str) -> str:
+    """The SKU description a token rate is billed under, from the book."""
+    if rate in model.skus:
+        return model.skus[rate]
+    if not model.sku:
+        return ""
+    modality, direction, long = _TOKEN_RATE_FORMS[rate]
+    return f"{model.sku} {modality.title()} {direction.title()}" + (
+        " Long" if long else ""
+    )
 
 
 def _token_rate(
@@ -667,6 +713,7 @@ def _token_rate(
     book = getattr(model, rate)
     if book is None:
         return None
+    quote.labels[rate] = _book_label(model, rate)
     if model.promo:
         until, promo_rates = model.promo
         when = datetime.datetime.fromtimestamp(at or time.time(), datetime.UTC).date()
@@ -678,21 +725,23 @@ def _token_rate(
     elif model.sku:
         descriptions = _token_sku_candidates(model.sku, *_TOKEN_RATE_FORMS[rate])
     for description in descriptions:
-        found = _catalog_price(description, model.service, fetch)
+        found = _catalog_price(description, model.service, fetch, quote.location)
         if found is not None:
             quote.dynamic = True
             quote.effective_time = quote.effective_time or found[1]
+            quote.labels[rate] = found[2]
             return found[0] * 1e6
     return book
 
 
-def _unit_rate(price: Price, fetch: bool, quote: _Quote) -> float:
-    found = _catalog_price(price.sku, price.service, fetch)
+def _unit_rate(price: Price, fetch: bool, quote: _Quote) -> tuple[float, str]:
+    """USD per unit and the SKU description it is billed under."""
+    found = _catalog_price(price.sku, price.service, fetch, quote.location)
     if found is not None:
         quote.dynamic = True
         quote.effective_time = quote.effective_time or found[1]
-        return found[0]
-    return price.usd
+        return found[0], found[2]
+    return price.usd, price.sku
 
 
 def _generic_token_model(key: str, fetch: bool) -> TokenModel | None:
@@ -772,7 +821,7 @@ def cached_unit_rate(model: str, kind: str) -> UnitRate | None:
         return UnitRate(rate, "image", "") if rate is not None else None
     found = UNIT_MODELS.get(model_key(model))
     if found:
-        return UnitRate(_unit_rate(found[0], False, _Quote()), found[1], "")
+        return UnitRate(_unit_rate(found[0], False, _Quote())[0], found[1], "")
     return None
 
 
@@ -793,16 +842,24 @@ def _n(units: dict, *names: str) -> float:
 
 
 def _source(quote: _Quote) -> dict:
+    by_sku = {"cost_by_sku": {k: round(v, 6) for k, v in quote.by_sku.items()}}
     if quote.dynamic:
         return {
             "pricing_status": "dynamic",
             "pricing_source": "cloud_billing_catalog",
             "pricing_effective_time": quote.effective_time,
+            **by_sku,
         }
-    return {"pricing_status": "list", "pricing_source": f"price_book_{PRICE_BOOK_DATE}"}
+    return {
+        "pricing_status": "list",
+        "pricing_source": f"price_book_{PRICE_BOOK_DATE}",
+        **by_sku,
+    }
 
 
-def _veo_estimate(key: str, units: dict, fetch: bool) -> tuple[float, dict]:
+def _veo_estimate(
+    key: str, units: dict, fetch: bool, quote: _Quote
+) -> tuple[float, dict]:
     family = _veo_family(key)
     table = VEO_PER_SECOND[family]
     resolution = _resolution(units.get("resolution"))
@@ -816,8 +873,9 @@ def _veo_estimate(key: str, units: dict, fetch: bool) -> tuple[float, dict]:
     made = units.get("videos_generated")
     if made is not None and units.get("duration_seconds"):
         seconds = float(made) * float(units["duration_seconds"])
-    quote = _Quote()
-    rate = _unit_rate(table[(resolution, audio)], fetch, quote)
+    rate, label = _unit_rate(table[(resolution, audio)], fetch, quote)
+    label = label or f"{key} {resolution}{' audio' if audio else ''} video (list)"
+    quote.add(label, seconds * rate)
     return seconds * rate, {
         **_source(quote),
         "pricing_unit": "s",
@@ -826,7 +884,9 @@ def _veo_estimate(key: str, units: dict, fetch: bool) -> tuple[float, dict]:
     }
 
 
-def _unit_estimate(key: str, units: dict, fetch: bool) -> tuple[float, dict] | None:
+def _unit_estimate(
+    key: str, units: dict, fetch: bool, quote: _Quote
+) -> tuple[float, dict] | None:
     found = UNIT_MODELS.get(key)
     if not found:
         return None
@@ -837,8 +897,8 @@ def _unit_estimate(key: str, units: dict, fetch: bool) -> tuple[float, dict] | N
         quantity = _n(units, "images_generated", "sample_count", "num_images")
     else:
         quantity = _n(units, "sample_count") or 1.0
-    quote = _Quote()
-    rate = _unit_rate(price, fetch, quote)
+    rate, label = _unit_rate(price, fetch, quote)
+    quote.add(label or f"{key} (list)", quantity * rate)
     return quantity * rate, {
         **_source(quote),
         "pricing_unit": unit,
@@ -848,9 +908,13 @@ def _unit_estimate(key: str, units: dict, fetch: bool) -> tuple[float, dict] | N
 
 
 def _token_estimate(
-    model: str, spec: TokenModel, units: dict, fetch: bool, at: float | None
+    model: str,
+    spec: TokenModel,
+    units: dict,
+    fetch: bool,
+    at: float | None,
+    quote: _Quote,
 ) -> tuple[float, dict]:
-    quote = _Quote()
     kind = kind_of(model, units)
     measured = True
 
@@ -910,15 +974,26 @@ def _token_estimate(
     r_video_out = _token_rate(spec, "video_output", fetch, quote, at) or 0.0
 
     plain_in = max(0.0, prompt - cached - audio_in)
-    cost = (
-        plain_in * r_in
-        + cached * r_in * CACHED_INPUT_SHARE
-        + audio_in * r_audio_in
-        + text_out * r_out
-        + image_out * r_image_out
-        + video_out * r_video_out
-        + audio_out * r_audio_out
-    ) / 1e6
+    key = model_key(model)
+
+    def label(rate: str, fallback: str = "") -> str:
+        if getattr(spec, rate, None) is None and fallback:
+            rate = fallback
+        return quote.labels.get(rate) or f"{key} {rate.replace('_', ' ')} (list)"
+
+    in_rate = "long_input" if long else "input"
+    out_rate = "long_output" if long else "output"
+    parts = [
+        (label(in_rate), plain_in * r_in + cached * r_in * CACHED_INPUT_SHARE),
+        (label("audio_input", in_rate), audio_in * r_audio_in),
+        (label(out_rate), text_out * r_out),
+        (label("image_output"), image_out * r_image_out),
+        (label("video_output"), video_out * r_video_out),
+        (label("audio_output"), audio_out * r_audio_out),
+    ]
+    for sku, amount in parts:
+        quote.add(sku, amount / 1e6)
+    cost = sum(amount for _, amount in parts) / 1e6
     details = {
         **_source(quote),
         "pricing_basis": "reported tokens" if measured else "estimated tokens",
@@ -943,22 +1018,26 @@ def estimate_details(
     *,
     fetch: bool = True,
     at: float | None = None,
+    location: str = "",
 ) -> tuple[float | None, dict]:
     """The cost of one call and how it was priced. `fetch=False` never reads
-    the catalog (list prices unless it is already cached)."""
+    the catalog (list prices unless it is already cached). `location` picks
+    the regional SKU (else global, else the book price). The details carry
+    ``cost_by_sku``: USD under each SKU description used."""
     if status not in BILLED_STATUSES:
-        return 0.0, {"pricing_status": "not_applicable"}
+        return 0.0, {"pricing_status": "not_applicable", "cost_by_sku": {}}
     units = units or {}
     key = model_key(model)
+    quote = _Quote(location=location)
     if key.startswith("veo"):
-        return _veo_estimate(key, units, fetch)
-    unit_priced = _unit_estimate(key, units, fetch)
+        return _veo_estimate(key, units, fetch, quote)
+    unit_priced = _unit_estimate(key, units, fetch, quote)
     if unit_priced is not None:
         return unit_priced
     spec = token_model_for(model, fetch)
     if spec is not None:
-        return _token_estimate(model, spec, units, fetch, at)
-    return None, {"pricing_status": "unavailable"}
+        return _token_estimate(model, spec, units, fetch, at, quote)
+    return None, {"pricing_status": "unavailable", "cost_by_sku": {}}
 
 
 def estimate(
