@@ -60,6 +60,7 @@ from services.story_models import (
     apply_caps,
     clip_parts,
     record_turns,
+    turns_key,
     clip_prompt,
     clip_refs,
     frame_refs,
@@ -2354,6 +2355,37 @@ class VertexStoryBackend:
             prompt_kw["bridge_to_next"] = True
         prompt_kw["ends_film"] = ends_film(story, index, last_part=len(parts) == 1)
         prompt = clip_prompt(story, scene, **prompt_kw)
+        key = turns_key(engine, start_frame_uri, end_frame_uri, parts, part_lines, prompt)
+        kept = scene.saved_turns(key)[: len(parts) - 1] if len(parts) > 1 else []
+        if kept:
+            # A try before failed after these turns: go on from the last one.
+            logger.info(
+                "Scene %s: continuing from %d turn(s) kept from the last try",
+                index + 1,
+                len(kept),
+            )
+            prompts = [t.get("prompt", "") for t in kept]
+            ids = [t["interaction_id"] for t in kept]
+            uris = [t["uri"] for t in kept]
+            last = kept[-1]
+            uri, interaction_id = self._lengthen_or_keep(
+                scene,
+                key,
+                story,
+                index,
+                last.get("prompt", ""),
+                last["uri"],
+                last["interaction_id"],
+                parts[len(kept) :],
+                story_set,
+                part_lines=part_lines,
+                model_id=engine,
+                turns=(prompts, ids, uris),
+                prior=kept[:-1],
+            )
+            return self._finish_clip(
+                scene, parts, part_lines, prompts, ids, uris, uri, interaction_id, engine
+            )
         try:
             uri, interaction_id = generate_omni_video(
                 self._omni_request(
@@ -2380,7 +2412,9 @@ class VertexStoryBackend:
             raise GenerationError("Gemini Omni returned no video for this scene.")
         prompts, ids, uris = [prompt], [interaction_id], [uri]
         if len(parts) > 1:
-            uri, interaction_id = self._lengthen(
+            uri, interaction_id = self._lengthen_or_keep(
+                scene,
+                key,
                 story,
                 index,
                 prompt,
@@ -2392,10 +2426,34 @@ class VertexStoryBackend:
                 model_id=engine,
                 turns=(prompts, ids, uris),
             )
+        return self._finish_clip(
+            scene, parts, part_lines, prompts, ids, uris, uri, interaction_id, engine
+        )
+
+    def _finish_clip(
+        self, scene, parts, part_lines, prompts, ids, uris, uri, interaction_id, engine
+    ) -> str:
         scene.turns_json = record_turns(parts, part_lines, prompts, ids, uris)
+        scene.partial_turns_json = ""
         scene.video_model_used = engine
         self._interactions[uri] = interaction_id
         return uri
+
+    def _lengthen_or_keep(self, scene: Scene, key: str, *args, **kwargs) -> tuple[str, str]:
+        """`_lengthen`, keeping the turns that worked on the scene
+        (Scene.partial_turns_json) when a later turn fails, so a retry goes
+        on from them instead of making them again."""
+        prompts, ids, uris = kwargs["turns"]
+        try:
+            return self._lengthen(*args, **kwargs)
+        except Exception:
+            done = [
+                {"prompt": p, "interaction_id": i, "uri": u}
+                for p, i, u in zip(prompts, ids, uris, strict=False)
+                if i and u
+            ]
+            scene.partial_turns_json = json.dumps({"key": key, "turns": done})
+            raise
 
     def _clip_from_set(
         self,

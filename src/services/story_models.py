@@ -443,6 +443,23 @@ def _json_list(text: str) -> list:
     return data if isinstance(data, list) else []
 
 
+def turns_key(
+    engine: str,
+    start_frame: str,
+    end_frame: str,
+    parts: list[int],
+    lines: list[str] | None,
+    prompt: str,
+) -> str:
+    """What a long take's turns are made from. Turns kept from a failed try
+    (Scene.partial_turns_json) are reused only while this is unchanged: a
+    new frame, line, length or prompt makes the take from the start."""
+    import hashlib
+
+    raw = json.dumps([engine, start_frame, end_frame, list(parts), lines or [], prompt])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
 def record_turns(
     parts: list[int],
     lines: list[str] | None = None,
@@ -541,6 +558,30 @@ class Scene:
     # Sound checks of the last render (story_timeline.sound_flags): a turn
     # much louder or quieter than the take, or background noise.
     sound_json: str = ""
+    # Turns of a long take that worked before a later turn failed:
+    # {"key": what they were made from, "turns": [{"prompt",
+    # "interaction_id", "uri"}]}. Retry continues from them instead of
+    # paying for them again (see `saved_turns`).
+    partial_turns_json: str = ""
+
+    def saved_turns(self, key: str) -> list[dict]:
+        """The turns kept from a failed try at this take, when they were made
+        from the same inputs (`key`); else []."""
+        try:
+            data = json.loads(self.partial_turns_json or "{}")
+        except ValueError:
+            return []
+        if not isinstance(data, dict) or not key or data.get("key") != key:
+            return []
+        turns = data.get("turns")
+        if not isinstance(turns, list) or not turns:
+            return []
+        if not all(
+            isinstance(t, dict) and t.get("uri") and t.get("interaction_id")
+            for t in turns
+        ):
+            return []
+        return turns
 
     def clear_clip(self) -> None:
         """Forget the clip and everything made from it (take, Omni thread)."""

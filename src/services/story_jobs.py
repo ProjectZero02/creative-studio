@@ -929,15 +929,31 @@ def start_video(story_id: str, owner: str) -> Job:
             if current is None:
                 raise StoryAccessError("Story not found.")
             end_frame = _bridge_end_frame(current, i)
-            uri = (
-                backend.generate_clip(
-                    current, i, start_frame, end_frame_uri=end_frame
-                )
-                if end_frame
-                else backend.generate_clip(current, i, start_frame)
-            )
-            thread = _interaction_of(backend, uri)
             scene_obj = current.scenes[i]
+            kept_before = scene_obj.partial_turns_json
+            try:
+                uri = (
+                    backend.generate_clip(
+                        current, i, start_frame, end_frame_uri=end_frame
+                    )
+                    if end_frame
+                    else backend.generate_clip(current, i, start_frame)
+                )
+            except Exception:
+                # A long take that failed part way keeps the turns that
+                # worked, so Retry goes on from them (Scene.saved_turns).
+                kept = scene_obj.partial_turns_json
+                if kept != kept_before:
+                    kept_id = scene_obj.id
+
+                    def keep(s: Story, kept_id=kept_id, kept=kept) -> None:
+                        for sc in s.scenes:
+                            if sc.id == kept_id:
+                                sc.partial_turns_json = kept
+
+                    mutate_story(story_id, owner, keep)
+                raise
+            thread = _interaction_of(backend, uri)
             scene_id = scene_obj.id
             model_used = scene_obj.video_model_used or resolve_video_engine(
                 current, scene_obj
@@ -955,6 +971,7 @@ def start_video(story_id: str, owner: str) -> Job:
                         sc.bridged_to = end_frame
                         sc.video_model_used = model_used
                         sc.turns_json = turns_json
+                        sc.partial_turns_json = ""
 
             mutate_story(story_id, owner, apply)
             return uri
