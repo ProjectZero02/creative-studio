@@ -562,11 +562,12 @@ def _blueprint_card(
         with me.box(classes="ss-summary-cta"):
             if story and story.scenes and not busy:
                 _t("Replaces the current shots.", "ss-muted ss-small")
+            text = (s.raw_script if s.input_mode == "script" else s.idea) or ""
             me.button(
-                "Writing…" if busy else "Write breakdown",
+                "Writing…" if busy and s.job_kind == "scenario" else "Write breakdown",
                 type="flat",
                 color="primary",
-                disabled=busy,
+                disabled=busy or len(text.strip()) < 8,
                 on_click=h.on_generate_scenario,
                 key="ss-generate",
             )

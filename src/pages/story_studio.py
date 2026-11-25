@@ -982,7 +982,8 @@ def _setup_handlers() -> setup_view.SetupHandlers:
 
 def create_step(story: Story | None) -> None:
     s = me.state(StoryState)
-    busy = _job_active_for("scenario")
+    # No new breakdown while any step still works on this film.
+    busy = _job_active_for(*desk_view.BUSY_KINDS, "music")
     setup_view.render_setup(
         s,
         story,
@@ -1371,6 +1372,8 @@ def on_generate_scenario(e: me.ClickEvent):
     owner = _owner()
     refs = _refs()
     try:
+        if s.story_id:
+            story_jobs.ensure_free(s.story_id)
         existing = get_store().get(s.story_id, owner) if s.story_id else None
         story = existing or Story()
         if story.idea != idea:
@@ -1588,12 +1591,20 @@ def _scene_id_from_key(key: str) -> str:
     return key.split("-", 1)[1]
 
 
+def _same_value(old, new) -> bool:
+    """True when saving a field would not really change it (a box blurred
+    with no edit, or text that only differs in surrounding whitespace)."""
+    if isinstance(old, str) and isinstance(new, str):
+        return old.strip() == new.strip()
+    return old == new
+
+
 def _update_scene(
     scene_id: str, field: str, value, clear: tuple[str, ...] = ("clip_uri",)
 ) -> None:
     def apply(story: Story) -> None:
         for sc in story.scenes:
-            if sc.id == scene_id and getattr(sc, field) != value:
+            if sc.id == scene_id and not _same_value(getattr(sc, field), value):
                 setattr(sc, field, value)
                 for c in clear:
                     if c == "clip_uri":
@@ -1788,7 +1799,7 @@ def on_scene_narration_alt(e: me.InputBlurEvent):
 
     def apply(story: Story) -> None:
         for sc in story.scenes:
-            if sc.id == scene_id and sc.narration_alt != value:
+            if sc.id == scene_id and not _same_value(sc.narration_alt, value):
                 sc.narration_alt = value
                 story.final_alt_uri = ""
 
@@ -1881,28 +1892,13 @@ def on_rewrite_all(e: me.ClickEvent):
     _watch(job.id)
 
 
-def on_back_create(e: me.ClickEvent):
-    me.state(StoryState).step = "create"
-
-
-def on_approve(e: me.ClickEvent):
-    s = me.state(StoryState)
-
-    def apply(story: Story) -> None:
-        story.approved = True
-        story.step = "set"
-
-    story = _edit(apply)
-    if story is None:
-        return
-    _load_set(story)
-    s.step = "set"
-    s.desk_tab = "set"
 
 
 def on_paint_all_frames(e: me.ClickEvent):
     s = me.state(StoryState)
     s.error = ""
+    if s.set_dirty and _save_draft() is None:
+        return
     story = _story()
     if story is None or not story.scenes:
         return
@@ -2277,28 +2273,6 @@ def on_save_set_as_new(e: me.ClickEvent):
     s.notice = f"Saved as “{made.name}”. This film now uses it."
 
 
-def on_to_storyboard(e: me.ClickEvent):
-    s = me.state(StoryState)
-    if s.set_dirty and _save_draft() is None:
-        return
-
-    def apply(story: Story) -> None:
-        story.approved = True
-        story.step = "storyboard"
-
-    story = _edit(apply)
-    if story is None:
-        return
-    s.step = "storyboard"
-    s.desk_tab = "shots"
-    if any(not sc.frame_uri for sc in story.scenes):
-        try:
-            job = story_jobs.start_storyboard(story.id, _owner())
-        except Exception as exc:
-            s.error = story_jobs.friendly_error(exc)
-            return
-        _watch(job.id)
-
 
 # ---------------------------------------------------------------------------
 # Sets library (on the Stories step)
@@ -2490,29 +2464,7 @@ def _media_box(
                 me.text("No frame yet", style=me.Style(font_size=13))
 
 
-def on_back_scenario(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.step = "scenario"
-    s.desk_tab = "shots"
 
-
-def on_back_set(e: me.ClickEvent):
-    s = me.state(StoryState)
-    s.step = "set"
-    s.desk_tab = "set"
-
-
-def on_to_editor(e: me.ClickEvent):
-    s = me.state(StoryState)
-
-    def apply(story: Story) -> None:
-        story.step = "editor"
-        if not story.music_prompt:
-            story.music_prompt = default_music_prompt(story)
-
-    if _edit(apply):
-        s.step = "editor"
-        s.desk_tab = "shots"
 
 
 def _move(scene_id: str, delta: int) -> None:
@@ -2558,6 +2510,15 @@ def on_scene_duration(e: me.SelectSelectionChangeEvent):
 
 def _set_story_field(field: str, value) -> None:
     def apply(story: Story) -> None:
+        old = getattr(story, field)
+        if field == "music_prompt":
+            # The box shows the default prompt when none is stored, so a blur
+            # that leaves it as shown (or empty) changes nothing.
+            default = default_music_prompt(story)
+            if _same_value(old or default, value or default):
+                return
+        elif _same_value(old, value):
+            return
         setattr(story, field, value)
         if field in (
             "music_on",
@@ -2693,6 +2654,8 @@ def on_voice(e: me.SelectSelectionChangeEvent):
 def on_render(e: me.ClickEvent):
     s = me.state(StoryState)
     s.error = ""
+    if s.set_dirty and _save_draft() is None:
+        return
     story = _story()
     if story is not None and not story.approved:
         _edit(lambda st: setattr(st, "approved", True))

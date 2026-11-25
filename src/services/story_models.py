@@ -2645,7 +2645,8 @@ def reachable_steps(story: Story | None) -> set[str]:
     if started and story.scenes:
         reach.add("set")
         reach.add("storyboard")
-        if all(s.frame_uri for s in story.scenes):
+        # Only the first shot of a take has a frame: the rest continue it.
+        if frames_ready(story):
             reach.add("editor")
             reach.add("music")
             reach.add("video")

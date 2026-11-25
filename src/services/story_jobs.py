@@ -124,6 +124,29 @@ class Job:
 
 _jobs: dict[str, Job] = {}
 _jobs_lock = threading.Lock()
+
+# Jobs that change the script, set, frames, clips or film. Only one runs per
+# story; a second one started from the page is refused (a job may still
+# chain the next one itself, e.g. breakdown → set → frames).
+HEAVY_KINDS = (
+    "scenario",
+    "scene",
+    "set",
+    "storyboard",
+    "clips",
+    "video",
+    "alt_video",
+    "translate",
+    "music",
+)
+# The job whose thread is running (copied into its pool threads).
+_current_job: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "story_current_job", default=""
+)
+
+
+class JobBusyError(Exception):
+    """Another job is still working on this story."""
 _story_locks: dict[str, threading.Lock] = {}
 
 
@@ -176,7 +199,9 @@ def ensure_set(story_id: str, owner: str) -> Story | None:
 
 
 def friendly_error(exc: Exception) -> str:
-    if isinstance(exc, (GenerationError, ScenarioError, StoryAccessError)):
+    if isinstance(
+        exc, (GenerationError, ScenarioError, StoryAccessError, JobBusyError)
+    ):
         return str(exc)
     info = classify_error(exc)
     category = info.get("category", "UNKNOWN")
@@ -200,7 +225,27 @@ def friendly_error(exc: Exception) -> str:
 # ---------------------------------------------------------------------------
 
 
+def running_job(story_id: str) -> Job | None:
+    """The heavy job still working on this story, if any."""
+    with _jobs_lock:
+        for j in _jobs.values():
+            if j.story_id == story_id and j.status == RUNNING and j.kind in HEAVY_KINDS:
+                return j
+    return None
+
+
+def ensure_free(story_id: str) -> None:
+    """Refuse a new heavy job from the page while one runs on this story."""
+    if not _current_job.get() and running_job(story_id) is not None:
+        raise JobBusyError(
+            "Another step is still working on this film. Wait for it to "
+            "finish or cancel it first."
+        )
+
+
 def _new_job(owner: str, story_id: str, kind: str, params: dict | None = None) -> Job:
+    if kind in HEAVY_KINDS:
+        ensure_free(story_id)
     job = Job(
         id=uuid.uuid4().hex[:12],
         owner=owner,
@@ -282,6 +327,7 @@ class _Pool(ThreadPoolExecutor):
 
 def _spawn(job: Job, target: Callable[[Job], None]) -> Job:
     def runner():
+        _current_job.set(job.id)
         try:
             with usage.acting_for(job.owner):
                 target(job)
@@ -802,6 +848,7 @@ def start_translation(story_id: str, owner: str, force: bool = False) -> Job:
 def start_video(story_id: str, owner: str) -> Job:
     """Animate each scene with Gemini Omni, add music and voiceover, stitch,
     save. Back-to-back spoken scenes continue one Omni thread (same voice)."""
+    ensure_free(story_id)
     story = get_store().get(story_id, owner)
     if story is None:
         raise StoryAccessError("Story not found.")
@@ -1982,6 +2029,7 @@ def _fit_voice_lines(story_id: str, owner: str, backend, voice_uris: dict[int, s
                 continue
             scene_id = sc.id
             sc.narration = line
+            sc.narration_alt = ""  # translated from the old, longer line
             uri = backend.generate_voiceover(story, i, line)
             voice_uris[i] = uri
             redone += 1
@@ -1990,6 +2038,7 @@ def _fit_voice_lines(story_id: str, owner: str, backend, voice_uris: dict[int, s
                 for x in s.scenes:
                     if x.id == scene_id:
                         x.narration = line
+                        x.narration_alt = ""
 
             mutate_story(story_id, owner, save)
     logger.info(
@@ -2321,7 +2370,7 @@ def retry(job_id: str, owner: str) -> Job | None:
             job.story_id, owner, failed or list(job.params.get("indices") or [])
         )
     if job.kind == "export":
-        return start_export(job.story_id, owner)
+        return start_export(job.story_id, owner, job.params.get("options"))
     if job.kind == "music":
         return start_music(job.story_id, owner)
     if job.kind == "fix":
