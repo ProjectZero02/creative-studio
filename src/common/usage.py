@@ -361,18 +361,27 @@ def record(
     _ensure_writer()
 
 
-def load(owner: str | None, days: int, limit: int = 5000) -> list[dict]:
+LOAD_PAGE_SIZE = 1000
+
+
+def load(owner: str | None, days: int) -> list[dict]:
     """Events of the last `days` days: one person's, or everyone's (None).
-    One person's are read by owner only (no composite index needed) and
-    filtered by time here."""
+    Reads every event since then by time, a page at a time (a single-field
+    index, no cap), and keeps one person's here."""
     since = time.time() - days * 86400
-    coll = _db().collection(COLLECTION)
+    base = _db().collection(COLLECTION).where("at", ">=", since).order_by("at")
+    rows: list[dict] = []
+    last = None
+    while True:
+        query = base.start_after(last) if last is not None else base
+        page = list(query.limit(LOAD_PAGE_SIZE).stream())
+        rows.extend(d.to_dict() for d in page)
+        if len(page) < LOAD_PAGE_SIZE:
+            break
+        last = page[-1]
     if owner:
-        query = coll.where("owner", "==", owner).limit(limit)
-    else:
-        query = coll.where("at", ">=", since).limit(limit)
-    rows = [d.to_dict() for d in query.stream()]
-    return [r for r in rows if float(r.get("at") or 0) >= since]
+        rows = [r for r in rows if r.get("owner") == owner]
+    return rows
 
 
 def summarize(events: list[dict], days: int, now: float | None = None) -> dict:

@@ -200,41 +200,85 @@ def test_log_model_call_records_usage(monkeypatch):
     assert calls[0][1]["feature"] == "fashion"
 
 
-def test_load_reads_one_person_by_owner_and_filters_by_time(monkeypatch):
-    import time
+class _Doc:
+    def __init__(self, d):
+        self._d = d
 
-    class Doc:
-        def __init__(self, d):
-            self._d = d
+    def to_dict(self):
+        return self._d
 
-        def to_dict(self):
-            return self._d
 
-    class Query:
-        def __init__(self, rows, log):
-            self.rows, self.log = rows, log
+class _Query:
+    """A tiny Firestore query: where at >=, order_by at, start_after, limit."""
 
-        def where(self, *args):
-            self.log.append(args)
-            return self
+    def __init__(self, rows, log, since=None, after=None, n=None):
+        self.rows, self.log = rows, log
+        self.since, self.after, self.n = since, after, n
 
-        def limit(self, n):
-            return self
+    def _with(self, **kw):
+        args = {"since": self.since, "after": self.after, "n": self.n, **kw}
+        return _Query(self.rows, self.log, **args)
 
-        def stream(self):
-            return [Doc(r) for r in self.rows]
+    def where(self, field, op, value):
+        self.log.append(("where", field, op))
+        return self._with(since=value)
 
+    def order_by(self, field):
+        self.log.append(("order_by", field))
+        return self
+
+    def start_after(self, doc):
+        return self._with(after=doc.to_dict()["at"])
+
+    def limit(self, n):
+        return self._with(n=n)
+
+    def stream(self):
+        rows = sorted(
+            (r for r in self.rows if r["at"] >= self.since), key=lambda r: r["at"]
+        )
+        if self.after is not None:
+            rows = [r for r in rows if r["at"] > self.after]
+        self.log.append(("page", len(rows[: self.n])))
+        return [_Doc(r) for r in rows[: self.n]]
+
+
+def _fake_db(monkeypatch, rows):
     log = []
-    now = time.time()
-    rows = [{"owner": "a@x", "at": now}, {"owner": "a@x", "at": now - 40 * 86400}]
 
     class DB:
         def collection(self, name):
             assert name == usage.COLLECTION
-            return Query(rows, log)
+            return _Query(rows, log)
 
     monkeypatch.setattr(usage, "_db", lambda: DB())
-    assert len(usage.load("a@x", 7)) == 1
-    assert log[0] == ("owner", "==", "a@x")
-    usage.load(None, 7)
-    assert log[1][0] == "at"
+    return log
+
+
+def test_load_queries_by_time_and_filters_owner_here(monkeypatch):
+    import time
+
+    now = time.time()
+    rows = [
+        {"owner": "a@x", "at": now},
+        {"owner": "b@x", "at": now - 1},
+        {"owner": "a@x", "at": now - 40 * 86400},
+    ]
+    log = _fake_db(monkeypatch, rows)
+    assert [r["owner"] for r in usage.load("a@x", 7)] == ["a@x"]
+    assert ("where", "at", ">=") in log and ("order_by", "at") in log
+    assert len(usage.load(None, 7)) == 2
+
+
+def test_load_reads_every_page_with_no_cap(monkeypatch):
+    import time
+
+    now = time.time()
+    rows = [{"owner": "a@x", "at": now - i} for i in range(2500)]
+    log = _fake_db(monkeypatch, rows)
+    assert len(usage.load(None, 7)) == 2500
+    assert [n for kind, *rest in log if kind == "page" for n in rest] == [
+        1000,
+        1000,
+        500,
+    ]
