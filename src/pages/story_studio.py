@@ -29,6 +29,7 @@ import mesop as me
 
 from common import brand_kit
 from common.analytics import get_logger
+from common.i18n import current_lang
 from common.notify import notify
 from common.prompt_prefill import (
     is_new_prompt_arrival,
@@ -890,6 +891,8 @@ def _start_new_story() -> None:
     s.style_text = ""
     s.idea = ""
     s.character = ""
+    # A new film is spoken in the site language until the idea says otherwise.
+    s.language = "Arabic" if current_lang() == "ar" else "English"
     s.reference_uri = ""
     s.refs_json = "[]"
     s.ref_menu_open = False
