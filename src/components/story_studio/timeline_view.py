@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import mesop as me
 
-from components.story_studio.widgets import story_ticker, story_timeline
+from components.story_studio.widgets import story_ticker, story_timeline, tx_dots
 from services import story_export as export_mod
 from services import story_jobs, story_subtitles
 from services import story_timeline as timeline_mod
@@ -113,7 +113,9 @@ def render_timeline(
                             style=me.Style(font_size=20, font_weight=600),
                         )
                         me.text(
-                            f"{len(story.scenes)} shots · {STYLE_BY_ID.get(story.style, STYLES[0])['label']} · {story.aspect_ratio}",
+                            tx_dots(
+                                f"{len(story.scenes)} shots · {STYLE_BY_ID.get(story.style, STYLES[0])['label']} · {story.aspect_ratio}"
+                            ),
                             style=me.Style(
                                 font_size=14, color=me.theme_var("on-surface-variant")
                             ),
@@ -284,8 +286,10 @@ def _render_edit_view(
                     style=me.Style(font_size=18, font_weight=600),
                 )
                 me.text(
-                    f"{h.fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}"
-                    + (f" · Set: {used.name}" if used else ""),
+                    tx_dots(
+                        f"{h.fmt_secs(timeline_mod.duration(tl))} · {story.aspect_ratio}"
+                        + (f" · Set: {used.name}" if used else "")
+                    ),
                     style=me.Style(
                         font_size=13, color=me.theme_var("on-surface-variant")
                     ),
@@ -531,7 +535,7 @@ def _export_actions(
     with me.box(classes="ss-export-actions"):
         with me.box(classes="ss-export-what"):
             me.text(
-                export_mod.label(opts, tl),
+                tx_dots(export_mod.label(opts, tl)),
                 style=me.Style(font_size=13, color=me.theme_var("on-surface-variant")),
             )
         if srt_ready:

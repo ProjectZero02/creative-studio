@@ -89,6 +89,7 @@ class StoryTimeline extends LitElement {
     busy: { type: Boolean },
     changeEvent: { type: String },
     pointEvent: { type: String },
+    stringsJson: { type: String },
     _tl: { state: true },
     _playing: { state: true },
     _sel: { state: true },
@@ -128,7 +129,7 @@ class StoryTimeline extends LitElement {
     .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
     .stage:fullscreen { border-radius: 0; aspect-ratio: auto; max-height: none; width: 100%; height: 100%; }
     .stage .poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-    .badge { position: absolute; top: 10px; left: 10px; z-index: 2; display: inline-flex; align-items: center; gap: 8px;
+    .badge { position: absolute; top: 10px; inset-inline-start: 10px; z-index: 2; display: inline-flex; align-items: center; gap: 8px;
              padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; color: #fff;
              background: rgba(0,0,0,.6); pointer-events: none; }
     .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tl-accent); animation: pulse 1s ease-in-out infinite alternate; }
@@ -143,6 +144,11 @@ class StoryTimeline extends LitElement {
     .speech.sel { outline-color: var(--tl-accent); }
     .transport { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: var(--tl-h); }
     .transport .time { font-variant-numeric: tabular-nums; color: var(--tl-muted); font-size: 13px; }
+    /* Arabic: times read 0:03 / 0:20 and the play controls keep their order
+       (media controls are not mirrored). */
+    .transport .time { direction: ltr; unicode-bidi: isolate; text-align: start; }
+    :host(:dir(rtl)) .transport .time { text-align: end; }
+    .transport .mid { direction: ltr; }
     .transport .mid { display: flex; gap: 8px; }
     .transport .end { display: flex; justify-content: flex-end; }
     .bar { display: flex; gap: 8px; align-items: center; height: var(--tl-h); }
@@ -169,13 +175,13 @@ class StoryTimeline extends LitElement {
     .panel .meta { margin: -10px 0 0; color: var(--tl-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
     .panel .empty { margin: auto; color: var(--tl-muted); text-align: center; }
     .field { display: grid; gap: 6px; font-size: 13px; color: var(--tl-muted); }
-    .field .val { float: right; color: var(--sys-on-surface, #e7e9ed); font-variant-numeric: tabular-nums; }
+    .field .val { float: inline-end; color: var(--sys-on-surface, #e7e9ed); font-variant-numeric: tabular-nums; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     select, textarea { font: inherit; font-size: 14px; color: var(--sys-on-surface, #e7e9ed);
              background: var(--tl-field); border: 1px solid var(--tl-line); border-radius: var(--tl-radius-sm); box-sizing: border-box; width: 100%; }
     select { height: var(--tl-h); padding: 0 10px; }
     select option { background: var(--tl-base); }
-    textarea { resize: vertical; min-height: 72px; padding: 10px; }
+    textarea { resize: vertical; min-height: 72px; padding: 10px; unicode-bidi: plaintext; }
     input[type=range] { width: 100%; accent-color: var(--tl-accent); height: 20px; margin: 0; }
     .check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--sys-on-surface, #e7e9ed); }
     .check input { width: 18px; height: 18px; accent-color: var(--tl-accent); margin: 0; }
@@ -183,6 +189,11 @@ class StoryTimeline extends LitElement {
     .zoom input { width: 120px; }
     .tracks { border-radius: var(--tl-radius); overflow: hidden; background: var(--tl-panel);
               display: grid; grid-template-columns: 120px minmax(0, 1fr); }
+    /* Time runs left to right in every language (as in Clipchamp, CapCut and
+       YouTube Studio in Arabic): the tracks and the Earlier / Later pair keep
+       left-to-right layout; only the labels read right to left. */
+    .tracks, .grid2:has(> button) { direction: ltr; }
+    :host(:dir(rtl)) .heads span, :host(:dir(rtl)) .clip span, :host(:dir(rtl)) .speech span, :host(:dir(rtl)) .grid2 button { unicode-bidi: plaintext; }
     .heads { border-right: 1px solid var(--tl-line); }
     .heads div { display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 13px; font-weight: 500;
                  color: var(--tl-muted); border-bottom: 1px solid var(--tl-line); box-sizing: border-box; }
@@ -238,6 +249,7 @@ class StoryTimeline extends LitElement {
     this.busy = false;
     this.changeEvent = '';
     this.pointEvent = '';
+    this.stringsJson = '{}';
     this._id = uid();
     this._seq = 0;
     this._pointed = -1;
@@ -321,6 +333,18 @@ class StoryTimeline extends LitElement {
     }
     return null;
   }
+  /** Text in the page's language: stringsJson maps English (or an English
+   * template with {0}, {1}) to its translation; English is the fallback. */
+  _T(text, ...args) {
+    if (this._strsSrc !== this.stringsJson) {
+      this._strsSrc = this.stringsJson;
+      try { this._strs = JSON.parse(this.stringsJson || '{}'); } catch (_) { this._strs = {}; }
+    }
+    let out = (this._strs && this._strs[text]) || text;
+    args.forEach((v, i) => { out = out.replace(`{${i}}`, v); });
+    return out;
+  }
+
   /** Shot names: "Scene 3", and "Scene 3a", "Scene 3b" for split parts. */
   _labels() {
     const out = {};
@@ -328,7 +352,7 @@ class StoryTimeline extends LitElement {
     const seen = {};
     for (const c of this._clips('video')) if (+c.scene >= 0) count[c.scene] = (count[c.scene] || 0) + 1;
     for (const c of this._clips('video')) {
-      const base = +c.scene >= 0 ? `Scene ${+c.scene + 1}` : (c.label || 'Clip');
+      const base = +c.scene >= 0 ? this._T('Scene {0}', +c.scene + 1) : this._T(c.label || 'Clip');
       if (+c.scene >= 0 && count[c.scene] > 1) {
         const n = seen[c.scene] = (seen[c.scene] || 0) + 1;
         const part = String.fromCharCode(96 + Math.min(n, 26));
@@ -432,7 +456,7 @@ class StoryTimeline extends LitElement {
     this._change(() => {
       const id = uid();
       const start = r3(Math.min(this._t, Math.max(0, this._duration() - 1)));
-      this._track('text').clips.push({ id, text: 'New title', start, dur: 3, pos: 'bottom', size: 48 });
+      this._track('text').clips.push({ id, text: this._T('New title'), start, dur: 3, pos: 'bottom', size: 48 });
       this._sel = id;
     });
   }
@@ -674,11 +698,11 @@ class StoryTimeline extends LitElement {
   _clipEl(kind, c, names) {
     const left = (+c.start || 0) * this._pps + (kind === 'video' && c._dx ? c._dx * this._pps : 0);
     const width = Math.max(14, clipLen(c) * this._pps);
-    const name = kind === 'video' ? (names[c.id] || { full: c.label || 'Clip', short: '' }) : null;
+    const name = kind === 'video' ? (names[c.id] || { full: this._T(c.label || 'Clip'), short: '' }) : null;
     const narrow = width < 72;
     const label = kind === 'text' ? c.text
       : kind === 'video' ? (narrow ? name.short : name.full)
-      : kind === 'music' ? 'Music' : 'Voice';
+      : kind === 'music' ? this._T('Music') : this._T('Voice');
     const full = kind === 'video' ? name.full : label;
     const sel = this._sel === c.id;
     const dragging = this._drag && this._drag.id === c.id;
@@ -687,7 +711,7 @@ class StoryTimeline extends LitElement {
     const fixed = kind === 'voice' || kind === 'music';
     return html`<div class="clip ${kind} ${thumb ? 'thumbs' : ''} ${sel ? 'sel' : ''} ${dragging ? 'drag' : ''} ${narrow ? 'narrow' : ''} ${fixed ? 'fixed' : ''}" tabindex="0" role="button"
         aria-pressed=${sel ? 'true' : 'false'}
-        aria-label="${`${LANE_LABEL[kind]}: ${full}, ${fmt(c.start)} to ${fmt(clipEnd(c))}`}"
+        aria-label="${`${this._T(LANE_LABEL[kind])}: ${full}, ${this._T('{0} to {1}', fmt(c.start), fmt(clipEnd(c)))}`}"
         title=${full}
         style="left:${left}px;width:${width}px;${thumb ? `background-image:url('${thumb}')` : ''}"
         @pointerdown=${(e) => this._dragStart(e, kind, c, 'move')}
@@ -704,10 +728,10 @@ class StoryTimeline extends LitElement {
     const left = (+c.start || 0) * this._pps + (c._dx ? c._dx * this._pps : 0);
     const width = Math.max(14, clipLen(c) * this._pps);
     const muted = !(+c.gain > 0);
-    const name = (names[c.id] || {}).full || c.label || 'Clip';
-    const label = `${name} speech${muted ? ' (muted)' : ''}`;
+    const name = (names[c.id] || {}).full || this._T(c.label || 'Clip');
+    const label = this._T(muted ? '{0} speech (muted)' : '{0} speech', name);
     return html`<div class="speech ${this._sel === c.id ? 'sel' : ''} ${muted ? 'muted' : ''}" role="button" tabindex="-1"
-        title="Speech recorded in ${name}. It moves with the shot; select it to change its volume."
+        title=${this._T('Speech recorded in {0}. It moves with the shot; select it to change its volume.', name)}
         style="left:${left}px;width:${width}px"
         @click=${() => { this._sel = c.id; }}>${ICON.wave}<span>${label}</span></div>`;
   }
@@ -731,12 +755,12 @@ class StoryTimeline extends LitElement {
 
   _inspector(names) {
     const f = this._sel ? this._find(this._sel) : null;
-    if (!f) return html`<aside class="panel" aria-label="Clip settings"><p class="empty">Select a clip to edit it</p></aside>`;
+    if (!f) return html`<aside class="panel" aria-label=${this._T('Clip settings')}><p class="empty">${this._T('Select a clip to edit it')}</p></aside>`;
     const { kind, clip: c } = f;
     const pct = Math.min(100, Math.round((+c.gain || 0) / levelOf(c) * 100));
     const vid = this._clips('video');
     const vi = vid.findIndex((x) => x.id === c.id);
-    const name = kind === 'text' ? 'Title' : kind === 'video' ? (names[c.id] || {}).full || 'Clip' : kind === 'voice' ? 'Voice' : 'Music';
+    const name = this._T(kind === 'text' ? 'Title' : kind === 'video' ? (names[c.id] || {}).full || 'Clip' : kind === 'voice' ? 'Voice' : 'Music');
     const transVal = kind === 'video' ? this._transitionValue(c) : 'cut';
     const transOpts = [
       ['cut', 'Cut'],
@@ -745,33 +769,33 @@ class StoryTimeline extends LitElement {
       ['1', 'Crossfade 1 s'],
       ['fade_black', 'Dip to black'],
     ];
-    return html`<aside class="panel" aria-label="Clip settings">
+    return html`<aside class="panel" aria-label=${this._T('Clip settings')}>
       <h3>${name}</h3>
-      <p class="meta">${fmt(c.start)} – ${fmt(clipEnd(c))} · ${clipLen(c).toFixed(1)} s</p>
+      <p class="meta">${fmt(c.start)} – ${fmt(clipEnd(c))} · ${this._T('{0} s', clipLen(c).toFixed(1))}</p>
       ${kind === 'text' ? html`
-        <label class="field">Text<textarea .value=${c.text} @change=${(e) => this._set(c.id, 'text', e.target.value.slice(0, 300))}></textarea></label>
+        <label class="field">${this._T('Text')}<textarea .value=${c.text} @change=${(e) => this._set(c.id, 'text', e.target.value.slice(0, 300))}></textarea></label>
         <div class="grid2">
-          <label class="field">Position<select @change=${(e) => this._set(c.id, 'pos', e.target.value)}>
-            ${['top', 'center', 'bottom'].map((p) => html`<option value=${p} ?selected=${c.pos === p}>${p[0].toUpperCase() + p.slice(1)}</option>`)}
+          <label class="field">${this._T('Position')}<select @change=${(e) => this._set(c.id, 'pos', e.target.value)}>
+            ${['top', 'center', 'bottom'].map((p) => html`<option value=${p} ?selected=${c.pos === p}>${this._T(p[0].toUpperCase() + p.slice(1))}</option>`)}
           </select></label>
-          <label class="field">Size<select @change=${(e) => this._set(c.id, 'size', +e.target.value)}>
-            ${[[32, 'Small'], [48, 'Medium'], [72, 'Large'], [104, 'Huge']].map(([v, l]) => html`<option value=${v} ?selected=${+c.size === v}>${l}</option>`)}
+          <label class="field">${this._T('Size')}<select @change=${(e) => this._set(c.id, 'size', +e.target.value)}>
+            ${[[32, 'Small'], [48, 'Medium'], [72, 'Large'], [104, 'Huge']].map(([v, l]) => html`<option value=${v} ?selected=${+c.size === v}>${this._T(l)}</option>`)}
           </select></label>
         </div>` : html`
-        <label class="field"><span>${kind !== 'video' ? 'Volume' : 'Clip sound'} <span class="val">${pct}%</span></span>
+        <label class="field"><span>${this._T(kind !== 'video' ? 'Volume' : 'Clip sound')} <span class="val">${pct}%</span></span>
           <input type="range" min="0" max="100" step="5" .value=${String(pct)}
             @change=${(e) => this._setLevel(c.id, +e.target.value)}></label>`}
       ${kind === 'video' ? html`
-        <label class="field">Transition in<select ?disabled=${vi === 0} @change=${(e) => this._setTransition(c.id, e.target.value)}>
-          ${transOpts.map(([v, l]) => html`<option value=${v} ?selected=${transVal === v}>${l}</option>`)}
+        <label class="field">${this._T('Transition in')}<select ?disabled=${vi === 0} @change=${(e) => this._setTransition(c.id, e.target.value)}>
+          ${transOpts.map(([v, l]) => html`<option value=${v} ?selected=${transVal === v}>${this._T(l)}</option>`)}
         </select></label>
         <div class="grid2">
-          <button ?disabled=${this.busy || vi <= 0} @click=${() => this._reorder(c.id, -1)}>${ICON.left} Earlier</button>
-          <button ?disabled=${this.busy || vi >= vid.length - 1} @click=${() => this._reorder(c.id, 1)}>Later ${ICON.right}</button>
+          <button ?disabled=${this.busy || vi <= 0} @click=${() => this._reorder(c.id, -1)}>${ICON.left} ${this._T('Earlier')}</button>
+          <button ?disabled=${this.busy || vi >= vid.length - 1} @click=${() => this._reorder(c.id, 1)}>${this._T('Later')} ${ICON.right}</button>
         </div>` : nothing}
       ${kind === 'music' ? html`<label class="check"><input type="checkbox" .checked=${this._track('music').duck !== false}
           @change=${(e) => this._change(() => { this._track('music').duck = e.target.checked; })}>
-          Lower under speech</label>` : nothing}
+          ${this._T('Lower under speech')}</label>` : nothing}
     </aside>`;
   }
 
@@ -804,13 +828,13 @@ class StoryTimeline extends LitElement {
   }
 
   _badge() {
-    if (this.previewState === 'making') return html`<div class="badge" role="status"><span class="dot"></span>Updating preview</div>`;
-    if (this.previewState === 'failed') return html`<div class="badge" role="status">Preview not updated</div>`;
+    if (this.previewState === 'making') return html`<div class="badge" role="status"><span class="dot"></span>${this._T('Updating preview')}</div>`;
+    if (this.previewState === 'failed') return html`<div class="badge" role="status">${this._T('Preview not updated')}</div>`;
     return nothing;
   }
 
   render() {
-    if (!this._tl) return html`<p class="empty">No timeline yet.</p>`;
+    if (!this._tl) return html`<p class="empty">${this._T('No timeline yet.')}</p>`;
     if (!this._pps) this._fit();
     const total = this._duration();
     const width = Math.max(total * this._pps + 120, 200);
@@ -821,7 +845,7 @@ class StoryTimeline extends LitElement {
     return html`<div class="wrap">
       <div class="top">
         <div class="viewer">
-          <div class="stage ${this.aspect === '9:16' ? 'ar916' : 'ar169'}" tabindex="0" aria-label="Preview"
+          <div class="stage ${this.aspect === '9:16' ? 'ar916' : 'ar169'}" tabindex="0" aria-label=${this._T('Preview')}
               @dblclick=${this._fullscreen}>
             ${this.previewUrl ? html`<video class="player" src=${this.previewUrl} playsinline preload="auto"
                 poster=${poster || nothing}
@@ -833,39 +857,39 @@ class StoryTimeline extends LitElement {
           <div class="transport">
             <span class="time" .textContent=${`${fmt(t)} / ${fmt(total)}`}></span>
             <div class="mid">
-              <button class="icon ghost" aria-label="Back to start" title="Back to start" @click=${() => this._seek(0)}>${ICON.start}</button>
-              <button class="icon primary" aria-label=${this._playing ? 'Pause' : 'Play'} title="Play or pause (Space)"
+              <button class="icon ghost" aria-label=${this._T('Back to start')} title=${this._T('Back to start')} @click=${() => this._seek(0)}>${ICON.start}</button>
+              <button class="icon primary" aria-label=${this._T(this._playing ? 'Pause' : 'Play')} title=${this._T('Play or pause (Space)')}
                 ?disabled=${!this.previewUrl} @click=${this._togglePlay}>${this._playing ? ICON.pause : ICON.play}</button>
             </div>
             <span class="end">
-              <button class="icon ghost" aria-label=${this._full ? 'Exit full screen' : 'Full screen'} title="Full screen (F)"
+              <button class="icon ghost" aria-label=${this._T(this._full ? 'Exit full screen' : 'Full screen')} title=${this._T('Full screen (F)')}
                 ?disabled=${!this.previewUrl} @click=${this._fullscreen}>${this._full ? ICON.unfull : ICON.full}</button>
             </span>
           </div>
         </div>
         ${this._inspector(names)}
       </div>
-      <div class="bar" role="toolbar" aria-label="Edit">
-        <button title="Split at playhead (S)" ?disabled=${this.busy || !this._canSplit()} @click=${this._split}>${ICON.split}<span class="lbl-hide">Split</span></button>
-        <button title="Delete (Del)" ?disabled=${this.busy || !this._sel} @click=${() => this._remove(this._sel)}>${ICON.del}<span class="lbl-hide">Delete</span></button>
-        <button title="Add a title at the playhead" ?disabled=${this.busy} @click=${this._addTitle}>${ICON.title}<span class="lbl-hide">Add title</span></button>
+      <div class="bar" role="toolbar" aria-label=${this._T('Edit')}>
+        <button title=${this._T('Split at playhead (S)')} ?disabled=${this.busy || !this._canSplit()} @click=${this._split}>${ICON.split}<span class="lbl-hide">${this._T('Split')}</span></button>
+        <button title=${this._T('Delete (Del)')} ?disabled=${this.busy || !this._sel} @click=${() => this._remove(this._sel)}>${ICON.del}<span class="lbl-hide">${this._T('Delete')}</span></button>
+        <button title=${this._T('Add a title at the playhead')} ?disabled=${this.busy} @click=${this._addTitle}>${ICON.title}<span class="lbl-hide">${this._T('Add title')}</span></button>
         <span class="sep"></span>
-        <button class="icon" title="Undo (Ctrl+Z)" aria-label="Undo" ?disabled=${this.busy || !this._undo.length} @click=${this._undoLast}>${ICON.undo}</button>
-        <button class="icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" ?disabled=${this.busy || !this._redo.length} @click=${this._redoLast}>${ICON.redo}</button>
+        <button class="icon" title=${this._T('Undo (Ctrl+Z)')} aria-label=${this._T('Undo')} ?disabled=${this.busy || !this._undo.length} @click=${this._undoLast}>${ICON.undo}</button>
+        <button class="icon" title=${this._T('Redo (Ctrl+Shift+Z)')} aria-label=${this._T('Redo')} ?disabled=${this.busy || !this._redo.length} @click=${this._redoLast}>${ICON.redo}</button>
         <span class="spacer"></span>
         <div class="zoom">
-          <button class="icon ghost" aria-label="Zoom out" @click=${() => this._zoom(1 / 1.5)}>${ICON.minus}</button>
-          <input type="range" min="0" max="100" .value=${String(zoomVal)} aria-label="Zoom"
+          <button class="icon ghost" aria-label=${this._T('Zoom out')} @click=${() => this._zoom(1 / 1.5)}>${ICON.minus}</button>
+          <input type="range" min="0" max="100" .value=${String(zoomVal)} aria-label=${this._T('Zoom')}
             @input=${(e) => { this._pps = 4 * Math.pow(100, +e.target.value / 100); }}>
-          <button class="icon ghost" aria-label="Zoom in" @click=${() => this._zoom(1.5)}>${ICON.plus}</button>
+          <button class="icon ghost" aria-label=${this._T('Zoom in')} @click=${() => this._zoom(1.5)}>${ICON.plus}</button>
         </div>
       </div>
-      <div class="tracks" role="group" aria-label="Timeline">
-        <div class="heads" aria-hidden="true"><div class="rl"></div>${KINDS.map((k) => html`<div class="h-${k}">${TRACK_ICON[k]}<span>${LANE_LABEL[k]}</span></div>`)}</div>
+      <div class="tracks" role="group" aria-label=${this._T('Timeline')}>
+        <div class="heads" aria-hidden="true"><div class="rl"></div>${KINDS.map((k) => html`<div class="h-${k}">${TRACK_ICON[k]}<span>${this._T(LANE_LABEL[k])}</span></div>`)}</div>
         <div class="scroll" @pointerdown=${(e) => { if (e.target.classList.contains('lane')) this._sel = ''; }}>
           <div class="inner" style="width:${width}px">
             <div class="ruler" @pointerdown=${(e) => this._rulerDown(e)} aria-hidden="true">${this._ticks(total)}</div>
-            ${KINDS.map((k) => html`<div class="lane h-${k}" aria-label="${LANE_LABEL[k]} track">${k === 'voice' ? repeat(this._clips('video').filter((c) => !c.ambient), (c) => `s-${c.id}`, (c) => this._speechEl(c, names)) : nothing}${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c, names))}</div>`)}
+            ${KINDS.map((k) => html`<div class="lane h-${k}" aria-label=${this._T(`${LANE_LABEL[k]} track`)}>${k === 'voice' ? repeat(this._clips('video').filter((c) => !c.ambient), (c) => `s-${c.id}`, (c) => this._speechEl(c, names)) : nothing}${repeat(this._clips(k), (c) => c.id, (c) => this._clipEl(k, c, names))}</div>`)}
             <div class="head" style="left:${t * this._pps}px"></div>
           </div>
         </div>

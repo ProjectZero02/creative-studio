@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 import mesop as me
 
+from common.i18n import tx
 from services.story_models import VOICE_GENDER, VOICES
 from services.story_service import display_url
 from services.story_sets import (
@@ -222,7 +223,7 @@ def asset_card(
                     )
             _icon_button(
                 "delete_outline",
-                f"Remove {asset.name or kind}",
+                f"{tx('Remove')} {asset.name or kind}",
                 card_key("remove", kind, asset.id),
                 h.on_remove,
                 busy,

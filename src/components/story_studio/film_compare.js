@@ -28,6 +28,7 @@ class GmFilmCompare extends LitElement {
     leftLabel: { type: String },
     rightLabel: { type: String },
     portrait: { type: Boolean },
+    stringsJson: { type: String },
     _playing: { state: true },
     _time: { state: true },
     _length: { state: true },
@@ -141,6 +142,18 @@ class GmFilmCompare extends LitElement {
     </figure>`;
   }
 
+  /** Text in the page's language: stringsJson maps English (or an English
+   * template with {0}, {1}) to its translation; English is the fallback. */
+  _T(text, ...args) {
+    if (this._strsSrc !== this.stringsJson) {
+      this._strsSrc = this.stringsJson;
+      try { this._strs = JSON.parse(this.stringsJson || '{}'); } catch (_) { this._strs = {}; }
+    }
+    let out = (this._strs && this._strs[text]) || text;
+    args.forEach((v, i) => { out = out.replace(`{${i}}`, v); });
+    return out;
+  }
+
   render() {
     const play = '<path d="M8 5v14l11-7z"/>';
     const pause = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
@@ -150,11 +163,11 @@ class GmFilmCompare extends LitElement {
         ${this._side(this.rightUrl, this.rightLabel, 'right')}
       </div>
       <div class="bar">
-        <button class="play" type="button" aria-label=${this._playing ? 'Pause both' : 'Play both'} @click=${this._toggle}>
+        <button class="play" type="button" aria-label=${this._T(this._playing ? 'Pause both' : 'Play both')} @click=${this._toggle}>
           <svg viewBox="0 0 24 24" aria-hidden="true" .innerHTML=${this._playing ? pause : play}></svg>
         </button>
         <input type="range" min="0" step="0.05" max=${this._length || 0} .value=${String(this._time)}
-          aria-label="Position" @input=${this._seek} />
+          aria-label=${this._T('Position')} @input=${this._seek} />
         <span class="time">${this._fmt(this._time)} / ${this._fmt(this._length)}</span>
       </div>`;
   }
