@@ -40,6 +40,7 @@ from typing import Protocol
 
 import numpy as np
 
+from common import usage
 from common.analytics import extract_usage_metadata, get_logger, track_model_call
 from common.error_handling import GenerationError
 from common.identity import LOCAL_APP_ENVS
@@ -2017,7 +2018,10 @@ class VertexStoryBackend:
 
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     seq_shots = list(
-                        pool.map(lambda pair: expand_seq(*pair), enumerate(sequences))
+                        pool.map(
+                            usage.in_context(lambda pair: expand_seq(*pair)),
+                            enumerate(sequences),
+                        )
                     )
                 merged = story_director.merge_director_scenario(
                     outline, seq_shots, stage2_story

@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 from google import genai
 from PIL import Image as PIL_Image
 
+from common import usage
 from common.analytics import extract_usage_metadata, track_model_call
 from common.metadata import MediaItem, add_media_item_to_firestore
 from common.storage import download_from_gcs, store_to_gcs
@@ -99,9 +100,9 @@ def generate_character_video(
         data={},
     )
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        profiles = list(executor.map(get_facial_composite_profile, reference_image_bytes_list))
+        profiles = list(executor.map(usage.in_context(get_facial_composite_profile), reference_image_bytes_list))
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        all_descriptions = list(executor.map(get_natural_language_description, profiles))
+        all_descriptions = list(executor.map(usage.in_context(get_natural_language_description), profiles))
     character_description = all_descriptions[0]
     step_duration = time.time() - step_start_time
     yield WorkflowStepResult(
@@ -303,7 +304,7 @@ def _generate_gemini_candidates(
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [
             executor.submit(
-                generate_image_from_prompt_and_images,
+                usage.in_context(generate_image_from_prompt_and_images),
                 candidate_prompt,
                 reference_image_gcs_uris,
                 aspect_ratio="1:1",

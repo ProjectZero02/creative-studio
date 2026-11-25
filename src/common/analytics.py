@@ -209,10 +209,18 @@ def log_model_call(
         session_id = state.session_id
         user_email = state.user_email
     except Exception:
-        # Handle cases where me.state is called outside of context (e.g. threads)
-        page_name = "unknown"
+        # Outside the page (threads, jobs): use who the work is for, set
+        # with usage.acting_for / usage.in_context.
+        from common import usage
+
+        page_name = usage.current_page() or "unknown"
         session_id = "unknown"
-        user_email = "unknown"
+        user_email = usage.current_owner() or "unknown"
+    if not (details or {}).get("feature"):
+        from common import usage
+
+        if usage.current_feature():
+            details = {**(details or {}), "feature": usage.current_feature()}
 
     extra_data = {
         "event_type": "model_call",

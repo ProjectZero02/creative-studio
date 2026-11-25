@@ -16,6 +16,7 @@ import datetime
 import logging
 import threading
 
+from common import usage
 from common.metadata import (
     MediaItem,
     add_media_item_to_firestore,
@@ -66,7 +67,14 @@ def process_veo_generation_task(
 
         # 2. Perform the actual heavy lifting (synchronous call)
         # Gemini Omni ids run on Omni, Veo ids on Veo.
-        video_uris, resolution = generate_video_any_model(request_data)
+        # Count the call for the person who started the job, also when this
+        # runs without the page's context.
+        with usage.acting_for(
+            user_email or usage.current_owner(),
+            page=usage.current_page() or "veo",
+            feature=usage.current_feature(),
+        ):
+            video_uris, resolution = generate_video_any_model(request_data)
 
         # 3. Success! Update Firestore with results.
         # Check if this was an extension request to correct the duration

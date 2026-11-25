@@ -25,7 +25,8 @@ stores it twice).
 
 Background jobs (Story Studio, Live) run in threads where the page state is
 not available. They wrap their work in :func:`acting_for` so their calls are
-counted for the right person.
+counted for the right person, page and feature; a page that hands work to a
+thread or pool wraps the function in :func:`in_context`.
 
 :func:`summarize` turns events into the page's totals; it is pure.
 """
@@ -53,18 +54,70 @@ COLLECTION = "usage_events"
 _owner: contextvars.ContextVar[str] = contextvars.ContextVar("usage_owner", default="")
 
 
+_page: contextvars.ContextVar[str] = contextvars.ContextVar("usage_page", default="")
+_feature: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "usage_feature", default=""
+)
+
+
 def current_owner() -> str:
     return _owner.get()
 
 
+def current_page() -> str:
+    return _page.get()
+
+
+def current_feature() -> str:
+    return _feature.get()
+
+
 @contextlib.contextmanager
-def acting_for(owner: str) -> Iterator[None]:
-    """Count model calls made inside this block for `owner`."""
-    token = _owner.set(owner or "")
+def acting_for(owner: str, page: str = "", feature: str = "") -> Iterator[None]:
+    """Count model calls made inside this block for `owner` (and, when
+    given, `page` and `feature`). For threads where the page state is not
+    available."""
+    tokens = [(_owner, _owner.set(owner or ""))]
+    if page:
+        tokens.append((_page, _page.set(page)))
+    if feature:
+        tokens.append((_feature, _feature.set(feature)))
     try:
         yield
     finally:
-        _owner.reset(token)
+        for var, token in reversed(tokens):
+            var.reset(token)
+
+
+def _from_page_state() -> tuple[str, str]:
+    """(owner, page) from the Mesop page state, or ("", "") off the page."""
+    try:
+        import mesop as me  # pylint: disable=import-outside-toplevel
+
+        from state.state import AppState  # pylint: disable=import-outside-toplevel
+
+        state = me.state(AppState)
+        return str(state.user_email or ""), str(state.current_page or "")
+    except Exception:
+        return "", ""
+
+
+def in_context(fn):
+    """`fn` wrapped to run with this thread's owner, page and feature, for
+    handing to a worker thread or pool (``pool.submit(in_context(f), x)``)."""
+    owner, page = _from_page_state()
+    owner = owner or current_owner()
+    page = page or current_page()
+    feature = current_feature()
+
+    def run(*args, **kwargs):
+        def inner():
+            with acting_for(owner, page=page, feature=feature):
+                return fn(*args, **kwargs)
+
+        return contextvars.copy_context().run(inner)
+
+    return run
 
 
 def event(
