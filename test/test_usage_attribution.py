@@ -108,3 +108,25 @@ def test_model_call_log_is_structured_on_cloud_run(monkeypatch):
     assert line["event_type"] == "model_call" and line["event_id"] == "e9"
     assert line["user_email"] == "a@x" and line["billing_units"] == {"sample_count": 1}
     assert logging.getLevelName(line["severity"]) == logging.INFO
+
+
+
+def test_story_jobs_record_owner_page_and_feature(monkeypatch):
+    from services import story_jobs
+
+    monkeypatch.setattr(story_jobs, "_finish", lambda job: None)
+    seen = {}
+    done = threading.Event()
+
+    def target(_job):
+        seen.update(
+            owner=usage.current_owner(),
+            page=usage.current_page(),
+            feature=usage.current_feature(),
+        )
+        done.set()
+
+    job = story_jobs.Job(id="j1", owner="o@x", story_id="s1", kind="build")
+    story_jobs._spawn(job, target)
+    assert done.wait(5)
+    assert seen == {"owner": "o@x", "page": "story", "feature": "story"}

@@ -389,7 +389,7 @@ def _spawn(job: Job, target: Callable[[Job], None]) -> Job:
         _current_job.set(job.id)
         story_timeline.CANCEL.set(job.cancel_event)
         try:
-            with usage.acting_for(job.owner):
+            with usage.acting_for(job.owner, page="story", feature="story"):
                 target(job)
         except Exception as exc:
             logger.exception("Story Studio job crashed")
