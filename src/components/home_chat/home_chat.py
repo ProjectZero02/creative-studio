@@ -244,8 +244,8 @@ _STRINGS = {
     "how_music": ("home.how.music", "Genre · instruments · tempo · mood"),
     "how_voice": ("home.how.voice", "The exact words to say"),
     "how_film": ("home.how.film", "Product or story · length · mood"),
-    "tab_example": ("home.chat.tab_example", "use example"),
-    "tab_accept": ("home.chat.tab_accept", "accept"),
+    "hint_label": ("home.chat.hint_label", "Hint:"),
+    "format_label": ("home.chat.format_label", "Format:"),
     "suggestion": ("home.chat.suggestion", "Suggestion: {text}. Press Tab to accept."),
     # The path from prompt to result, shown above the box.
     "path": ("home.chat.path", "How this is made"),

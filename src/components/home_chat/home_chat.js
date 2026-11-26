@@ -182,6 +182,7 @@ class GmHomeChat extends LitElement {
     _adv: { state: true },
     _thinking: { state: true },
     _sug: { state: true },
+    _armed: { state: true },
     panelOpen: { type: Boolean, reflect: true, attribute: 'panel' },
     // Mirrors body.dark-theme, so the headline repaints on a theme switch
     // (gradient text does not always repaint when only a variable changes).
@@ -1416,14 +1417,20 @@ class GmHomeChat extends LitElement {
     // Read out the whole word being completed ("cinematic"), not only its tail.
     const word = this._sug && !/^\s/.test(this._sug) ? ((this._ta?.value || '').match(/[^\s,]*$/) || [''])[0] : '';
     const sugText = this._sug ? (S.suggestion || 'Suggestion: {text}. Press Tab to accept.').replace('{text}', (word + this._sug).trim()) : '';
+    // Once the person is in the box, the example is drawn in the ghost layer
+    // (not the placeholder) so the Tab key can sit at the end of it.
+    const exGhost = this._armed && empty && !!example;
+    const tabKey = html`<kbd class="g-key">Tab</kbd>`;
     return html`
       <div class="box ${this._busy ? 'busy' : ''} ${this._dragOver ? 'drop' : ''}"
         @dragover=${this._onDragOver} @dragleave=${this._onDragLeave} @drop=${this._onDrop}>
         ${this._attachments()}
         <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change=${this._onFiles}>
         <div class="ta-wrap">
-          <div class="gh" aria-hidden="true"><span class="g-typed">${this._ta ? this._ta.value : ''}</span><span class="g-sug">${this._sug}</span></div>
-          <textarea rows="1" @paste=${this._onPaste} .placeholder=${holder}
+          <div class="gh" aria-hidden="true">${exGhost
+            ? html`<span class="g-ex">${example}</span>${tabKey}`
+            : html`<span class="g-typed">${this._ta ? this._ta.value : ''}</span><span class="g-sug">${this._sug}</span>${this._sug ? tabKey : nothing}`}</div>
+          <textarea rows="1" @paste=${this._onPaste} .placeholder=${exGhost ? '' : holder}
             aria-label=${S.placeholder || 'Ask me anything'} aria-describedby="sug-live"
             @keydown=${this._onKey} @input=${this._onInput} @scroll=${this._syncGhost}
             @pointerdown=${() => { this._armed = true; }}
@@ -1433,9 +1440,8 @@ class GmHomeChat extends LitElement {
         <div class="row">
           <button class="icon plus ${this._advChanged(mode) ? 'dot-on' : ''}" type="button" data-menu="plus" aria-haspopup="menu"
             @click=${(e) => this._plusMenu(e)} aria-label=${S.more || 'Add files and more'} title=${S.more || 'Add files and more'}>${svg(ICON.plus, 22)}</button>
-          <span class="hint ${(empty && example) || this._sug ? 'shown' : ''}" aria-hidden="true">
-            <kbd>Tab</kbd><span>${this._sug ? (S.tab_accept || 'accept') : (S.tab_example || 'use example')}</span>
-            ${!this._sug && how ? html`<span class="how">${how}</span>` : nothing}
+          <span class="hint ${empty && how ? 'shown' : ''}" aria-hidden="true">
+            <span class="hl">${mode ? (S.format_label || 'Format:') : (S.hint_label || 'Hint:')}</span><span class="how">${how}</span>
           </span>
           <span class="grow"></span>
           <div class="tools">
@@ -2121,15 +2127,21 @@ class GmHomeChat extends LitElement {
     .g-typed { color: transparent; }
     .g-sug { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.75; }
     .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-    /* "Tab use example · Subject · setting · light" beside the + button. */
-    .hint { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-inline-start: 4px; font-size: 12.5px;
+    /* "Hint: Say what to make…" / "Format: Subject · setting · light" beside the + button. */
+    .hint { display: inline-flex; align-items: center; gap: 5px; min-width: 0; margin-inline-start: 4px; font-size: 12.5px;
       color: var(--sys-on-surface-variant, #6b7280); opacity: 0; transform: translateY(2px); transition: opacity 180ms ease, transform 180ms ease; white-space: nowrap; overflow: hidden; }
     .hint.shown { opacity: 1; transform: none; }
-    .hint kbd { font: inherit; font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 6px; border-radius: 6px;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface, #15171c);
-      box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--sys-on-surface, #e8eaed) 14%, transparent); }
+    .hint .hl { font-weight: 600; flex: none; }
     .hint .how { overflow: hidden; text-overflow: ellipsis; opacity: 0.8; }
-    .hint .how::before { content: '·'; margin-inline-end: 7px; }
+    /* The example (or suggestion) ends in a quiet Tab key, same tone as the text. */
+    .g-ex { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9; }
+    .g-key { display: inline-block; vertical-align: 2px; margin-inline-start: 8px; padding: 0 6px; border-radius: 6px;
+      font: inherit; font-size: 11px; font-weight: 600; line-height: 18px; letter-spacing: 0.02em;
+      color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9;
+      background: color-mix(in srgb, var(--sys-on-surface-variant, #6b7280) 16%, transparent);
+      animation: key-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+    .g-sug + .g-key { opacity: 0.75; }
+    @keyframes key-in { from { opacity: 0; transform: translateY(4px) scale(0.9); } }
 
     /* Enhance slides in once there is text; Live and Send share one slot. */
     .enh { transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), margin 220ms ease; }
@@ -2283,7 +2295,7 @@ class GmHomeChat extends LitElement {
       .wrap.empty { gap: 18px; padding-bottom: 0; }
       .box { padding: 6px; border-radius: 26px; }
       .gh, .ta-wrap textarea { font-size: 16px; padding: 10px 8px 4px; }
-      .hint .how { display: none; }
+      .hint { font-size: 12px; }
       .cards { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; padding: 2px 2px 6px; margin-inline: -2px; }
       .cards::-webkit-scrollbar { display: none; }
       /* No soft shadow in the scrolling row: it gets clipped into a grey band. */
