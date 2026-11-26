@@ -23,6 +23,8 @@ import mesop as me
 from common.i18n import route_key, t, tr, tx
 from components.pill import pill
 from components.svg_icon.svg_icon import svg_icon
+from components.test_mode_pill import is_on as test_mode_is_on
+from components.test_mode_pill import test_mode_pill
 
 # Icons drawn by svg_icon instead of the Material icon font.
 CUSTOM_ICONS = ["spark", "style", "scene", "banana"]
@@ -145,6 +147,10 @@ def header(
                                 me.icon(icon="info_outline")
                                 with me.box(classes="gm-sr-only"):
                                     me.text(about)
+        # Test Mode pill: left-aligned under the hero, above the page body.
+        if test_mode_is_on():
+            with me.box(classes="gm-testmode-slot"):
+                test_mode_pill()
         return
 
     with me.box(
@@ -195,6 +201,7 @@ def header(
                         me.markdown("# " + _md_escape(title))
                     if current_status:
                         pill(current_status, "stage")
+                    test_mode_pill()
                 if purpose:
                     me.text(
                         purpose,

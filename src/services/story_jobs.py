@@ -243,7 +243,23 @@ def ensure_free(story_id: str) -> None:
         )
 
 
+# Job kinds that never call a paid model (Test Mode lets these run).
+FREE_KINDS = frozenset({"export"})
+
+
+def _refuse_in_test_mode(owner: str, kind: str) -> None:
+    """Film steps that generate media don't run for an admin in Test Mode.
+    (A local mock run uses the placeholder backend instead.)"""
+    if kind in FREE_KINDS or is_mock_mode():
+        return
+    from common import test_mode  # pylint: disable=import-outside-toplevel
+
+    if test_mode.is_on_for(owner):
+        raise test_mode.TestModeBlocked()
+
+
 def _new_job(owner: str, story_id: str, kind: str, params: dict | None = None) -> Job:
+    _refuse_in_test_mode(owner, kind)
     if kind in HEAVY_KINDS:
         ensure_free(story_id)
     job = Job(

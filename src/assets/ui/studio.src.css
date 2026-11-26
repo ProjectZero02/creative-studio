@@ -1382,6 +1382,48 @@ html body .gm-set-body .gm-brand-card-logo { width: 40px; height: 40px; flex-bas
   html body .gm-set-row { flex-wrap: wrap; padding: 16px; }
 }
 
+/* ---------- Test Mode pill (components/test_mode_pill.py) ---------- */
+/* Green pill under the page title; hover or focus opens a small card with
+   a one-line description and the switch to turn it off. */
+html body {
+  --gm-test-bg: #d7f5e0;
+  --gm-test-fg: #0d5a2b;
+  --gm-test-dot: #1e9e50;
+}
+html body.dark-theme {
+  --gm-test-bg: rgba(52, 199, 105, 0.18);
+  --gm-test-fg: #8ff0b1;
+  --gm-test-dot: #42d77d;
+}
+html body .gm-testmode-slot { display: flex; justify-content: flex-start; width: 100%; max-width: 1472px; margin: -6px auto 14px; }
+html body .gm-testmode { position: relative; display: inline-flex; flex: none; }
+html body .gm-testmode-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px; border-radius: 999px; box-sizing: border-box;
+  background: var(--gm-test-bg); color: var(--gm-test-fg);
+  font-size: 13px; font-weight: 600; letter-spacing: 0.01em; cursor: default;
+}
+html body .gm-testmode-card {
+  position: absolute; top: 100%; left: 0; z-index: 40;
+  width: 280px; margin-top: 8px; padding: 14px 16px; box-sizing: border-box;
+  border-radius: 16px; background: var(--sys-surface-container-high);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  display: flex; flex-direction: column; gap: 10px;
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms;
+}
+/* Invisible bridge so the pointer can move from the pill into the card. */
+html body .gm-testmode-card::before { content: ""; position: absolute; left: 0; right: 0; top: -10px; height: 10px; }
+html body .gm-testmode:hover .gm-testmode-card,
+html body .gm-testmode:focus-within .gm-testmode-card {
+  opacity: 1; visibility: visible; transform: none;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 0s;
+}
+html body .gm-testmode-desc { font-size: 13px; line-height: 1.45; color: var(--sys-on-surface-variant); }
+html body .gm-testmode-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+html body .gm-testmode-row-label { font-size: 14px; font-weight: 500; color: var(--sys-on-surface); }
+[dir="rtl"] html body .gm-testmode-card, html[dir="rtl"] body .gm-testmode-card { left: auto; right: 0; }
+
 /* ---------- Home chat (components/home_chat) ---------- */
 /* The headline gradient lives in home_chat.js, keyed on its [dark] attribute. */
 /* The chat sizes itself to the screen, so the frame adds no bottom gap. */

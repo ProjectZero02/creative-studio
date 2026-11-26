@@ -34,6 +34,9 @@ from components.demo_flow.demo_flow import demo_mode_switch, mode_switch_value
 from components.header import header
 from components.notify.notify import notify_toggle
 from components.page_scaffold import page_frame, page_scaffold
+from components.test_mode_pill import can_switch as can_switch_test_mode
+from components.test_mode_pill import is_on as test_mode_is_on
+from components.test_mode_pill import on_test_mode_toggle
 from state.state import AppState
 
 
@@ -235,6 +238,25 @@ def _admin() -> None:
         ),
     ]
     with me.box(classes="gm-set-card"):
+        with me.box(classes="gm-set-row"):
+            with me.box(classes="gm-set-row-icon"):
+                me.icon("science")
+            with me.box(classes="gm-set-row-text"):
+                _text(tr("testmode.switch", "Test Mode"), "gm-set-row-title")
+                _text(
+                    tr(
+                        "settings.testmode_desc",
+                        "Use the studio with your real media without paying for "
+                        "generation. Only affects you.",
+                    ),
+                    "gm-set-row-desc",
+                )
+            me.slide_toggle(
+                checked=test_mode_is_on(),
+                disabled=not can_switch_test_mode(),
+                on_change=on_test_mode_toggle,
+                key="settings-testmode",
+            )
         with me.box(classes="gm-set-row"):
             with me.box(classes="gm-set-row-icon"):
                 me.icon("storefront")

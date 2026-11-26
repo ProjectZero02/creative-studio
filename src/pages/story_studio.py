@@ -27,7 +27,7 @@ import uuid
 
 import mesop as me
 
-from common import brand_kit
+from common import brand_kit, test_mode
 from common.analytics import get_logger
 from common.i18n import current_lang
 from common.notify import notify
@@ -224,10 +224,7 @@ def story_studio_content():
     )
 
     with me.box(classes="ss-root"):
-        if is_mock_mode():
-            with me.box(classes="ss-demo"):
-                me.icon("science", style=me.Style(font_size=18, width=18, height=18))
-                me.text("Demo mode: placeholder media, no cloud calls, no cost.")
+        # Test Mode shows as a pill under the page title (components/header.py).
         with me.box(classes="ss-stepper"):
             story_stepper(
                 steps=_stepper_steps(story), on_select=on_step_select, key="ss-steps"
@@ -3290,11 +3287,14 @@ def _fix_preview(story: Story, plan: story_fix.FixPlan, busy: bool) -> None:
                     )
                     me.text(step.label, style=me.Style(font_size=14))
         paid = any(step.paid for step in steps)
+        testing = test_mode.is_on_for(me.state(AppState).user_email)
         cost = (
-            "Steps marked with a coin generate new media and cost money."
-            if paid and not is_mock_mode()
-            else "Demo mode: no cloud calls, no cost."
-            if is_mock_mode()
+            "Test Mode: nothing costs money."
+            if testing and is_mock_mode()
+            else "Test Mode is on, so steps marked with a coin won't run."
+            if testing and paid
+            else "Steps marked with a coin generate new media and cost money."
+            if paid
             else "Only cuts what is already made. No new generation."
         )
         me.text(

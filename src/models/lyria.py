@@ -55,6 +55,9 @@ def generate_music_with_lyria(
         Exception: For other unexpected errors during the process.
 
     """
+    from common import test_mode  # pylint: disable=import-outside-toplevel
+
+    test_mode.guard("a Lyria call")
     billing_units = {
         "sample_count": sample_count,
         "has_lyrics": bool(lyrics),
