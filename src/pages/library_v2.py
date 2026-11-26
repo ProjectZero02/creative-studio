@@ -107,6 +107,24 @@ def _passes(item: MediaItem, type_filters: list[str], error_filter: str) -> bool
     return not (error_filter == "only_errors" and not has_error)
 
 
+def _has_media(item: MediaItem) -> bool:
+    """False for a failed generation that left nothing to show."""
+    return bool(
+        item.gcsuri
+        or item.gcs_uris
+        or getattr(item, "thumbnail_uri", None)
+        or item.storyboard_id,
+    )
+
+
+def _visible(items: list[MediaItem], error_filter: str) -> list[MediaItem]:
+    """Failed generations with no media only show under Only Errors, so a
+    Library holding nothing else counts as empty."""
+    if error_filter == "only_errors":
+        return items
+    return [it for it in items if _has_media(it)]
+
+
 def _when(item: MediaItem) -> float:
     ts = item.timestamp
     if isinstance(ts, str):
@@ -123,7 +141,7 @@ def _marked_items(pagestate: PageState, view: str | None = None) -> list[MediaIt
     ids = marks_store.ids_for(_marks(pagestate), view or pagestate.mark_view)[:150]
     items = [it for it in (get_media_item_by_id(i) for i in ids) if it]
     items = [it for it in items if _passes(it, pagestate.type_filters, pagestate.error_filter)]
-    return sorted(items, key=_when, reverse=True)
+    return sorted(_visible(items, pagestate.error_filter), key=_when, reverse=True)
 
 
 def _starred_first(pagestate: PageState, owner: str | None) -> list[MediaItem]:
@@ -231,7 +249,10 @@ def _load_media(
 
     if not new_items:
         pagestate.all_items_loaded = True
-    new_items = top_items + [it for it in new_items or [] if it.id not in starred_ids]
+    new_items = _visible(
+        top_items + [it for it in new_items or [] if it.id not in starred_ids],
+        pagestate.error_filter,
+    )
     if new_items:
         existing_items = []
         if pagestate.media_items_json and pagestate.media_items_json != "[]":

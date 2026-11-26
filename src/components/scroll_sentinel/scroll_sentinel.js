@@ -72,10 +72,8 @@ class ScrollSentinel extends LitElement {
     if (this.isLoading) {
       return html`<p>${this.loadingLabel || "Loading..."}</p>`;
     }
-    if (this.allItemsLoaded) {
-      return html`<p>${this.endLabel || "End of list"}</p>`;
-    }
-    return html``; // Otherwise, be invisible
+    // At the end of the list there is nothing to say: stay invisible.
+    return html``;
   }
 }
 
