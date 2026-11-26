@@ -114,8 +114,28 @@ const NEXT_PART = {
   voice: [],
 };
 // Samples shown inside the type tiles on hover (animated webp for video and film).
-// Bar heights (0-1) of the sound equaliser shown on the Music and Voice tiles.
+// Bar heights (0-1) of the loading placeholder for music and voice results.
 const EQ = [0.35, 0.6, 0.9, 0.55, 1, 0.7, 0.45, 0.8, 0.5, 0.3, 0.65, 0.4];
+// Music tile: a spectrum of thin lines rising from one baseline, each at its
+// own speed (like a "now playing" equaliser). [peak 0-1, period ms, delay ms]
+const MUSIC_BARS = [
+  [0.45, 820, -120], [0.7, 640, -480], [0.55, 900, -260], [0.9, 700, -90], [0.65, 560, -400],
+  [1, 760, -620], [0.75, 610, -180], [0.85, 880, -540], [0.6, 520, -300], [0.95, 740, -40],
+  [0.7, 660, -700], [0.8, 590, -220], [0.5, 840, -460], [0.65, 700, -330], [0.4, 600, -150],
+];
+// Voice tile: three thin flowing waves, like a voice assistant speaking.
+// Each path is a sine wave longer than the 200-wide view; sliding it left by
+// one period loops seamlessly. [period, amplitude, seconds, class]
+const VOICE_WAVES = [[80, 7, 2.6, 'w3'], [56, 10, 1.9, 'w2'], [64, 14, 1.4, 'w1']];
+const sineWave = (period, amp) => {
+  let d = 'M0 20';
+  for (let x = 0, up = true; x < 200 + 2 * period; x += period / 2, up = !up) {
+    d += ` Q${x + period / 4} ${up ? 20 - 2 * amp : 20 + 2 * amp} ${x + period / 2} 20`;
+  }
+  return d;
+};
+const VOICE_SVG = html`<svg viewBox="0 0 200 40" preserveAspectRatio="none">${VOICE_WAVES.map(([p, a, s, c]) =>
+  svgPart`<g class="breathe ${c}"><path class="flow" d=${sineWave(p, a)} style="--p:${-p}px;--s:${s}s"></path></g>`)}</svg>`;
 // The five types use the side menu's stroke icons (chat_nav.js), so a type
 // looks the same in the menu, on its card, in the mode pill and in the path.
 const KIND_STROKE = {
@@ -1748,13 +1768,13 @@ class GmHomeChat extends LitElement {
       ${list.map((k) => {
         const m = CARD_MEDIA[k.kind] || {};
         const on = mode === k.kind;
-        const sound = k.kind === 'music' || k.kind === 'voice';
         return html`<button type="button" class="card k-${k.kind} ${on ? 'on' : ''}" aria-pressed=${on ? 'true' : 'false'}
             @click=${() => (on ? this._clearMode() : this._setLock(k.kind))}>
           <span class="card-media" aria-hidden="true">
             <span class="still" style="background-image:url('${m.still || ''}')"></span>
             ${m.moving ? html`<span class="moving" style="background-image:url('${m.moving}')"></span>` : nothing}
-            ${sound ? html`<span class="eq">${EQ.map((h) => html`<i style="--h:${h}"></i>`)}</span>` : nothing}
+            ${k.kind === 'music' ? html`<span class="viz eq">${MUSIC_BARS.map(([h, d, o]) => html`<i style="--h:${h};--d:${d}ms;--o:${o}ms"></i>`)}</span>` : nothing}
+            ${k.kind === 'voice' ? html`<span class="viz wave">${VOICE_SVG}</span>` : nothing}
           </span>
           <span class="card-text">
             <span class="card-name">${svg(kindIcon(k.kind), 18)}${k.label}${k.kind === 'film' ? svg(ICON.open, 14) : nothing}</span>
@@ -2124,11 +2144,28 @@ class GmHomeChat extends LitElement {
     .card:hover .moving, .card:focus-visible .moving, .card.on .moving { opacity: 1; }
     .card.on { box-shadow: 0 0 0 2px var(--sys-primary, #8ab4f8), 0 14px 32px rgba(0, 0, 0, 0.24); }
     .card:focus-visible { outline: 2px solid var(--sys-primary, #8ab4f8); outline-offset: 3px; }
-    .eq { display: flex; align-items: center; justify-content: center; gap: 3px; padding: 0 22% 34px; opacity: 0; }
-    .eq i { flex: 1; height: calc(var(--h) * 46%); border-radius: 3px; background: rgba(255, 255, 255, 0.85); transform: scaleY(0.4); }
-    .card:hover .eq, .card:focus-visible .eq, .card.on .eq { opacity: 1; }
-    .card:hover .eq i, .card:focus-visible .eq i, .card.on .eq i { animation: sound 700ms ease-in-out infinite alternate; }
-    .eq i:nth-child(3n) { animation-delay: -250ms; } .eq i:nth-child(3n+1) { animation-delay: -500ms; }
+    /* Sound tiles, each its own thin-line style (Live keeps its five centred bars):
+       Music = a spectrum rising from one baseline, Voice = flowing waves. */
+    .viz { opacity: 0; }
+    .card:hover .viz, .card:focus-visible .viz, .card.on .viz { opacity: 1; }
+    .eq { display: flex; align-items: flex-end; justify-content: center; gap: 4px; padding: 18px 14% 50px; }
+    .eq i { flex: none; width: 2px; height: calc(var(--h) * 100%); border-radius: 2px; background: rgba(255, 255, 255, 0.92);
+      transform-origin: 50% 100%; transform: scaleY(0.2); }
+    .card:hover .eq i, .card:focus-visible .eq i, .card.on .eq i { animation: eq-rise var(--d) ease-in-out var(--o) infinite alternate; }
+    @keyframes eq-rise { from { transform: scaleY(0.15); } to { transform: scaleY(1); } }
+    .wave { padding: 14px 6% 46px; -webkit-mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
+      mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent); }
+    .wave svg { display: block; width: 100%; height: 100%; overflow: hidden; }
+    .wave path { fill: none; stroke-width: 2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+    .wave .w1 path { stroke: rgba(255, 255, 255, 0.95); }
+    .wave .w2 path { stroke: #8ab4f8; opacity: 0.75; }
+    .wave .w3 path { stroke: #c58af9; opacity: 0.6; }
+    .wave .breathe { transform-box: view-box; transform-origin: 50% 50%; transform: scaleY(0.25); }
+    .card:hover .wave .flow, .card:focus-visible .wave .flow, .card.on .wave .flow { animation: wave-flow var(--s) linear infinite; }
+    .card:hover .wave .breathe, .card:focus-visible .wave .breathe, .card.on .wave .breathe { animation: wave-breathe 2.4s ease-in-out infinite; }
+    .wave .w2 { animation-delay: -0.8s !important; } .wave .w3 { animation-delay: -1.6s !important; }
+    @keyframes wave-flow { to { transform: translateX(var(--p)); } }
+    @keyframes wave-breathe { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
     .card-text { position: absolute; inset: auto 0 0 0; display: flex; flex-direction: column; gap: 1px; padding: 12px 14px; }
     .card-name { display: inline-flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
     .card-name svg { fill: currentColor; flex: none; }
@@ -2190,7 +2227,8 @@ class GmHomeChat extends LitElement {
     svg.stroke, svg.stroke path { fill: none !important; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
     @media (prefers-reduced-motion: reduce) {
       .enh, .slot > .send, .slot > .live, .hint, .card, .card-media > span { transition: none !important; }
-      .link i, .eq i, .pstep { animation: none !important; }
+      .link i, .eq i, .wave .flow, .wave .breathe, .pstep, .g-key { animation: none !important; }
+      .eq i { transform: scaleY(0.6); } .wave .breathe { transform: scaleY(0.7); }
     }
 
     /* The chat's thinking: live steps, folded to one line when done. */
