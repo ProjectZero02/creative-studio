@@ -22,7 +22,7 @@
  * A menu with a single option renders as a static chip (nothing to choose).
  *
  * Keyboard: Enter/Space/ArrowDown opens, arrows move, Home/End jump,
- * Enter selects, Escape or Tab closes and returns focus to the chip.
+ * typing letters jumps to the matching option, Enter selects, Escape or Tab closes and returns focus to the chip.
  * The chip's accessible name is "<label>: <value>", so screen readers hear
  * what the setting is even though only the value is shown.
  */
@@ -186,7 +186,46 @@ class GmChipMenu extends LitElement {
     if (['ArrowDown', 'ArrowUp'].includes(e.key) && !this._open) {
       e.preventDefault();
       this._toggleOpen();
+      return;
     }
+    // A letter on the closed chip opens the menu at the first match.
+    if (!this._open && this._isTypeKey(e)) {
+      const cur = this._opts.findIndex((o) => String(o.value) === String(this.value));
+      this._active = cur >= 0 ? cur : 0;
+      const hit = this._typeahead(e.key);
+      e.preventDefault();
+      this._toggleOpen();
+      if (hit >= 0) this._active = hit;
+    }
+  }
+
+  _isTypeKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.key.length !== 1) return false;
+    // Space selects, unless it is part of a word being typed ("New Y…").
+    return e.key !== ' ' || (Date.now() - (this._typedAt || 0) < 700 && !!this._typed);
+  }
+
+  /**
+   * Type to jump, like a native select: "f" goes to the next option starting
+   * with F (pressing it again moves on through the F's), and "fre" typed
+   * quickly goes to "French". Case and accents are ignored.
+   */
+  _typeahead(key) {
+    const opts = this._opts;
+    const n = opts.length;
+    const fold = (s) => String(s ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+    const c = fold(key);
+    const now = Date.now();
+    this._typed = now - (this._typedAt || 0) < 700 ? (this._typed || '') + c : c;
+    this._typedAt = now;
+    const repeat = [...this._typed].every((x) => x === c);
+    const prefix = repeat ? c : this._typed;
+    const start = repeat ? this._active + 1 : this._active;
+    for (let k = 0; k < n; k++) {
+      const i = (start + k) % n;
+      if (fold(opts[i].label ?? opts[i].value).startsWith(prefix)) return i;
+    }
+    return -1;
   }
 
   _onListKey(e) {
@@ -207,11 +246,17 @@ class GmChipMenu extends LitElement {
       case 'Tab':
         return this._close(false);
       case 'Enter':
-      case ' ':
         e.preventDefault();
         return this._select(this._opts[this._active]);
-      default:
-        return undefined;
+      default: {
+        if (!this._isTypeKey(e)) {
+          if (e.key === ' ') { e.preventDefault(); return this._select(this._opts[this._active]); }
+          return undefined;
+        }
+        e.preventDefault();
+        const hit = this._typeahead(e.key);
+        return hit >= 0 ? move(hit) : undefined;
+      }
     }
   }
 
@@ -366,8 +411,20 @@ class GmChipMenu extends LitElement {
       color: var(--sys-on-surface, #15171c);
       box-shadow: var(--gm-card-shadow-hover, 0 8px 24px rgba(0, 0, 0, 0.14));
       animation: pop 160ms cubic-bezier(0.2, 0, 0, 1);
-      scrollbar-width: thin;
-      scrollbar-color: var(--gm-scroll-thumb, rgba(0, 0, 0, 0.2)) transparent;
+    }
+    /* A slim rounded scrollbar with no arrow buttons (Windows draws arrows on
+       the "thin" one, and they stick out of the rounded corners). The track
+       is kept clear of the corners. */
+    .menu::-webkit-scrollbar { width: 10px; }
+    .menu::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    .menu::-webkit-scrollbar-track { background: transparent; margin-block: 12px; }
+    .menu::-webkit-scrollbar-thumb {
+      border: 3px solid transparent;
+      border-radius: 999px;
+      background: var(--gm-scroll-thumb, rgba(127, 127, 127, 0.35)) padding-box;
+    }
+    @supports not selector(::-webkit-scrollbar) {
+      .menu { scrollbar-width: thin; scrollbar-color: var(--gm-scroll-thumb, rgba(127, 127, 127, 0.35)) transparent; }
     }
     .menu-title {
       padding: 6px 10px 8px;

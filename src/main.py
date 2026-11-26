@@ -141,7 +141,7 @@ from common.http_security import (
     resolve_correlation_id,
     should_send_hsts,
 )
-from common import mock_generation
+from common import mock_generation, test_mode
 from common.prompt_template_service import PromptTemplate
 from common.user_store import bootstrap_admin
 from common.utils import create_display_url, https_url_to_gcs_uri
@@ -829,15 +829,19 @@ for _route, _engine in LEGACY_ENGINE_FOR_ROUTE.items():
         include_in_schema=False,
     )
 
-# Mock generation (local/dev only): a short chime for the Voice and Music pages.
-if mock_generation.mock_enabled():
+# Placeholder results: a short chime for the Voice and Music pages. Always
+# served, because Test Mode can switch on per admin while the app runs.
+@app.get(mock_generation.MOCK_AUDIO_ROUTE, include_in_schema=False)
+def mock_audio(n: int = 0) -> Response:
+    return Response(
+        content=mock_generation.placeholder_wav(index=n % 4),
+        media_type="audio/wav",
+    )
 
-    @app.get(mock_generation.MOCK_AUDIO_ROUTE, include_in_schema=False)
-    def mock_audio(n: int = 0) -> Response:
-        return Response(
-            content=mock_generation.placeholder_wav(index=n),
-            media_type="audio/wav",
-        )
+
+# Test Mode backstop: paid Google client calls made for an admin in Test
+# Mode are refused before they leave the server.
+test_mode.install_guard()
 
 # Story Studio demo mode writes placeholder media to .local/story_media.
 # Real mode stores media in GCS and never mounts this.

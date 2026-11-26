@@ -17,9 +17,11 @@ One Firestore document (``app_settings/global``) when deployed, a JSON file
 under ``.local/`` in demo mode. Reads are cached for a short time so the side
 menu does not hit Firestore on every page.
 
-Today it holds one switch: ``show_demos`` (Fashion, Interiors, Product 360
-and Brand kit in the side menu), off by default. The demo pages still open
-from their links when it is off.
+It holds ``show_demos`` (Fashion, Interiors, Product 360 and Brand kit in the
+side menu), off by default; the demo pages still open from their links when
+it is off. And ``test_mode_users``: the admins who have Test Mode on (see
+common/test_mode.py), read with :func:`read_fresh` so it never waits out
+the cache.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-DEFAULTS: dict = {"show_demos": False}
+DEFAULTS: dict = {"show_demos": False, "test_mode_users": []}
 # Saved switches older than this version are dropped once, so a demo switch
 # left on while testing goes back to off (owner, 2026-11-23). Bump it to reset
 # every saved setting again.
@@ -94,6 +96,14 @@ def get_all() -> dict:
     return dict(values)
 
 
+def read_fresh() -> dict:
+    """Every setting read now, skipping the cache. Raises if the read fails."""
+    stored = _read()
+    if stored.get(VERSION_KEY, 0) < VERSION:
+        stored = {}
+    return {**DEFAULTS, **{k: v for k, v in stored.items() if k in DEFAULTS}}
+
+
 def get(name: str):
     return get_all().get(name, DEFAULTS.get(name))
 
@@ -104,7 +114,11 @@ def set_value(name: str, value) -> None:
     if name not in DEFAULTS:
         raise KeyError(name)
     if _local():
-        values = {**get_all(), name: value, VERSION_KEY: VERSION}
+        try:
+            current = read_fresh()
+        except Exception:  # pylint: disable=broad-except
+            current = get_all()
+        values = {**current, name: value, VERSION_KEY: VERSION}
         os.makedirs(os.path.dirname(LOCAL_PATH), exist_ok=True)
         with open(LOCAL_PATH, "w", encoding="utf-8") as f:
             json.dump(values, f)

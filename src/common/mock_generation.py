@@ -13,8 +13,9 @@
 # limitations under the License.
 """Dev-only fake generation, for checking the UI without Google Cloud.
 
-Turn on with GENMEDIA_MOCK_GENERATION=true. It only works when APP_ENV is
-"local" or "dev", so it can never switch on in a deployed studio. The fake
+Turn on for the whole server with GENMEDIA_MOCK_GENERATION=true, which only
+works when APP_ENV is "local" or "dev". In a deployed studio it is on only
+for admins who turned on Test Mode for themselves (common/test_mode.py). The fake
 results are placeholder pictures, a public sample clip and a short chime
 (served at MOCK_AUDIO_ROUTE); nothing is saved.
 A prompt containing the word "fail" raises an error, to show the error state.
@@ -35,11 +36,21 @@ _SAMPLE_VIDEO = (
 )
 
 
-def mock_enabled() -> bool:
+def env_mock_enabled() -> bool:
     """True only for local/dev runs with GENMEDIA_MOCK_GENERATION=true."""
     if os.environ.get("GENMEDIA_MOCK_GENERATION", "").lower() not in ("1", "true"):
         return False
     return os.environ.get("APP_ENV", "").lower() in ("local", "dev")
+
+
+def mock_enabled() -> bool:
+    """Use placeholder results: a local mock run, or Test Mode is on for the
+    person this work is for (see common/test_mode.py)."""
+    if env_mock_enabled():
+        return True
+    from common import test_mode  # pylint: disable=import-outside-toplevel
+
+    return test_mode.user_on()
 
 
 def _ratio(aspect: str) -> tuple[int, int]:

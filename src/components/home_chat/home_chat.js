@@ -114,8 +114,28 @@ const NEXT_PART = {
   voice: [],
 };
 // Samples shown inside the type tiles on hover (animated webp for video and film).
-// Bar heights (0-1) of the sound equaliser shown on the Music and Voice tiles.
+// Bar heights (0-1) of the loading placeholder for music and voice results.
 const EQ = [0.35, 0.6, 0.9, 0.55, 1, 0.7, 0.45, 0.8, 0.5, 0.3, 0.65, 0.4];
+// Music tile: a spectrum of thin lines rising from one baseline, each at its
+// own speed (like a "now playing" equaliser). [peak 0-1, period ms, delay ms]
+const MUSIC_BARS = [
+  [0.45, 820, -120], [0.7, 640, -480], [0.55, 900, -260], [0.9, 700, -90], [0.65, 560, -400],
+  [1, 760, -620], [0.75, 610, -180], [0.85, 880, -540], [0.6, 520, -300], [0.95, 740, -40],
+  [0.7, 660, -700], [0.8, 590, -220], [0.5, 840, -460], [0.65, 700, -330], [0.4, 600, -150],
+];
+// Voice tile: three thin flowing waves, like a voice assistant speaking.
+// Each path is a sine wave longer than the 200-wide view; sliding it left by
+// one period loops seamlessly. [period, amplitude, seconds, class]
+const VOICE_WAVES = [[80, 7, 2.6, 'w3'], [56, 10, 1.9, 'w2'], [64, 14, 1.4, 'w1']];
+const sineWave = (period, amp) => {
+  let d = 'M0 20';
+  for (let x = 0, up = true; x < 200 + 2 * period; x += period / 2, up = !up) {
+    d += ` Q${x + period / 4} ${up ? 20 - 2 * amp : 20 + 2 * amp} ${x + period / 2} 20`;
+  }
+  return d;
+};
+const VOICE_SVG = html`<svg viewBox="0 0 200 40" preserveAspectRatio="none">${VOICE_WAVES.map(([p, a, s, c]) =>
+  svgPart`<g class="breathe ${c}"><path class="flow" d=${sineWave(p, a)} style="--p:${-p}px;--s:${s}s"></path></g>`)}</svg>`;
 // The five types use the side menu's stroke icons (chat_nav.js), so a type
 // looks the same in the menu, on its card, in the mode pill and in the path.
 const KIND_STROKE = {
@@ -182,6 +202,7 @@ class GmHomeChat extends LitElement {
     _adv: { state: true },
     _thinking: { state: true },
     _sug: { state: true },
+    _armed: { state: true },
     panelOpen: { type: Boolean, reflect: true, attribute: 'panel' },
     // Mirrors body.dark-theme, so the headline repaints on a theme switch
     // (gradient text does not always repaint when only a variable changes).
@@ -963,7 +984,36 @@ class GmHomeChat extends LitElement {
     else if (e.key === 'Home') next = 0;
     else if (e.key === 'End') next = items.length - 1;
     else if (e.key === 'Tab') { this._menu = null; return; }
-    if (next >= 0) { e.preventDefault(); items[next].focus(); }
+    else if (this._isTypeKey(e)) { e.preventDefault(); next = this._typeahead(e.key, items.map((b) => b.dataset.l || b.textContent), at); }
+    if (next >= 0) { e.preventDefault(); items[next].focus(); items[next].scrollIntoView({ block: 'nearest' }); }
+  }
+
+  _isTypeKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.key.length !== 1) return false;
+    // Space presses the item, unless it is part of a word being typed ("New Y…").
+    return e.key !== ' ' || (Date.now() - (this._typedAt || 0) < 700 && !!this._typed);
+  }
+
+  /**
+   * Type to jump, like a native select: "f" goes to the next item starting
+   * with F (again moves on through the F's), "fre" typed quickly goes to
+   * "French". Case and accents are ignored. Returns the index or -1.
+   */
+  _typeahead(key, labels, at) {
+    const fold = (s) => String(s ?? '').trim().normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+    const c = fold(key) || key;
+    const now = Date.now();
+    this._typed = now - (this._typedAt || 0) < 700 ? (this._typed || '') + c : c;
+    this._typedAt = now;
+    const repeat = [...this._typed].every((x) => x === c);
+    const prefix = repeat ? c : this._typed;
+    const start = Math.max(0, repeat ? at + 1 : at);
+    const n = labels.length;
+    for (let k = 0; k < n; k++) {
+      const i = (start + k) % n;
+      if (fold(labels[i]).startsWith(prefix)) return i;
+    }
+    return -1;
   }
 
   _popover() {
@@ -973,7 +1023,7 @@ class GmHomeChat extends LitElement {
     return html`<div class="pop ${m.up ? 'up' : ''}" role="menu" aria-label=${m.title} style=${pos} @keydown=${this._menuKey}>
       ${m.title ? html`<div class="pop-title">${m.title}</div>` : nothing}
       ${m.items.map((it) => (it.sep ? html`<div class="pop-sep" role="separator"></div>` : html`
-        <button type="button" role=${it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked=${it.checked === undefined ? nothing : String(!!it.checked)}
+        <button type="button" data-l=${typeof it.label === 'string' ? it.label : nothing} role=${it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked=${it.checked === undefined ? nothing : String(!!it.checked)}
           ?disabled=${!!it.disabled} @click=${() => { const keep = it.keep; if (!keep) this._menu = null; it.run && it.run(); }}>
           ${it.icon ? svg(it.icon, 18) : nothing}
           <span class="pop-l">${it.label}${it.hint ? html`<small>${it.hint}</small>` : nothing}</span>
@@ -1416,14 +1466,20 @@ class GmHomeChat extends LitElement {
     // Read out the whole word being completed ("cinematic"), not only its tail.
     const word = this._sug && !/^\s/.test(this._sug) ? ((this._ta?.value || '').match(/[^\s,]*$/) || [''])[0] : '';
     const sugText = this._sug ? (S.suggestion || 'Suggestion: {text}. Press Tab to accept.').replace('{text}', (word + this._sug).trim()) : '';
+    // Once the person is in the box, the example is drawn in the ghost layer
+    // (not the placeholder) so the Tab key can sit at the end of it.
+    const exGhost = this._armed && empty && !!example;
+    const tabKey = html`<kbd class="g-key">Tab</kbd>`;
     return html`
       <div class="box ${this._busy ? 'busy' : ''} ${this._dragOver ? 'drop' : ''}"
         @dragover=${this._onDragOver} @dragleave=${this._onDragLeave} @drop=${this._onDrop}>
         ${this._attachments()}
         <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change=${this._onFiles}>
         <div class="ta-wrap">
-          <div class="gh" aria-hidden="true"><span class="g-typed">${this._ta ? this._ta.value : ''}</span><span class="g-sug">${this._sug}</span></div>
-          <textarea rows="1" @paste=${this._onPaste} .placeholder=${holder}
+          <div class="gh" aria-hidden="true">${exGhost
+            ? html`<span class="g-ex">${example}</span>${tabKey}`
+            : html`<span class="g-typed">${this._ta ? this._ta.value : ''}</span><span class="g-sug">${this._sug}</span>${this._sug ? tabKey : nothing}`}</div>
+          <textarea rows="1" @paste=${this._onPaste} .placeholder=${exGhost ? '' : holder}
             aria-label=${S.placeholder || 'Ask me anything'} aria-describedby="sug-live"
             @keydown=${this._onKey} @input=${this._onInput} @scroll=${this._syncGhost}
             @pointerdown=${() => { this._armed = true; }}
@@ -1433,9 +1489,8 @@ class GmHomeChat extends LitElement {
         <div class="row">
           <button class="icon plus ${this._advChanged(mode) ? 'dot-on' : ''}" type="button" data-menu="plus" aria-haspopup="menu"
             @click=${(e) => this._plusMenu(e)} aria-label=${S.more || 'Add files and more'} title=${S.more || 'Add files and more'}>${svg(ICON.plus, 22)}</button>
-          <span class="hint ${(empty && example) || this._sug ? 'shown' : ''}" aria-hidden="true">
-            <kbd>Tab</kbd><span>${this._sug ? (S.tab_accept || 'accept') : (S.tab_example || 'use example')}</span>
-            ${!this._sug && how ? html`<span class="how">${how}</span>` : nothing}
+          <span class="hint ${empty && how ? 'shown' : ''}" aria-hidden="true">
+            <span class="hl">${mode ? (S.format_label || 'Format:') : (S.hint_label || 'Hint:')}</span><span class="how">${how}</span>
           </span>
           <span class="grow"></span>
           <div class="tools">
@@ -1713,13 +1768,13 @@ class GmHomeChat extends LitElement {
       ${list.map((k) => {
         const m = CARD_MEDIA[k.kind] || {};
         const on = mode === k.kind;
-        const sound = k.kind === 'music' || k.kind === 'voice';
         return html`<button type="button" class="card k-${k.kind} ${on ? 'on' : ''}" aria-pressed=${on ? 'true' : 'false'}
             @click=${() => (on ? this._clearMode() : this._setLock(k.kind))}>
           <span class="card-media" aria-hidden="true">
             <span class="still" style="background-image:url('${m.still || ''}')"></span>
             ${m.moving ? html`<span class="moving" style="background-image:url('${m.moving}')"></span>` : nothing}
-            ${sound ? html`<span class="eq">${EQ.map((h) => html`<i style="--h:${h}"></i>`)}</span>` : nothing}
+            ${k.kind === 'music' ? html`<span class="viz eq">${MUSIC_BARS.map(([h, d, o]) => html`<i style="--h:${h};--d:${d}ms;--o:${o}ms"></i>`)}</span>` : nothing}
+            ${k.kind === 'voice' ? html`<span class="viz wave">${VOICE_SVG}</span>` : nothing}
           </span>
           <span class="card-text">
             <span class="card-name">${svg(kindIcon(k.kind), 18)}${k.label}${k.kind === 'film' ? svg(ICON.open, 14) : nothing}</span>
@@ -2010,8 +2065,15 @@ class GmHomeChat extends LitElement {
       position: fixed; z-index: 60; max-height: min(360px, 60vh); overflow-y: auto; padding: 6px; border-radius: 16px;
       background: var(--gm-panel, #1d1f25); color: var(--sys-on-surface, #e8eaed);
       box-shadow: 0 16px 44px rgba(0, 0, 0, 0.32), 0 0 0 1px color-mix(in srgb, var(--sys-on-surface, #e8eaed) 8%, transparent);
-      animation: pop-in 140ms ease-out; scrollbar-width: thin;
+      animation: pop-in 140ms ease-out;
     }
+    /* Slim rounded scrollbars with no arrow buttons, kept clear of rounded corners. */
+    .pop::-webkit-scrollbar, .jobs-list::-webkit-scrollbar { width: 10px; }
+    .pop::-webkit-scrollbar-button, .jobs-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    .pop::-webkit-scrollbar-track, .jobs-list::-webkit-scrollbar-track { background: transparent; margin-block: 12px; }
+    .pop::-webkit-scrollbar-thumb, .jobs-list::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px;
+      background: var(--gm-scroll-thumb, rgba(127, 127, 127, 0.35)) padding-box; }
+    @supports not selector(::-webkit-scrollbar) { .pop, .jobs-list { scrollbar-width: thin; } }
     .pop.up { animation-name: pop-up; }
     @keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
     @keyframes pop-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -2082,11 +2144,28 @@ class GmHomeChat extends LitElement {
     .card:hover .moving, .card:focus-visible .moving, .card.on .moving { opacity: 1; }
     .card.on { box-shadow: 0 0 0 2px var(--sys-primary, #8ab4f8), 0 14px 32px rgba(0, 0, 0, 0.24); }
     .card:focus-visible { outline: 2px solid var(--sys-primary, #8ab4f8); outline-offset: 3px; }
-    .eq { display: flex; align-items: center; justify-content: center; gap: 3px; padding: 0 22% 34px; opacity: 0; }
-    .eq i { flex: 1; height: calc(var(--h) * 46%); border-radius: 3px; background: rgba(255, 255, 255, 0.85); transform: scaleY(0.4); }
-    .card:hover .eq, .card:focus-visible .eq, .card.on .eq { opacity: 1; }
-    .card:hover .eq i, .card:focus-visible .eq i, .card.on .eq i { animation: sound 700ms ease-in-out infinite alternate; }
-    .eq i:nth-child(3n) { animation-delay: -250ms; } .eq i:nth-child(3n+1) { animation-delay: -500ms; }
+    /* Sound tiles, each its own thin-line style (Live keeps its five centred bars):
+       Music = a spectrum rising from one baseline, Voice = flowing waves. */
+    .viz { opacity: 0; }
+    .card:hover .viz, .card:focus-visible .viz, .card.on .viz { opacity: 1; }
+    .eq { display: flex; align-items: flex-end; justify-content: center; gap: 4px; padding: 18px 14% 50px; }
+    .eq i { flex: none; width: 2px; height: calc(var(--h) * 100%); border-radius: 2px; background: rgba(255, 255, 255, 0.92);
+      transform-origin: 50% 100%; transform: scaleY(0.2); }
+    .card:hover .eq i, .card:focus-visible .eq i, .card.on .eq i { animation: eq-rise var(--d) ease-in-out var(--o) infinite alternate; }
+    @keyframes eq-rise { from { transform: scaleY(0.15); } to { transform: scaleY(1); } }
+    .wave { padding: 14px 6% 46px; -webkit-mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
+      mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent); }
+    .wave svg { display: block; width: 100%; height: 100%; overflow: hidden; }
+    .wave path { fill: none; stroke-width: 2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+    .wave .w1 path { stroke: rgba(255, 255, 255, 0.95); }
+    .wave .w2 path { stroke: #8ab4f8; opacity: 0.75; }
+    .wave .w3 path { stroke: #c58af9; opacity: 0.6; }
+    .wave .breathe { transform-box: view-box; transform-origin: 50% 50%; transform: scaleY(0.25); }
+    .card:hover .wave .flow, .card:focus-visible .wave .flow, .card.on .wave .flow { animation: wave-flow var(--s) linear infinite; }
+    .card:hover .wave .breathe, .card:focus-visible .wave .breathe, .card.on .wave .breathe { animation: wave-breathe 2.4s ease-in-out infinite; }
+    .wave .w2 { animation-delay: -0.8s !important; } .wave .w3 { animation-delay: -1.6s !important; }
+    @keyframes wave-flow { to { transform: translateX(var(--p)); } }
+    @keyframes wave-breathe { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
     .card-text { position: absolute; inset: auto 0 0 0; display: flex; flex-direction: column; gap: 1px; padding: 12px 14px; }
     .card-name { display: inline-flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
     .card-name svg { fill: currentColor; flex: none; }
@@ -2121,15 +2200,21 @@ class GmHomeChat extends LitElement {
     .g-typed { color: transparent; }
     .g-sug { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.75; }
     .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-    /* "Tab use example · Subject · setting · light" beside the + button. */
-    .hint { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-inline-start: 4px; font-size: 12.5px;
+    /* "Hint: Say what to make…" / "Format: Subject · setting · light" beside the + button. */
+    .hint { display: inline-flex; align-items: center; gap: 5px; min-width: 0; margin-inline-start: 4px; font-size: 12.5px;
       color: var(--sys-on-surface-variant, #6b7280); opacity: 0; transform: translateY(2px); transition: opacity 180ms ease, transform 180ms ease; white-space: nowrap; overflow: hidden; }
     .hint.shown { opacity: 1; transform: none; }
-    .hint kbd { font: inherit; font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 6px; border-radius: 6px;
-      background: var(--gm-tonal, rgba(127, 127, 127, 0.14)); color: var(--sys-on-surface, #15171c);
-      box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--sys-on-surface, #e8eaed) 14%, transparent); }
+    .hint .hl { font-weight: 600; flex: none; }
     .hint .how { overflow: hidden; text-overflow: ellipsis; opacity: 0.8; }
-    .hint .how::before { content: '·'; margin-inline-end: 7px; }
+    /* The example (or suggestion) ends in a quiet Tab key, same tone as the text. */
+    .g-ex { color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9; }
+    .g-key { display: inline-block; vertical-align: 2px; margin-inline-start: 8px; padding: 0 6px; border-radius: 6px;
+      font: inherit; font-size: 11px; font-weight: 600; line-height: 18px; letter-spacing: 0.02em;
+      color: var(--sys-on-surface-variant, #6b7280); opacity: 0.9;
+      background: color-mix(in srgb, var(--sys-on-surface-variant, #6b7280) 16%, transparent);
+      animation: key-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+    .g-sug + .g-key { opacity: 0.75; }
+    @keyframes key-in { from { opacity: 0; transform: translateY(4px) scale(0.9); } }
 
     /* Enhance slides in once there is text; Live and Send share one slot. */
     .enh { transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), margin 220ms ease; }
@@ -2142,7 +2227,8 @@ class GmHomeChat extends LitElement {
     svg.stroke, svg.stroke path { fill: none !important; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
     @media (prefers-reduced-motion: reduce) {
       .enh, .slot > .send, .slot > .live, .hint, .card, .card-media > span { transition: none !important; }
-      .link i, .eq i, .pstep { animation: none !important; }
+      .link i, .eq i, .wave .flow, .wave .breathe, .pstep, .g-key { animation: none !important; }
+      .eq i { transform: scaleY(0.6); } .wave .breathe { transform: scaleY(0.7); }
     }
 
     /* The chat's thinking: live steps, folded to one line when done. */
@@ -2234,7 +2320,7 @@ class GmHomeChat extends LitElement {
     .jobs-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 18px; font-size: 15px; }
     .jobs-count { color: var(--sys-on-surface-variant, #6b7280); font-size: 13.5px; flex: 1; }
     .icon.sm { width: 36px; height: 36px; }
-    .jobs-list { list-style: none; margin: 0; padding: 4px 10px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; flex: 1; scrollbar-width: thin; }
+    .jobs-list { list-style: none; margin: 0; padding: 4px 10px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; flex: 1; }
     .pj { display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 18px; background: var(--gm-tonal, rgba(127, 127, 127, 0.08)); }
     .pj[draggable='true'] { cursor: grab; }
     .pj-media { border-radius: 12px; overflow: hidden; line-height: 0; }
@@ -2283,7 +2369,7 @@ class GmHomeChat extends LitElement {
       .wrap.empty { gap: 18px; padding-bottom: 0; }
       .box { padding: 6px; border-radius: 26px; }
       .gh, .ta-wrap textarea { font-size: 16px; padding: 10px 8px 4px; }
-      .hint .how { display: none; }
+      .hint { font-size: 12px; }
       .cards { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; padding: 2px 2px 6px; margin-inline: -2px; }
       .cards::-webkit-scrollbar { display: none; }
       /* No soft shadow in the scrolling row: it gets clipped into a grey band. */

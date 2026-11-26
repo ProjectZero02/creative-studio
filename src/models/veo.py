@@ -333,6 +333,9 @@ def send_request_to_google_api(api_endpoint, data=None):
         The response from the Google API.
 
     """
+    from common import test_mode  # pylint: disable=import-outside-toplevel
+
+    test_mode.guard("a Veo call")
     # Get access token calling API
     creds, project = google.auth.default()
     auth_req = google.auth.transport.requests.Request()
