@@ -185,3 +185,28 @@ html body .gm-not-found-actions { display: flex; gap: 10px; margin-top: 14px; fl
 html body .gm-not-found-actions .mdc-button { height: 40px; min-width: 112px; border-radius: 999px; }
 html body .gm-not-found-actions .mat-mdc-button:not(.mat-mdc-unelevated-button) { background: var(--gm-tonal, var(--sys-surface-container-high)); }
 @media (max-width: 600px) { html body .gm-not-found { margin-top: 6vh; padding: 36px 20px; } }
+
+/* Lightbox (components/lightbox_dialog): one centered panel above the side
+   menu. Page layers are z-index 1, so lift the one holding an open lightbox. */
+html body .gm-page > :has(.gm-lightbox) { z-index: 1000 !important; }
+html body .gm-lightbox { backdrop-filter: blur(2px); }
+.gm-lightbox-panel {
+  position: relative; display: flex; flex-direction: column;
+  width: min(1180px, 94vw); max-height: 90vh;
+  background: var(--sys-surface-container-low, #1b1c1f);
+  border: 1px solid var(--gm-border, rgba(255, 255, 255, 0.08));
+  border-radius: 20px; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+.gm-lightbox-body { padding: 20px 24px 24px; overflow-y: auto; min-height: 0; }
+.gm-lightbox-close { position: absolute; top: 14px; inset-inline-end: 14px; z-index: 2; }
+.gm-lightbox-close button {
+  width: 36px !important; height: 36px !important; padding: 6px !important;
+  border-radius: 999px !important; background: var(--gm-tonal, rgba(255, 255, 255, 0.08)) !important;
+  color: var(--sys-on-surface, #e3e3e3) !important;
+}
+.gm-lightbox-close button:hover { background: var(--gm-tonal-hover, rgba(255, 255, 255, 0.14)) !important; }
+.gm-lightbox-close mat-icon { font-size: 20px; width: 20px; height: 20px; }
+@media (max-width: 600px) {
+  .gm-lightbox-panel { width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; }
+  .gm-lightbox-body { padding: 60px 16px 16px; }
+}

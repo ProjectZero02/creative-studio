@@ -44,6 +44,8 @@ def page(monkeypatch: pytest.MonkeyPatch) -> lib.PageState:
     )
     monkeypatch.setattr(lib, "get_media_for_page", lambda **_kw: [])
     monkeypatch.setattr(lib.marks_store, "load", lambda _owner: lib.marks_store.empty())
+    monkeypatch.setattr(lib, "_load_projects", lambda _state: None)
+    monkeypatch.setattr(lib, "_is_admin", lambda: False)
     return state
 
 
@@ -104,7 +106,11 @@ def test_starred_items_come_first_once(starred_page: lib.PageState) -> None:
     assert _ids(starred_page) == ["b", "a", "c"]
 
 
-def test_all_users_shows_every_starred_item_first(starred_page: lib.PageState) -> None:
+def test_all_users_shows_every_starred_item_first(
+    starred_page: lib.PageState, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admins in All Users see every starred item first."""
+    monkeypatch.setattr(lib, "_is_admin", lambda: True)
     starred_page.user_filter = "all"
     list(lib._load_media(starred_page, is_filter_change=True))
     assert _ids(starred_page) == ["b", "x", "a", "c"]
@@ -129,3 +135,37 @@ def test_failed_items_without_media_hide_unless_only_errors(
     page.error_filter = "only_errors"
     list(lib._load_media(page, is_filter_change=True))
     assert _ids(page) == ["f", "s"]
+
+
+def test_all_users_is_admin_only(starred_page: lib.PageState) -> None:
+    """A non-admin asking for All Users still gets only their own items."""
+    starred_page.user_filter = "all"
+    list(lib._load_media(starred_page, is_filter_change=True))
+    assert starred_page.user_filter == "mine"
+    assert _ids(starred_page) == ["b", "a", "c"]
+
+
+def test_project_view_shows_items_from_its_chats(
+    page: lib.PageState, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project shows the Library items whose files its chats made."""
+    import services.chat_store as cs
+
+    chats = [{"id": "c1", "messages": [{"jobs": [
+        {"id": "j1", "status": "done", "display_url": "/media/b/in.png"},
+    ]}]}]
+    fake = type("S", (), {
+        "get_project": lambda self, pid, owner: {"id": pid} if pid == "p1" else None,
+        "list_chats": lambda self, owner, pid=None: chats,
+    })()
+    monkeypatch.setattr(cs, "get_store", lambda: fake)
+    inside = _item("in", "me@example.com", "2026-11-02T00:00:00")
+    inside.gcsuri = "gs://b/in.png"
+    outside = _item("out", "me@example.com", "2026-11-03T00:00:00")
+    monkeypatch.setattr(lib, "get_media_for_page", lambda **kw: [outside, inside])
+    page.mark_view = "p:p1"
+    list(lib._load_media(page, is_filter_change=True))
+    assert _ids(page) == ["in"]
+    page.mark_view = "p:someone-elses"
+    list(lib._load_media(page, is_filter_change=True))
+    assert _ids(page) == []
