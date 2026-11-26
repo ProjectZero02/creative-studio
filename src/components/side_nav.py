@@ -39,7 +39,7 @@ DEMO_GROUP = "workflows"
 # Studio pages: off the menu (Home's chat and tiles open them).
 HIDDEN_GROUPS = ("foundation",)
 # Drawn by <gm-chat-nav> instead of as plain items.
-CHAT_NAV_ROUTES = ("/home", "/library_v2")
+CHAT_NAV_ROUTES = ("/home", "/library")
 
 
 def _tooltip_side() -> str:
@@ -51,7 +51,6 @@ def _tooltip_side() -> str:
 _PAGE_ALIASES = {
     "gemini_image_generation": "nano_banana",
     "interior_design_v2": "interior_design",
-    "library": "library_v2",
     "object_rotation": "object_rotation",
 }
 

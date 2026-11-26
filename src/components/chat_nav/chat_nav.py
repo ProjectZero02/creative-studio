@@ -25,7 +25,7 @@ from state.state import AppState
 _STRINGS = {
     "nav": ("chatnav.nav", "Chats"),
     "new_chat": ("chatnav.new_chat", "New chat"),
-    "library": ("nav.library_v2", "Library"),
+    "library": ("nav.library", "Library"),
     "create": ("chatnav.create", "Create"),
     "kind_image": ("home.mode.image.label", "Image"),
     "kind_video": ("home.mode.video.label", "Video"),
@@ -69,7 +69,7 @@ def strings() -> dict:
 
 def on_chat_nav(e: me.WebEvent):
     """Open a page the side menu or project page asked for (/home?chat=...,
-    /project?id=..., /library_v2)."""
+    /project?id=..., /library)."""
     value = e.value or {}
     url = str(value.get("url") or "/home")
     if not url.startswith("/") or url.startswith("//"):

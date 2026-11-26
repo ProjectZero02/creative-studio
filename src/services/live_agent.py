@@ -76,7 +76,7 @@ PAGES = {
     "music": "/lyria",
     "voice": "/voice",
     "story": "/story",
-    "library": "/library_v2",
+    "library": "/library",
 }
 JOB_PAGE = {
     "image": "/nano-banana",

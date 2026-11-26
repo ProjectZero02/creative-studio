@@ -1481,7 +1481,7 @@ class GmHomeChat extends LitElement {
       const p = j.params || {};
       return p.story_id ? `/story?id=${encodeURIComponent(p.story_id)}&step=${encodeURIComponent(p.story_step || 'scenario')}` : '/story';
     }
-    return '/library_v2';
+    return '/library';
   }
 
   _openStudio(e, href) {

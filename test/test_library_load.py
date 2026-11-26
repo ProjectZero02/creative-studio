@@ -63,3 +63,53 @@ def test_load_more_still_shows_loading(page: lib.PageState) -> None:
     """Scrolling for more keeps its interim "Loading..." render."""
     renders = _loading_at_each_render(lib._load_media(page), page)
     assert renders == [True, False]
+
+
+def _item(item_id: str, owner: str, ts: str) -> lib.MediaItem:
+    return lib.MediaItem(id=item_id, user_email=owner, timestamp=ts, mime_type="image/png")
+
+
+def _ids(state: lib.PageState) -> list[str]:
+    import json
+
+    return [d["id"] for d in json.loads(state.media_items_json)]
+
+
+@pytest.fixture
+def starred_page(page: lib.PageState, monkeypatch: pytest.MonkeyPatch) -> lib.PageState:
+    """Newest-first pages of a, b, c; b (mine) and x (someone else) are starred."""
+    items = {
+        "a": _item("a", "me@example.com", "2026-11-03T00:00:00"),
+        "b": _item("b", "me@example.com", "2026-11-02T00:00:00"),
+        "c": _item("c", "me@example.com", "2026-11-01T00:00:00"),
+        "x": _item("x", "other@example.com", "2026-10-01T00:00:00"),
+    }
+    monkeypatch.setattr(
+        lib,
+        "get_media_for_page",
+        lambda **kw: [items[i] for i in "abc"] if kw["page"] == 1 else [],
+    )
+    monkeypatch.setattr(lib, "get_media_item_by_id", items.get)
+    marks = lib.marks_store.empty("me@example.com")
+    marks["starred"] = ["b", "x"]
+    page.marks_json = lib.json.dumps(marks)
+    return page
+
+
+def test_starred_items_come_first_once(starred_page: lib.PageState) -> None:
+    """Mine Only: my starred item leads and is not repeated; others' are left out."""
+    list(lib._load_media(starred_page, is_filter_change=True))
+    assert _ids(starred_page) == ["b", "a", "c"]
+
+
+def test_all_users_shows_every_starred_item_first(starred_page: lib.PageState) -> None:
+    starred_page.user_filter = "all"
+    list(lib._load_media(starred_page, is_filter_change=True))
+    assert _ids(starred_page) == ["b", "x", "a", "c"]
+
+
+def test_later_pages_do_not_repeat_starred(starred_page: lib.PageState) -> None:
+    list(lib._load_media(starred_page, is_filter_change=True))
+    starred_page.current_page = 2
+    list(lib._load_media(starred_page))
+    assert _ids(starred_page) == ["b", "a", "c"]

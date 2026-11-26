@@ -42,7 +42,7 @@ def test_studios_and_chat_routes_leave_the_plain_list():
     assert {"/nano-banana", "/veo", "/story", "/voice"} <= studios
     assert (
         "/home" in side_nav.CHAT_NAV_ROUTES
-        and "/library_v2" in side_nav.CHAT_NAV_ROUTES
+        and "/library" in side_nav.CHAT_NAV_ROUTES
     )
 
 

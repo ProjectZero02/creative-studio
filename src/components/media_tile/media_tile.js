@@ -79,6 +79,50 @@ class MediaTile extends LitElement {
       font-weight: 500;
     }
 
+    /* Star: an empty star on hover, a filled one that stays when starred. */
+    .star {
+      position: absolute;
+      top: 8px;
+      inset-inline-end: 8px;
+      width: 36px;
+      height: 36px;
+      padding: 7px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s ease-in-out, background 0.15s;
+      z-index: 2;
+    }
+    .star svg { width: 22px; height: 22px; display: block; fill: currentColor; }
+    .star:hover { background: rgba(0, 0, 0, 0.65); }
+    .star:focus-visible { opacity: 1; outline: 2px solid #fff; }
+    .star.on { opacity: 1; color: #fbbc04; }
+    :host(:hover) .star { opacity: 1; }
+
+    .creator {
+      position: absolute;
+      top: 10px;
+      inset-inline-start: 10px;
+      max-width: calc(100% - 64px);
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      opacity: 0;
+      transition: opacity 0.2s ease-in-out;
+      pointer-events: none;
+      z-index: 2;
+    }
+    :host(:hover) .creator { opacity: 1; }
+
     audio {
       width: 100%;
       margin-bottom: 8px;
@@ -93,6 +137,10 @@ class MediaTile extends LitElement {
       audioSrc: { type: String },
       pillsJson: { type: String },
       clickEvent: { type: String }, // Added to receive the event handler ID
+      creator: { type: String },
+      starred: { type: Boolean },
+      starLabel: { type: String },
+      starEvent: { type: String },
     };
   }
 
@@ -103,6 +151,10 @@ class MediaTile extends LitElement {
     this.audioSrc = "";
     this.pillsJson = "[]";
     this.clickEvent = ""; // Initialize
+    this.creator = "";
+    this.starred = false;
+    this.starLabel = "Star";
+    this.starEvent = "";
     this.addEventListener("click", this.handleClick);
   }
 
@@ -148,6 +200,28 @@ class MediaTile extends LitElement {
     }
   }
 
+  handleStar(e) {
+    // The star must not also open the item.
+    e.stopPropagation();
+    if (!this.starEvent) return;
+    this.starred = !this.starred; // show it now; the server saves it
+    this.dispatchEvent(new MesopEvent(this.starEvent, {}));
+  }
+
+  renderStar() {
+    if (!this.starEvent) return "";
+    const path = this.starred
+      ? "m233-120 65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Z"
+      : "m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-350Z";
+    return html`<button
+      class="star ${this.starred ? "on" : ""}"
+      aria-label=${this.starLabel}
+      aria-pressed=${this.starred ? "true" : "false"}
+      title=${this.starLabel}
+      @click=${(e) => this.handleStar(e)}
+    ><svg viewBox="0 -960 960 960" aria-hidden="true"><path d=${path}/></svg></button>`;
+  }
+
   renderPills() {
     try {
       const pills = JSON.parse(this.pillsJson);
@@ -161,6 +235,8 @@ class MediaTile extends LitElement {
   render() {
     return html`
       <div class="preview">${this.renderPreview()}</div>
+      ${this.creator ? html`<div class="creator" title=${this.creator}>${this.creator}</div>` : ""}
+      ${this.renderStar()}
       <div class="overlay">
         ${this.mediaType === "audio"
           ? html`<audio controls .src=${this.audioSrc}></audio>`

@@ -148,7 +148,7 @@ def test_tab_title_in_arabic():
 
     assert page_title("home", "en") == ""
     assert page_title("home", "ar") == i18n.AR["nav.home"] + " | Creative Studio"
-    assert page_title("library", "ar").startswith(i18n.AR["nav.library_v2"])
+    assert page_title("library", "ar").startswith(i18n.AR["nav.library"])
     assert page_title("settings", "ar").startswith(i18n.AR["settings.title"])
     assert page_title("not_found", "ar").startswith("الصفحة غير موجودة")
     assert page_title("no_such_page_name", "ar") == ""

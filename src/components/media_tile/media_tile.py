@@ -62,6 +62,9 @@ def media_tile(
     pills_json: str,
     on_click: typing.Callable[[me.WebEvent], None] | None = None,
     key: str | None = None,
+    creator: str = "",
+    starred: bool = False,
+    on_star_click: typing.Callable[[me.WebEvent], None] | None = None,
 ):
     """Defines the API for the media_tile web component."""
     effective_media_type = media_type
@@ -81,8 +84,12 @@ def media_tile(
             "thumbnailSrc": https_url if effective_media_type != "audio" else "",
             "audioSrc": https_url if effective_media_type == "audio" else "",
             "pillsJson": pills_json,
+            "creator": creator,
+            "starred": starred,
+            "starLabel": tx("Star"),
         },
         events={
             "clickEvent": on_click,
+            "starEvent": on_star_click,
         },
     )

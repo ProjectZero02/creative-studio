@@ -426,7 +426,7 @@ class GmChatNav extends LitElement {
     return html`
       <nav aria-label=${S.nav || 'Chats'}>
         ${this._row({ icon: ICON.newchat, label: S.new_chat || 'New chat', onClick: () => this._newChat() })}
-        ${this._row({ icon: ICON.library, label: S.library || 'Library', active: /library/.test(this.current || ''), onClick: () => this._go('/library_v2') })}
+        ${this._row({ icon: ICON.library, label: S.library || 'Library', active: /library/.test(this.current || ''), onClick: () => this._go('/library') })}
         <div class="kinds" role="group" aria-label=${S.create || 'Create'}>
           ${KINDS.map((k) => this._row({
             icon: KIND_ICON[k], label: S[`kind_${k}`] || k, onClick: () => this._pickKind(k),
