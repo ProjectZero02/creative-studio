@@ -25,7 +25,7 @@ import mesop as me
 from common.analytics import log_ui_click, track_click
 from common.auto_enhance import enhance_on_send, setting_on, wanted
 from common.error_handling import AsyncVeoPollingFailedError, GenerationError
-from common import prompt_settings
+from common import prompt_settings, usage
 from common.i18n import t, tr, tx
 from common.metadata import (
     MediaItem,
@@ -1388,7 +1388,7 @@ def _generate_with_omni(
         # generate_omni_video blocks until the clip is ready, so run it on a
         # worker thread and keep yielding to let the progress card tick.
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(generate_omni_video, request)
+            future = pool.submit(usage.in_context(generate_omni_video), request)
             progress_step(state, 2)
             yield
             while not future.done():

@@ -296,7 +296,7 @@ def _options() -> dict:
 
 
 ALLOWED_HOME_ROUTES = frozenset(
-    {"/nano-banana", "/veo", "/lyria", "/voice", "/story", "/library_v2"}
+    {"/nano-banana", "/veo", "/lyria", "/voice", "/story", "/library"}
 )
 
 

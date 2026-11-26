@@ -108,12 +108,17 @@ AR_TEXT: dict[str, str] = {
         "Google list prices for what each call made: video seconds by "
         "resolution and audio, image size, tokens, characters, tracks. "
         "Not a bill: free tiers, discounts and credits are not taken off. "
-        "Failed calls are free."
+        "Failed calls are free unless Google returned output."
     ): (
         "أسعار Google المعلنة لما أنتجه كل طلب: ثواني الفيديو حسب الدقة والصوت، "
         "وحجم الصورة، والرموز، والأحرف، والمقاطع. ليست فاتورة: لا تُخصم "
-        "الحصص المجانية والخصومات والأرصدة. الطلبات التي تعذّرت مجانية."
+        "الحصص المجانية والخصومات والأرصدة. الطلبات التي تعذّرت مجانية "
+        "ما لم تُرجع Google نتيجة."
     ),
+    "Price check": "فحص الأسعار",
+    "No price for": "بلا سعر",
+    "Price changed in the catalog": "تغيّر السعر في الكتالوج",
+    "Not in the catalog (list price used)": "غير موجود في الكتالوج (يُستخدم السعر المعلن)",
     # Users (pages/admin_users.py)
     "Add people, set their role and reset passwords. Only admins see this page.": (
         "أضف الأشخاص وحدّد أدوارهم وأعد تعيين كلمات المرور. هذه الصفحة للمشرفين فقط."
@@ -144,6 +149,8 @@ AR_TEXT: dict[str, str] = {
     "Nothing here yet": "لا شيء هنا بعد",
     "Your images, videos and audio show up here.": "تظهر هنا صورك وفيديوهاتك وملفاتك الصوتية.",
     "Create an image": "إنشاء صورة",
+    "Generate media": "أنشئ وسائط",
+    "Nothing matches these filters.": "لا شيء يطابق هذه الفلاتر.",
     "End of list": "نهاية القائمة",
     "Loading...": "جارٍ التحميل...",
     "Error: Could not load media item details.": "خطأ: تعذّر تحميل تفاصيل العنصر.",
@@ -163,6 +170,14 @@ AR_TEXT: dict[str, str] = {
     "Source Assets": "العناصر المصدر",
     "Star": "تمييز بنجمة",
     "Starred": "مميّز بنجمة",
+    "Error": "خطأ",
+    "Download": "تنزيل",
+    "Downloading...": "جارٍ التنزيل...",
+    "Download failed.": "تعذّر التنزيل.",
+    "No media to show.": "لا توجد وسائط لعرضها.",
+    "Favorites": "المفضّلة",
+    "Nothing starred yet. Tap the star on an item.": "لا شيء مميّز بنجمة بعد. اضغط النجمة على أي عنصر.",
+    "Nothing from this project yet.": "لا شيء من هذا المشروع بعد.",
     "New collection": "مجموعة جديدة",
     # Library details viewer (components/media_detail_viewer)
     "Sources": "المصادر",

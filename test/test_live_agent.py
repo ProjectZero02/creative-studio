@@ -406,7 +406,7 @@ def test_video_from_image_and_screen_tools():
     video, shown, opened, bad, dl, listed = run(go())
     assert isinstance(video, Deferred) and video.job.source_job == "image 1"
     assert shown["shown"] is True and shown["job"] == "image 1"
-    assert opened["ok"] is True and call.screen == "/library_v2"
+    assert opened["ok"] is True and call.screen == "/library"
     assert "No page" in bad["error"]
     assert dl["downloaded"] == "image 1"
     assert [j["job"] for j in listed["jobs"]] == ["image 1", "video 1"]

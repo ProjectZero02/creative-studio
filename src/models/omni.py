@@ -173,6 +173,8 @@ def generate_omni_video(
 
         # 2. Build input list
         input_parts = _build_input_parts(request)
+        # Input estimate for when the API reports no usage.
+        ctx["billing_units"].update(input_media_units(input_parts, request))
 
         # 3. Call Interactions API
         try:
@@ -207,10 +209,13 @@ def generate_omni_video(
             logger.info(
                 f"Calling client.interactions.create with model={model_config.model_name}",
             )
+            # A client timeout may still be billed: the server keeps going.
+            ctx["bill_on_timeout"] = True
             interaction = client.interactions.create(
                 **call_args,
                 timeout=config.OMNI_TIMEOUT_MS / 1000.0,
             )
+            ctx["bill_on_timeout"] = False
 
             # Bill from the tokens the API reports (inputs include the
             # earlier clips of a chat thread).
@@ -218,6 +223,7 @@ def generate_omni_video(
 
             # 4. Extract outputs
             video_data, interaction_id = _extract_video_payload(interaction)
+            ctx["output_received"] = True  # billed even if saving fails
 
             # 5. Decode and save
             gcs_uri = _save_video_to_gcs(video_data)
@@ -228,6 +234,47 @@ def generate_omni_video(
         except Exception as e:
             logger.exception("Error calling Gemini Omni Interactions API")
             raise GenerationError(f"Omni generation failed: {e}") from e
+
+
+def input_media_units(input_parts: list, request: OmniVideoGenerationRequest) -> dict:
+    """Images and seconds of video sent as input, for the cost estimate when
+    the API reports no token usage. Each input video (edit, extend, upscale,
+    or an earlier clip of a chat) is counted as `duration_seconds` long:
+    edit and upscale keep the input's length, and earlier clips were made at
+    the thread's length.
+
+    A follow-up turn sends only previous_interaction_id, not the earlier
+    clips, but the API still reads them from the stored thread, so they are
+    counted from chat_history_json."""
+    images = videos = 0
+    items = []
+    for part in input_parts:
+        if not isinstance(part, dict):
+            continue
+        content = part.get("content")
+        items.extend(content if isinstance(content, list) else [part])
+    if request.previous_interaction_id and request.chat_history_json:
+        try:
+            history = json.loads(request.chat_history_json)
+        except (TypeError, ValueError):
+            history = []
+        for turn in history if isinstance(history, list) else []:
+            if isinstance(turn, dict) and turn.get("type") == "model_output":
+                content = turn.get("content")
+                items.extend(content if isinstance(content, list) else [])
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "image":
+            images += 1
+        elif item.get("type") == "video" and (
+            item.get("data") or item.get("uri") or item.get("gcs_uri")
+        ):
+            videos += 1
+    return {
+        "input_image_count": images,
+        "input_video_seconds": videos * int(request.duration_seconds or 0),
+    }
 
 
 # Modes whose task cannot be inferred from the inputs alone; the Interactions
@@ -278,6 +325,10 @@ def _resolve_gcs_uris_in_history(
     max_inline_videos: int = 2,
 ) -> list:
     """Iterate input parts history and convert GCS URIs back to base64 data for model outputs.
+
+    Not used for follow-up turns (see _build_input_parts): those send only
+    previous_interaction_id. Kept for replaying a thread whose interaction
+    is gone.
 
     Only the most recent ``max_inline_videos`` ``model_output`` video entries are
     downloaded and base64-encoded; older video items are replaced with a lightweight
@@ -360,17 +411,15 @@ def _build_input_parts(request: OmniVideoGenerationRequest) -> list:
     # Aspect ratio and duration travel in response_format, not the prompt.
     modified_prompt = request.prompt
 
-    # Handle multi-turn history if present
-    if request.previous_interaction_id and request.chat_history_json:
-        try:
-            logger.info("Mode: Multi-turn Chat / Editing")
-            raw_history = json.loads(request.chat_history_json)
-            input_parts = _resolve_gcs_uris_in_history(raw_history)
-        except json.JSONDecodeError as je:
-            raise GenerationError(f"Failed to decode chat history: {je}") from je
-
-        # Append current user prompt to history list, with any images sent
-        # for this turn (first, then last frame).
+    if request.previous_interaction_id:
+        # A follow-up turn: the API keeps the earlier turns (and their videos)
+        # under previous_interaction_id, so only this turn's text and images
+        # are sent. Re-sending an earlier clip inline most likely made the API
+        # screen it like an upload: turn 2 of long takes was refused as
+        # content_blocked (live, 2026-11-25). chat_history_json stays the
+        # caller's record of the thread; it is not sent. The turn keeps the
+        # user_input step shape the API already accepts for follow-ups.
+        logger.info("Mode: Multi-turn Chat / Editing")
         content = [{"type": "text", "text": modified_prompt}]
         for uri, mime in (
             (request.reference_image_gcs, request.reference_image_mime_type),

@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from typing import Any
 
@@ -101,6 +102,13 @@ def extract_usage_metadata(response: Any) -> dict[str, int]:
             if count and modality.upper() in ("AUDIO", "IMAGE", "VIDEO"):
                 key = f"{prefix}_{modality.lower()}_tokens"
                 out[key] = out.get(key, 0) + int(count)
+    # Grounding with Google Search bills per search query (Gemini 3+).
+    queries = 0
+    for candidate in getattr(response, "candidates", None) or []:
+        grounding = getattr(candidate, "grounding_metadata", None)
+        queries += len(getattr(grounding, "web_search_queries", None) or [])
+    if queries:
+        out["web_search_queries"] = queries
     return out
 
 
@@ -161,7 +169,7 @@ def log_page_view(page_name: str, session_id: str = None):
         "session_id": session_id,
         "user_email": user_email,
     }
-    analytics_logger.info(f"Page view: {page_name}", extra={"extra_data": extra_data})
+    analytics_logger.info(f"Page view: {page_name}", extra={"extra_data": extra_data, "json_fields": extra_data})
 
 
 def log_ui_click(
@@ -184,7 +192,7 @@ def log_ui_click(
     if extras:
         extra_data.update(extras)
     analytics_logger.info(
-        f"UI Click: {element_id} on {page_name}", extra={"extra_data": extra_data},
+        f"UI Click: {element_id} on {page_name}", extra={"extra_data": extra_data, "json_fields": extra_data},
     )
 
 
@@ -197,6 +205,9 @@ def log_model_call(
     pipeline_id: str = None,
     error: dict = None,
     count_usage: bool = True,
+    event_id: str = "",
+    project: str = "",
+    location: str = "",
 ):
     """Logs a generative model call event. `count_usage=False` logs it
     without a usage event (a wrapper whose real model call is logged on
@@ -207,10 +218,18 @@ def log_model_call(
         session_id = state.session_id
         user_email = state.user_email
     except Exception:
-        # Handle cases where me.state is called outside of context (e.g. threads)
-        page_name = "unknown"
+        # Outside the page (threads, jobs): use who the work is for, set
+        # with usage.acting_for / usage.in_context.
+        from common import usage
+
+        page_name = usage.current_page() or "unknown"
         session_id = "unknown"
-        user_email = "unknown"
+        user_email = usage.current_owner() or "unknown"
+    if not (details or {}).get("feature"):
+        from common import usage
+
+        if usage.current_feature():
+            details = {**(details or {}), "feature": usage.current_feature()}
 
     extra_data = {
         "event_type": "model_call",
@@ -231,9 +250,11 @@ def log_model_call(
         extra_data["feature"] = feature
     if error:
         extra_data["error"] = error
+    if event_id:
+        extra_data["event_id"] = event_id
 
     analytics_logger.info(
-        f"Model Call: {model_name} ({status})", extra={"extra_data": extra_data},
+        f"Model Call: {model_name} ({status})", extra={"extra_data": extra_data, "json_fields": extra_data},
     )
     if not count_usage:
         return
@@ -248,9 +269,12 @@ def log_model_call(
             page_name if page_name != "unknown" else "",
             str((details or {}).get("task") or ""),
             feature=feature,
+            event_id=event_id,
+            project=project,
+            location=location,
         )
     except Exception:  # usage is best effort
-        pass
+        analytics_logger.warning("usage: could not queue a usage event", exc_info=True)
 
 
 def track_click(element_id: str):
@@ -272,14 +296,37 @@ def track_click(element_id: str):
     return decorator
 
 
+def is_timeout(exc: BaseException | None) -> bool:
+    """Whether an exception (or one it was raised from) is a timeout."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        name = type(exc).__name__.lower()
+        if (
+            isinstance(exc, TimeoutError)
+            or "timeout" in name
+            or "deadlineexceeded" in name
+            or "timed out" in str(exc).lower()
+        ):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 @contextmanager
 def track_model_call(
     model_name: str, billing_units: dict = None, pipeline_id: str = None, **kwargs,
 ):
     """Context manager to log the duration, status, and telemetry of a model call.
 
-    Yields a dict `ctx = {"billing_units": {...}, "details": {...}, "pipeline_id": ...}`
-    which code inside the block can update dynamically.
+    Yields a dict `ctx = {"billing_units": {...}, "details": {...}, "pipeline_id": ...,
+    "event_id": ...}` which code inside the block can update dynamically.
+
+    Set ``ctx["output_received"] = True`` right after the API returns output:
+    a later exception (say, saving to GCS) is then logged as
+    "failed_after_output" and priced. ``ctx["bill_on_timeout"] = True``
+    around a call the server finishes even when the client gives up turns a
+    timeout into "timeout_maybe_billed" (also priced).
     """
     from common.error_handling import classify_error
 
@@ -289,6 +336,7 @@ def track_model_call(
         "billing_units": billing_units or {},
         "details": kwargs,
         "pipeline_id": pipeline_id,
+        "event_id": uuid.uuid4().hex,
     }
     try:
         yield ctx
@@ -301,20 +349,33 @@ def track_model_call(
             billing_units=ctx["billing_units"] if ctx["billing_units"] else None,
             pipeline_id=ctx["pipeline_id"],
             count_usage=count_usage,
+            event_id=ctx["event_id"],
+            project=str(ctx.get("project") or ""),
+            location=str(ctx.get("location") or ""),
         )
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
         err_dict = classify_error(e)
         details = dict(ctx["details"])
         details["error"] = err_dict["message"]
+        # Output that came back is billed even when a later step fails; a
+        # client timeout on a call the server keeps running may be billed.
+        status = "failure"
+        if ctx.get("output_received"):
+            status = "failed_after_output"
+        elif ctx.get("bill_on_timeout") and is_timeout(e):
+            status = "timeout_maybe_billed"
         log_model_call(
             model_name,
-            status="failure",
+            status=status,
             duration_ms=duration_ms,
             details=details,
             billing_units=ctx["billing_units"] if ctx["billing_units"] else None,
             pipeline_id=ctx["pipeline_id"],
             error=err_dict,
             count_usage=count_usage,
+            event_id=ctx["event_id"],
+            project=str(ctx.get("project") or ""),
+            location=str(ctx.get("location") or ""),
         )
         raise  # Re-raise the exception after logging

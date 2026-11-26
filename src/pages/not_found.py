@@ -24,7 +24,7 @@ def on_home(e: me.ClickEvent) -> None:  # pylint: disable=unused-argument
 
 
 def on_library(e: me.ClickEvent) -> None:  # pylint: disable=unused-argument
-    me.navigate("/library_v2")
+    me.navigate("/library")
 
 
 @me.page(path=NOT_FOUND_PATH, title="Page not found | Creative Studio")
