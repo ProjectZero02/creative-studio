@@ -66,7 +66,9 @@ def test_load_more_still_shows_loading(page: lib.PageState) -> None:
 
 
 def _item(item_id: str, owner: str, ts: str) -> lib.MediaItem:
-    return lib.MediaItem(id=item_id, user_email=owner, timestamp=ts, mime_type="image/png")
+    return lib.MediaItem(
+        id=item_id, user_email=owner, timestamp=ts, mime_type="image/png", gcsuri=f"gs://b/{item_id}.png",
+    )
 
 
 def _ids(state: lib.PageState) -> list[str]:
@@ -113,3 +115,17 @@ def test_later_pages_do_not_repeat_starred(starred_page: lib.PageState) -> None:
     starred_page.current_page = 2
     list(lib._load_media(starred_page))
     assert _ids(starred_page) == ["b", "a", "c"]
+
+
+def test_failed_items_without_media_hide_unless_only_errors(
+    page: lib.PageState, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed generation with no media leaves the Library looking empty."""
+    failed = lib.MediaItem(id="f", user_email="me@example.com", error_message="blocked")
+    shown = lib.MediaItem(id="s", user_email="me@example.com", gcsuri="gs://b/s.png")
+    monkeypatch.setattr(lib, "get_media_for_page", lambda **kw: [failed, shown] if kw["page"] == 1 else [])
+    list(lib._load_media(page, is_filter_change=True))
+    assert _ids(page) == ["s"]
+    page.error_filter = "only_errors"
+    list(lib._load_media(page, is_filter_change=True))
+    assert _ids(page) == ["f", "s"]
