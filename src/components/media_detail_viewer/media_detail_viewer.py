@@ -43,6 +43,13 @@ _STRINGS = (
     "Copy to clipboard is only available on secure (HTTPS) sites.",
     "Previous",
     "Next",
+    "Error",
+    "Star",
+    "Starred",
+    "Download",
+    "Downloading...",
+    "Download failed.",
+    "No media to show.",
 )
 
 
@@ -67,6 +74,8 @@ def media_detail_viewer(
     on_omni_click: typing.Callable[[me.WebEvent], None] | None = None,
     on_extend_click: typing.Callable[[me.WebEvent], None] | None = None,
     key: str | None = None,
+    starred: bool = False,
+    on_star_click: typing.Callable[[me.WebEvent], None] | None = None,
 ):
     """Defines the API for the media_detail_viewer web component."""
     return me.insert_web_component(
@@ -81,12 +90,14 @@ def media_detail_viewer(
             "rawMetadataJson": raw_metadata_json,
             "lang": current_lang(),
             "stringsJson": viewer_strings(current_lang()),
+            "starred": starred,
         },
         events={
             "editClickEvent": on_edit_click,
             "veoClickEvent": on_veo_click,
             "omniClickEvent": on_omni_click,
             "extendClickEvent": on_extend_click,
+            "starClickEvent": on_star_click,
         },
     )
 

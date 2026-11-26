@@ -1,6 +1,5 @@
 import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 import { SvgIcon } from "../svg_icon/svg_icon.js";
-import "../download_button/download_button.js"; // Import the download button component
 import "../convert_to_gif_button/convert_to_gif_button.js";
 
 class MediaDetailViewer extends LitElement {
@@ -8,42 +7,62 @@ class MediaDetailViewer extends LitElement {
     :host {
       display: block;
       width: 100%;
-      --mdc-theme-primary: #1976d2;
+      container-type: inline-size;
+      color: var(--sys-on-surface, #e3e3e3);
+      --tonal: var(--gm-tonal, rgba(255, 255, 255, 0.08));
+      --tonal-hover: var(--gm-tonal-hover, rgba(255, 255, 255, 0.14));
+      --muted: var(--sys-on-surface-variant, #a8adb7);
+      --line: var(--gm-border, rgba(255, 255, 255, 0.1));
     }
     .container {
+      display: grid;
+      grid-template-columns: minmax(0, 1.65fr) minmax(260px, 1fr);
+      gap: 28px;
+      align-items: start;
+    }
+    @container (max-width: 760px) {
+      .container { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+      .left-column .stage { height: min(44vh, 380px); min-height: 200px; }
+      .right-column .fields { max-height: none; }
+      .right-column .panel-head { padding-inline-end: 0; }
+    }
+    .left-column, .right-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+    /* The media sits on a dark stage that keeps one size whatever its shape. */
+    .stage {
+      position: relative;
       display: flex;
-      flex-direction: row;
-      gap: 24px;
+      align-items: center;
+      justify-content: center;
+      height: min(62vh, 620px);
+      min-height: 260px;
+      border-radius: 16px;
+      background: rgba(0, 0, 0, 0.28);
+      overflow: hidden;
     }
-    .left-column {
-      flex: 3;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-    .right-column {
-      flex: 2;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      max-height: 80vh; /* Allow metadata to scroll */
-      overflow-y: auto;
-    }
-    .main-asset {
-      position: relative; /* For carousel buttons */
-    }
-    .main-asset img,
-    .main-asset video {
-      width: 100%;
-      max-height: 60vh;
+    .stage img, .stage video {
+      max-width: 100%;
+      max-height: 100%;
       object-fit: contain;
-      border-radius: 8px;
+      display: block;
     }
+    .stage audio { width: min(480px, 90%); }
+    .empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .empty svg-icon { width: 48px; height: 48px; opacity: 0.7; }
     .carousel-btn {
       position: absolute;
       top: 50%;
       transform: translateY(-50%);
-      background-color: rgba(0, 0, 0, 0.5);
+      background: rgba(0, 0, 0, 0.5);
       color: white;
       border: none;
       border-radius: 50%;
@@ -55,74 +74,73 @@ class MediaDetailViewer extends LitElement {
       align-items: center;
       justify-content: center;
     }
-    .carousel-btn:hover {
-      background-color: rgba(0, 0, 0, 0.8);
-    }
-    .prev-btn {
-      inset-inline-start: 10px;
-    }
-    .next-btn {
-      inset-inline-end: 10px;
-    }
-    .sources {
-      display: flex;
+    .carousel-btn:hover { background: rgba(0, 0, 0, 0.8); }
+    .carousel-btn[disabled] { opacity: 0.35; cursor: default; }
+    .prev-btn { inset-inline-start: 10px; }
+    .next-btn { inset-inline-end: 10px; }
+
+    /* Actions: one row of quiet tonal pills, all the same height. */
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .act {
+      display: inline-flex;
+      align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
+      height: 36px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--tonal);
+      color: inherit;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, color 0.15s;
     }
-    .sources img {
-      width: 100px;
-      height: 100px;
-      object-fit: cover;
-      border-radius: 4px;
-      border: 1px solid var(--mesop-outline-variant-color);
+    .act:hover { background: var(--tonal-hover); }
+    .act[disabled] { opacity: 0.5; cursor: default; }
+    .act svg-icon, .act svg { width: 18px; height: 18px; flex: none; fill: currentColor; }
+    .act.on { color: #fbbc04; }
+    .act-error { color: var(--sys-error, #f28b82); font-size: 12px; }
+
+    .sources { display: flex; gap: 8px; flex-wrap: wrap; }
+    .sources img { width: 100px; height: 100px; object-fit: cover; border-radius: 8px; }
+    h3 { margin: 0 0 8px 0; font-size: 1rem; font-weight: 600; }
+
+    /* Right column: tabs and the star on one line, then the fields. */
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+      padding-inline-end: 48px; /* room for the dialog close button */
     }
-    h3 {
-      margin: 0 0 8px 0;
-      font-size: 1.2rem;
+    .tabs { display: flex; }
+    .tab {
+      padding: 8px 14px;
+      cursor: pointer;
+      border-radius: 999px;
+      color: var(--muted);
       font-weight: 500;
     }
-    .metadata-item {
-      display: flex;
-      flex-direction: column;
-      margin-bottom: 8px;
-    }
-    .metadata-key {
-      font-weight: bold;
-      font-size: 0.9rem;
-      color: var(--mesop-on-surface-variant-color);
-    }
-    .metadata-value {
-      font-size: 1rem;
-      white-space: pre-wrap; /* Allow wrapping for long prompts */
-      word-wrap: break-word;
-    }
-    .actions {
-      display: flex;
-      gap: 12px;
-      margin-top: 16px;
-    }
-    .tabs {
-      display: flex;
-      border-bottom: 1px solid var(--mesop-outline-variant-color);
-      margin-bottom: 16px;
-    }
-    .tab {
-      padding: 8px 16px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-    }
-    .tab[active] {
-      border-bottom-color: var(--mesop-primary-color);
-      font-weight: bold;
-    }
+    .tab[active] { background: var(--tonal); color: inherit; }
+    .fields { display: flex; flex-direction: column; gap: 14px; max-height: min(58vh, 600px); overflow-y: auto; }
+    .metadata-item { display: flex; flex-direction: column; gap: 4px; }
+    .metadata-key { font-size: 12px; font-weight: 500; color: var(--muted); }
+    .metadata-value { font-size: 15px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .metadata-item.error .metadata-value { color: var(--sys-error, #f28b82); }
     .raw-json {
-      background-color: var(--mesop-surface-container-lowest-color);
-      border-radius: 8px;
-      padding: 16px;
-      font-family: monospace;
+      margin: 0;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 12px;
+      padding: 14px;
+      font-family: "Google Sans Code", monospace;
       white-space: pre-wrap;
-      word-wrap: break-word;
-      font-size: 0.9rem;
+      overflow-wrap: anywhere;
+      font-size: 12px;
     }
   `;
 
@@ -140,6 +158,10 @@ class MediaDetailViewer extends LitElement {
       extendClickEvent: { type: String },
       lang: { type: String },
       stringsJson: { type: String }, // English -> shown text, from Python
+      starred: { type: Boolean },
+      starClickEvent: { type: String },
+      _downloading: { state: true },
+      _downloadError: { state: true },
       _currentIndex: { state: true },
       _activeTab: { state: true },
     };
@@ -161,6 +183,40 @@ class MediaDetailViewer extends LitElement {
     this.stringsJson = "{}";
     this._currentIndex = 0;
     this._activeTab = "details";
+    this.starred = false;
+    this.starClickEvent = "";
+    this._downloading = false;
+    this._downloadError = "";
+  }
+
+  /** Download through a signed URL (the API the old download button used). */
+  async _download(gcsUri, filename) {
+    this._downloading = true;
+    this._downloadError = "";
+    try {
+      const res = await fetch(`/api/get_signed_url?gcs_uri=${encodeURIComponent(gcsUri)}`);
+      const data = await res.json();
+      if (!res.ok || data.error || !data.signed_url) throw new Error(data.error || `HTTP ${res.status}`);
+      const blob = await (await fetch(data.signed_url)).blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename || "download";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+    } catch (e) {
+      console.error("Download failed:", e);
+      this._downloadError = this._t("Download failed.");
+    } finally {
+      this._downloading = false;
+    }
+  }
+
+  _toggleStar() {
+    if (!this.starClickEvent) return;
+    this.starred = !this.starred; // show it now; the server saves it
+    this._dispatch(this.starClickEvent, {});
   }
 
   /** The shown text for an English string (English when no translation). */
@@ -208,7 +264,9 @@ class MediaDetailViewer extends LitElement {
 
   renderPrimaryAsset() {
     const urls = JSON.parse(this.primaryUrlsJson);
-    if (urls.length === 0) return html``;
+    if (urls.length === 0) {
+      return html`<div class="empty"><svg-icon .iconName=${"broken_image"}></svg-icon>${this._t("No media to show.")}</div>`;
+    }
 
     const currentUrl = urls[this._currentIndex];
 
@@ -274,11 +332,10 @@ class MediaDetailViewer extends LitElement {
   renderMetadata() {
     try {
       const metadata = JSON.parse(this.metadataJson);
-      return Object.entries(metadata).map(([key, value]) => {
-        console.log("key:", key, "value:", value, "typeof value:", typeof value);
+      const rows = Object.entries(metadata).filter(([, v]) => v !== null && v !== undefined && v !== "");
+      return rows.map(([key, value]) => {
         let formattedValue = value;
-        if (key === 'Generation Time (s)' && value !== null && !isNaN(parseFloat(value))) {
-          console.log("is number:", !isNaN(parseFloat(value)));
+        if (key === 'Generation Time (s)' && !isNaN(parseFloat(value))) {
           formattedValue = Math.round(value * 100) / 100 + ' ' + this._t('seconds');
         } else if (key === 'Timestamp' && value) {
           const date = new Date(value);
@@ -287,7 +344,7 @@ class MediaDetailViewer extends LitElement {
           }
         }
         return html`
-          <div class="metadata-item">
+          <div class="metadata-item ${key === "Error" ? "error" : ""}">
             <span class="metadata-key">${this._t(key)}</span>
             <span class="metadata-value">${formattedValue}</span>
           </div>
@@ -346,34 +403,53 @@ class MediaDetailViewer extends LitElement {
       });
     };
 
+    const filename = gcsPath.split("/").pop();
     return html`
       <div class="actions">
-        <download-button .url=${gcsUri} .filename=${gcsPath.split("/").pop()}></download-button>
-        ${isImage ? html`<mwc-button outlined @click=${() => this._dispatch(this.editClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'edit'}></svg-icon>${this._t('Edit')}</mwc-button>` : ""}
-        ${isImage ? html`<mwc-button outlined @click=${() => this._dispatch(this.veoClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'movie_filter'}></svg-icon>Veo</mwc-button>` : ""}
-        ${isImage ? html`<mwc-button outlined @click=${() => this._dispatch(this.omniClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'spark'}></svg-icon>Omni</mwc-button>` : ""}
-        ${isVideo ? html`<mwc-button outlined @click=${() => this._dispatch(this.extendClickEvent, {url: currentUrl})}><svg-icon slot="icon" .iconName=${'movie_filter'}></svg-icon>${this._t('Extend')}</mwc-button>` : ""}
-        <mwc-button id="copy-link-btn" outlined @click=${handleCopyLink}><svg-icon slot="icon" .iconName=${'link'}></svg-icon>${this._t('Copy Link')}</mwc-button>
-        ${this.mediaType === 'video' ? html`<convert-to-gif-button .url=${gcsUri} @conversion-complete=${this._handleGifConversion}></convert-to-gif-button>` : ""}
+        <button class="act" ?disabled=${this._downloading} @click=${() => this._download(gcsUri, filename)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          ${this._downloading ? this._t("Downloading...") : this._t("Download")}
+        </button>
+        ${isImage ? html`<button class="act" @click=${() => this._dispatch(this.editClickEvent, {url: currentUrl})}><svg-icon .iconName=${"edit"}></svg-icon>${this._t("Edit")}</button>` : ""}
+        ${isImage ? html`<button class="act" @click=${() => this._dispatch(this.veoClickEvent, {url: currentUrl})}><svg-icon .iconName=${"movie_filter"}></svg-icon>Veo</button>` : ""}
+        ${isImage ? html`<button class="act" @click=${() => this._dispatch(this.omniClickEvent, {url: currentUrl})}><svg-icon .iconName=${"spark"}></svg-icon>Omni</button>` : ""}
+        ${isVideo ? html`<button class="act" @click=${() => this._dispatch(this.extendClickEvent, {url: currentUrl})}><svg-icon .iconName=${"movie_filter"}></svg-icon>${this._t("Extend")}</button>` : ""}
+        <button class="act" id="copy-link-btn" @click=${handleCopyLink}><svg-icon .iconName=${"link"}></svg-icon>${this._t("Copy Link")}</button>
+        ${isVideo ? html`<convert-to-gif-button .url=${gcsUri} @conversion-complete=${this._handleGifConversion}></convert-to-gif-button>` : ""}
       </div>
+      ${this._downloadError ? html`<span class="act-error">${this._downloadError}</span>` : ""}
     `;
+  }
+
+  renderStar() {
+    if (!this.starClickEvent) return "";
+    const path = this.starred
+      ? "m233-120 65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Z"
+      : "m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-350Z";
+    return html`<button class="act ${this.starred ? "on" : ""}" aria-pressed=${this.starred ? "true" : "false"} @click=${() => this._toggleStar()}>
+      <svg viewBox="0 -960 960 960" aria-hidden="true"><path d=${path}/></svg>
+      ${this.starred ? this._t("Starred") : this._t("Star")}
+    </button>`;
   }
 
   render() {
     return html`
       <div class="container">
         <div class="left-column">
-          <div class="main-asset">${this.renderPrimaryAsset()}</div>
+          <div class="stage">${this.renderPrimaryAsset()}</div>
           ${this.renderActions()}
           ${this.renderSourceImages()}
           <div id='gif-container' display="flex" flex-direction="column" align-items="center" gap="10"></div>
         </div>
         <div class="right-column">
-          <div class="tabs">
-            <div class="tab" ?active=${this._activeTab === 'details'} @click=${() => { this._activeTab = 'details' }}>${this._t('Details')}</div>
-            <div class="tab" ?active=${this._activeTab === 'raw'} @click=${() => { this._activeTab = 'raw' }}>${this._t('Raw')}</div>
+          <div class="panel-head">
+            <div class="tabs">
+              <div class="tab" ?active=${this._activeTab === 'details'} @click=${() => { this._activeTab = 'details' }}>${this._t('Details')}</div>
+              <div class="tab" ?active=${this._activeTab === 'raw'} @click=${() => { this._activeTab = 'raw' }}>${this._t('Raw')}</div>
+            </div>
+            ${this.renderStar()}
           </div>
-          ${this._activeTab === 'details' ? this.renderMetadata() : this.renderRawMetadata()}
+          <div class="fields">${this._activeTab === 'details' ? this.renderMetadata() : this.renderRawMetadata()}</div>
         </div>
       </div>
     `;
