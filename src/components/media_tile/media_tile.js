@@ -1,11 +1,15 @@
 import { LitElement, css, html } from '/ui/vendor/lit-3.2.1.js';
 import { SvgIcon } from "../svg_icon/svg_icon.js";
 
+// Loaded on the first star, then shared by every tile.
+let confettiLib = null;
+
 class MediaTile extends LitElement {
   static styles = css`
     :host {
       display: block;
       position: relative;
+      container-type: inline-size; /* the star scales with the tile */
       border-radius: 12px;
       overflow: hidden;
       cursor: pointer;
@@ -79,57 +83,55 @@ class MediaTile extends LitElement {
       font-weight: 500;
     }
 
-    /* Star: an empty star on hover that fills in gold under the pointer;
+    /* Star: an outline on hover whose gold fill fades in under the pointer;
        a filled one stays when starred. No backdrop: a soft shadow keeps it
-       readable on light pictures. */
+       readable on light pictures. Its size follows the tile width. */
     .star {
+      --star: clamp(18px, 7.5cqi, 26px);
       position: absolute;
       top: 6px;
       inset-inline-end: 6px;
-      width: 48px;
-      height: 48px;
-      padding: 6px;
+      width: calc(var(--star) + 16px);
+      height: calc(var(--star) + 16px);
+      padding: 8px;
       border: 0;
       background: none;
       color: #fff;
       cursor: pointer;
       opacity: 0;
-      transition: opacity 0.2s ease-in-out;
+      transition: opacity 0.2s ease;
       z-index: 2;
       -webkit-tap-highlight-color: transparent;
     }
     .star svg {
-      width: 36px;
-      height: 36px;
+      width: var(--star);
+      height: var(--star);
       display: block;
       overflow: visible;
-      filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+      transition: transform 0.2s ease;
     }
-    .star .outline { fill: currentColor; transition: fill 0.2s ease; }
-    .star .fill {
-      fill: #fbbc04;
-      transform: scale(0);
-      transform-box: fill-box;
-      transform-origin: center;
-      transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
-    }
+    .star .outline { fill: currentColor; transition: fill 0.25s ease; }
+    .star .fill { fill: #fbbc04; opacity: 0; transition: opacity 0.25s ease; }
     .star:hover .fill,
     .star:focus-visible .fill,
-    .star.on .fill { transform: scale(1); }
+    .star.on .fill { opacity: 1; }
     .star:hover .outline,
+    .star:focus-visible .outline,
     .star.on .outline { fill: #fbbc04; }
+    .star:active svg { transform: scale(0.9); }
     .star:focus-visible { opacity: 1; outline: 2px solid #fff; outline-offset: -2px; border-radius: 8px; }
     .star.on { opacity: 1; }
-    .star.pop svg { animation: star-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+    .star.pop svg { animation: star-pop 0.3s ease-out; }
     @keyframes star-pop {
-      0% { transform: scale(1); }
-      35% { transform: scale(1.35); }
+      0% { transform: scale(0.9); }
+      50% { transform: scale(1.12); }
       100% { transform: scale(1); }
     }
     :host(:hover) .star { opacity: 1; }
 
     @media (prefers-reduced-motion: reduce) {
-      .star .fill, .star .outline { transition: none; }
+      .star .fill, .star .outline, .star svg { transition: none; }
       .star.pop svg { animation: none; }
     }
 
@@ -137,7 +139,7 @@ class MediaTile extends LitElement {
       position: absolute;
       top: 10px;
       inset-inline-start: 10px;
-      max-width: calc(100% - 72px);
+      max-width: calc(100% - 60px);
       padding: 6px 10px;
       border-radius: 999px;
       background: rgba(0, 0, 0, 0.55);
@@ -240,45 +242,30 @@ class MediaTile extends LitElement {
     this.dispatchEvent(new MesopEvent(this.starEvent, {}));
   }
 
-  /** Pop the star and throw confetti out of it. */
-  celebrate(button) {
+  /** Pop the star and burst confetti (canvas-confetti: gravity, drift, fade). */
+  async celebrate(button) {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     button.classList.remove("pop");
     void button.offsetWidth; // restart the animation
     button.classList.add("pop");
-    // On the page, not in the tile: the tile clips its rounded corners.
-    const star = button.getBoundingClientRect();
-    const cx = star.left + star.width / 2;
-    const cy = star.top + star.height / 2;
-    const colors = ["#fbbc04", "#ea4335", "#4285f4", "#34a853", "#a142f4", "#ffffff"];
-    const count = 18;
-    for (let i = 0; i < count; i++) {
-      const bit = document.createElement("span");
-      Object.assign(bit.style, {
-        position: "fixed",
-        left: cx - 3.5 + "px",
-        top: cy - 3.5 + "px",
-        width: "7px",
-        height: "7px",
-        borderRadius: i % 3 === 0 ? "50%" : "2px",
-        background: colors[i % colors.length],
-        pointerEvents: "none",
-        zIndex: "10000",
-      });
-      document.body.appendChild(bit);
-      const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
-      const dist = 34 + Math.random() * 34;
-      const dx = Math.cos(angle) * dist;
-      const dy = Math.sin(angle) * dist;
-      const spin = (Math.random() - 0.5) * 540;
-      bit.animate(
-        [
-          { transform: "translate(0, 0) rotate(0deg) scale(0.6)", opacity: 1 },
-          { transform: `translate(${dx}px, ${dy}px) rotate(${spin / 2}deg) scale(1)`, opacity: 1, offset: 0.6 },
-          { transform: `translate(${dx * 1.15}px, ${dy * 1.15 + 18}px) rotate(${spin}deg) scale(0.8)`, opacity: 0 },
-        ],
-        { duration: 750 + Math.random() * 250, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-      ).finished.finally(() => bit.remove());
+    const r = button.getBoundingClientRect();
+    const origin = {
+      x: (r.left + r.width / 2) / window.innerWidth,
+      y: (r.top + r.height / 2) / window.innerHeight,
+    };
+    try {
+      confettiLib ??= import("/ui/vendor/canvas-confetti-1.9.4.js").then((m) => m.default);
+      const confetti = await confettiLib;
+      const shared = {
+        origin,
+        zIndex: 10000,
+        disableForReducedMotion: true,
+        colors: ["#fbbc04", "#fdd663", "#ea4335", "#4285f4", "#34a853", "#a142f4"],
+      };
+      confetti({ ...shared, particleCount: 36, spread: 70, startVelocity: 22, gravity: 0.9, decay: 0.9, scalar: 0.7, ticks: 110 });
+      confetti({ ...shared, particleCount: 8, spread: 50, startVelocity: 16, gravity: 0.7, decay: 0.92, scalar: 0.9, ticks: 120, shapes: ["star"], colors: ["#fbbc04", "#fdd663"] });
+    } catch (err) {
+      console.warn("media-tile: confetti unavailable", err);
     }
   }
 
