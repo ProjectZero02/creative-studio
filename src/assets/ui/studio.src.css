@@ -189,13 +189,21 @@ html body input, html body textarea, html body select, html body button { font-f
   html body input, html body textarea, html body select { font-size: 16px; }
 }
 
-/* ---------- Scrollbars: thin, transparent, follow the theme ---------- */
-html body, html body * {
-  scrollbar-width: thin;
-  scrollbar-color: var(--gm-scroll-thumb) transparent;
+/* ---------- Scrollbars: thin, transparent, follow the theme ----------
+   Chrome and Edge use the ::-webkit-scrollbar rules below (no arrow buttons,
+   which Windows draws on a "thin" scrollbar and which poke out of rounded
+   menus). Setting scrollbar-width would switch those rules off, so the
+   standard properties are for browsers without ::-webkit-scrollbar only. */
+@supports not selector(::-webkit-scrollbar) {
+  html body, html body * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--gm-scroll-thumb) transparent;
+  }
 }
 html body ::-webkit-scrollbar { width: 10px; height: 10px; }
+html body ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 html body ::-webkit-scrollbar-track { background: transparent; }
+html body ::-webkit-scrollbar-corner { background: transparent; }
 html body ::-webkit-scrollbar-thumb {
   background: var(--gm-scroll-thumb);
   border-radius: 999px;

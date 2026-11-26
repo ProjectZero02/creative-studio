@@ -964,7 +964,36 @@ class GmHomeChat extends LitElement {
     else if (e.key === 'Home') next = 0;
     else if (e.key === 'End') next = items.length - 1;
     else if (e.key === 'Tab') { this._menu = null; return; }
-    if (next >= 0) { e.preventDefault(); items[next].focus(); }
+    else if (this._isTypeKey(e)) { e.preventDefault(); next = this._typeahead(e.key, items.map((b) => b.dataset.l || b.textContent), at); }
+    if (next >= 0) { e.preventDefault(); items[next].focus(); items[next].scrollIntoView({ block: 'nearest' }); }
+  }
+
+  _isTypeKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.key.length !== 1) return false;
+    // Space presses the item, unless it is part of a word being typed ("New Y…").
+    return e.key !== ' ' || (Date.now() - (this._typedAt || 0) < 700 && !!this._typed);
+  }
+
+  /**
+   * Type to jump, like a native select: "f" goes to the next item starting
+   * with F (again moves on through the F's), "fre" typed quickly goes to
+   * "French". Case and accents are ignored. Returns the index or -1.
+   */
+  _typeahead(key, labels, at) {
+    const fold = (s) => String(s ?? '').trim().normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+    const c = fold(key) || key;
+    const now = Date.now();
+    this._typed = now - (this._typedAt || 0) < 700 ? (this._typed || '') + c : c;
+    this._typedAt = now;
+    const repeat = [...this._typed].every((x) => x === c);
+    const prefix = repeat ? c : this._typed;
+    const start = Math.max(0, repeat ? at + 1 : at);
+    const n = labels.length;
+    for (let k = 0; k < n; k++) {
+      const i = (start + k) % n;
+      if (fold(labels[i]).startsWith(prefix)) return i;
+    }
+    return -1;
   }
 
   _popover() {
@@ -974,7 +1003,7 @@ class GmHomeChat extends LitElement {
     return html`<div class="pop ${m.up ? 'up' : ''}" role="menu" aria-label=${m.title} style=${pos} @keydown=${this._menuKey}>
       ${m.title ? html`<div class="pop-title">${m.title}</div>` : nothing}
       ${m.items.map((it) => (it.sep ? html`<div class="pop-sep" role="separator"></div>` : html`
-        <button type="button" role=${it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked=${it.checked === undefined ? nothing : String(!!it.checked)}
+        <button type="button" data-l=${typeof it.label === 'string' ? it.label : nothing} role=${it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked=${it.checked === undefined ? nothing : String(!!it.checked)}
           ?disabled=${!!it.disabled} @click=${() => { const keep = it.keep; if (!keep) this._menu = null; it.run && it.run(); }}>
           ${it.icon ? svg(it.icon, 18) : nothing}
           <span class="pop-l">${it.label}${it.hint ? html`<small>${it.hint}</small>` : nothing}</span>
@@ -2016,8 +2045,15 @@ class GmHomeChat extends LitElement {
       position: fixed; z-index: 60; max-height: min(360px, 60vh); overflow-y: auto; padding: 6px; border-radius: 16px;
       background: var(--gm-panel, #1d1f25); color: var(--sys-on-surface, #e8eaed);
       box-shadow: 0 16px 44px rgba(0, 0, 0, 0.32), 0 0 0 1px color-mix(in srgb, var(--sys-on-surface, #e8eaed) 8%, transparent);
-      animation: pop-in 140ms ease-out; scrollbar-width: thin;
+      animation: pop-in 140ms ease-out;
     }
+    /* Slim rounded scrollbars with no arrow buttons, kept clear of rounded corners. */
+    .pop::-webkit-scrollbar, .jobs-list::-webkit-scrollbar { width: 10px; }
+    .pop::-webkit-scrollbar-button, .jobs-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    .pop::-webkit-scrollbar-track, .jobs-list::-webkit-scrollbar-track { background: transparent; margin-block: 12px; }
+    .pop::-webkit-scrollbar-thumb, .jobs-list::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px;
+      background: var(--gm-scroll-thumb, rgba(127, 127, 127, 0.35)) padding-box; }
+    @supports not selector(::-webkit-scrollbar) { .pop, .jobs-list { scrollbar-width: thin; } }
     .pop.up { animation-name: pop-up; }
     @keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
     @keyframes pop-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -2246,7 +2282,7 @@ class GmHomeChat extends LitElement {
     .jobs-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 18px; font-size: 15px; }
     .jobs-count { color: var(--sys-on-surface-variant, #6b7280); font-size: 13.5px; flex: 1; }
     .icon.sm { width: 36px; height: 36px; }
-    .jobs-list { list-style: none; margin: 0; padding: 4px 10px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; flex: 1; scrollbar-width: thin; }
+    .jobs-list { list-style: none; margin: 0; padding: 4px 10px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; flex: 1; }
     .pj { display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 18px; background: var(--gm-tonal, rgba(127, 127, 127, 0.08)); }
     .pj[draggable='true'] { cursor: grab; }
     .pj-media { border-radius: 12px; overflow: hidden; line-height: 0; }
