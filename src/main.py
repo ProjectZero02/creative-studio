@@ -756,6 +756,13 @@ def story_studio_redirect() -> RedirectResponse:
     return RedirectResponse(url="/story")
 
 
+@app.get("/library_v2", include_in_schema=False)
+def library_v2_redirect(request: Request) -> RedirectResponse:
+    """The Library moved to /library; old links and bookmarks still work."""
+    query = request.url.query
+    return RedirectResponse(url=f"/library?{query}" if query else "/library")
+
+
 @app.get("/gemini-omni", include_in_schema=False)
 def gemini_omni_redirect(image_path: str | None = None) -> RedirectResponse:
     """Old Gemini Omni links open Video Studio, which now hosts Omni."""

@@ -107,23 +107,50 @@ def _passes(item: MediaItem, type_filters: list[str], error_filter: str) -> bool
     return not (error_filter == "only_errors" and not has_error)
 
 
-def _marked_items(pagestate: PageState) -> list[MediaItem]:
+def _when(item: MediaItem) -> float:
+    ts = item.timestamp
+    if isinstance(ts, str):
+        try:
+            ts = datetime.datetime.fromisoformat(ts)
+        except ValueError:
+            return 0.0
+    return ts.timestamp() if isinstance(ts, datetime.datetime) else 0.0
+
+
+def _marked_items(pagestate: PageState, view: str | None = None) -> list[MediaItem]:
     """The items of a star or collection view, newest first. Read one by one
     through get_media_item_by_id, so the usual read checks apply."""
-    ids = marks_store.ids_for(_marks(pagestate), pagestate.mark_view)[:150]
+    ids = marks_store.ids_for(_marks(pagestate), view or pagestate.mark_view)[:150]
     items = [it for it in (get_media_item_by_id(i) for i in ids) if it]
     items = [it for it in items if _passes(it, pagestate.type_filters, pagestate.error_filter)]
+    return sorted(items, key=_when, reverse=True)
 
-    def when(it):
-        ts = it.timestamp
-        if isinstance(ts, str):
-            try:
-                ts = datetime.datetime.fromisoformat(ts)
-            except ValueError:
-                return 0.0
-        return ts.timestamp() if isinstance(ts, datetime.datetime) else 0.0
 
-    return sorted(items, key=when, reverse=True)
+def _starred_first(pagestate: PageState, owner: str | None) -> list[MediaItem]:
+    """Starred items for the top of the main view, honoring the Mine filter."""
+    items = _marked_items(pagestate, "starred")
+    if owner:
+        mine = owner.strip().lower()
+        items = [it for it in items if (it.user_email or "").strip().lower() == mine]
+    return items
+
+
+def _creator_label(email: str | None, cache: dict) -> str:
+    """The name a person signed up with, else their email."""
+    email = (email or "").strip()
+    if not email:
+        return ""
+    if email not in cache:
+        name = ""
+        try:
+            from common.user_store import get_user_store
+
+            record = get_user_store().get(email)
+            name = (record or {}).get("name", "") if record else ""
+        except Exception:  # no user store (IAP mode): show the email
+            name = ""
+        cache[email] = name or email
+    return cache[email]
 
 
 def on_load(e: me.LoadEvent):
@@ -185,6 +212,14 @@ def _load_media(
         yield
         return
 
+    # Starred items go first; the pages below skip them.
+    starred_ids = set(_marks(pagestate)["starred"])
+    top_items = (
+        _starred_first(pagestate, user_email_to_filter)
+        if pagestate.current_page == 1 and starred_ids
+        else []
+    )
+
     new_items = get_media_for_page(
         page=pagestate.current_page,
         media_per_page=cfg().LIBRARY_MEDIA_PER_PAGE,
@@ -196,7 +231,8 @@ def _load_media(
 
     if not new_items:
         pagestate.all_items_loaded = True
-    else:
+    new_items = top_items + [it for it in new_items or [] if it.id not in starred_ids]
+    if new_items:
         existing_items = []
         if pagestate.media_items_json and pagestate.media_items_json != "[]":
             try:
@@ -262,6 +298,15 @@ def on_mark_view_change(e: me.SelectSelectionChangeEvent):
     yield from _load_media(pagestate, is_filter_change=True)
 
 
+def on_tile_star(e: me.WebEvent):
+    """The star on a tile: star or unstar without opening the item."""
+    pagestate = me.state(PageState)
+    if not e.key:
+        return
+    marks = marks_store.toggle_star(_ensure_marks(pagestate), e.key)
+    _save_marks(pagestate, marks)
+
+
 def on_star_click(e: me.ClickEvent):
     pagestate = me.state(PageState)
     marks = marks_store.toggle_star(_ensure_marks(pagestate), e.key)
@@ -296,12 +341,12 @@ def on_add_collection_click(e: me.ClickEvent):
 
 
 def on_empty_create_click(e: me.ClickEvent):
-    """Empty library: go make something."""
-    me.navigate("/nano-banana")
+    """Empty library: start a new chat."""
+    me.navigate("/home", query_params={"new": "1"})
 
 
 @me.page(
-    path="/library_v2",
+    path="/library",
     title="Library - Creative Studio",
     on_load=on_load,
 )
@@ -405,29 +450,17 @@ def library_content():
                         if pagestate.mark_view == "starred"
                         else "This collection is empty. Open an item to add it.",
                     )
+            elif not media_items and not pagestate.is_loading and (
+                "all" not in pagestate.type_filters or pagestate.error_filter != "all"
+            ):
+                with me.box(classes="gm-lib-empty-view"):
+                    me.text("Nothing matches these filters.")
             elif not media_items and not pagestate.is_loading:
-                with me.box(
-                    style=me.Style(
-                        grid_column="1 / -1",
-                        display="flex",
-                        flex_direction="column",
-                        align_items="center",
-                        gap=8,
-                        padding=me.Padding.symmetric(vertical=48, horizontal=20),
-                        text_align="center",
-                        border=me.Border.all(
-                            me.BorderSide(width=1, style="dashed", color="var(--gm-border)"),
-                        ),
-                        border_radius=16,
-                    ),
-                ):
-                    me.icon("photo_library", style=me.Style(font_size=36, width=36, height=36, color=me.theme_var("primary")))
-                    me.text("Nothing here yet", style=me.Style(font_size=18, font_weight=600))
-                    me.text(
-                        "Your images, videos and audio show up here.",
-                        style=me.Style(color=me.theme_var("on-surface-variant"), max_width=420),
-                    )
-                    me.button("Create an image", type="flat", on_click=on_empty_create_click)
+                # A tile in the grid's first slot: tap it to start a new chat.
+                with me.box(classes="gm-lib-first", on_click=on_empty_create_click):
+                    me.box(classes="gm-lib-first-icon")  # the New chat icon (CSS)
+                    with me.box(classes="gm-lib-first-title"):
+                        me.text("Generate media")
             else:
                 # Sign the whole page's display URLs in parallel (cached); a
                 # no-op when the media proxy is in use.
@@ -441,6 +474,9 @@ def library_content():
                         )
                     ],
                 )
+                starred_ids = set(_marks(pagestate)["starred"])
+                show_creator = pagestate.user_filter == "all"
+                names: dict = {}
                 for item in media_items:
                     gcs_uri = (
                         item.gcsuri
@@ -476,6 +512,9 @@ def library_content():
                         media_type=display_type,
                         https_url=display_url,
                         pills_json=get_pills_for_item(item, https_url),
+                        creator=_creator_label(item.user_email, names) if show_creator else "",
+                        starred=item.id in starred_ids,
+                        on_star_click=on_tile_star,
                     )
 
         # An empty library already says "Nothing here yet"; skip "End of list".

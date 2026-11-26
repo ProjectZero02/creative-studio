@@ -38,6 +38,18 @@
 /* Library stars and collections. */
 .gm-lib-view { min-width: 200px; }
 .gm-lib-view .mat-mdc-form-field-subscript-wrapper { display: none; }
+/* The "Show" picker is the same 42px pill as the filter groups beside it. */
+html body .gm-lib-view .mat-mdc-floating-label,
+html body .gm-lib-view .mdc-notched-outline { display: none !important; }
+html body .gm-lib-view .mdc-text-field--outlined.mdc-text-field--outlined {
+  height: 42px;
+  padding: 0 14px 0 18px !important;
+  border-radius: 999px;
+  border: 1px solid var(--gm-glass-border, var(--gm-border));
+  background: var(--gm-glass-fill, var(--sys-surface-container-low)) !important;
+}
+html body .gm-lib-view .mat-mdc-form-field-infix { min-height: 40px !important; padding: 9px 0 !important; }
+html body .gm-lib-view .mat-mdc-select-value { font-size: 14px; font-weight: 500; }
 .gm-lib-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .gm-lib-chip button { border-radius: 999px !important; }
 .gm-lib-chip-inner { display: flex; align-items: center; gap: 6px; }
@@ -50,6 +62,23 @@
 .gm-lib-new { display: flex; align-items: center; gap: 8px; }
 .gm-lib-new .mat-mdc-form-field { width: 180px; }
 .gm-lib-new .mat-mdc-form-field-subscript-wrapper { display: none; }
+/* Empty Library: one tile, the size of a media tile, that starts a chat. */
+.gm-lib-first {
+  height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  border-radius: 12px; cursor: pointer; text-align: center; padding: 16px;
+  border: 1px dashed var(--gm-border, rgba(127, 127, 127, 0.3));
+  background: var(--gm-tonal, rgba(255, 255, 255, 0.04));
+  color: var(--sys-on-surface-variant);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.gm-lib-first:hover { background: var(--gm-tonal-hover, rgba(255, 255, 255, 0.08)); color: var(--sys-on-surface); }
+/* The New chat icon from the side menu (chat_nav.js ICON.newchat). */
+.gm-lib-first .gm-lib-first-icon {
+  width: 44px; height: 44px; background-color: var(--sys-primary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22black%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M11.5 4.25H6.75a2.5 2.5 0 0 0-2.5 2.5v10.5a2.5 2.5 0 0 0 2.5 2.5h10.5a2.5 2.5 0 0 0 2.5-2.5V12.5%22/%3E%3Cpath d=%22M17.4 3.85a1.9 1.9 0 0 1 2.7 2.7l-7.6 7.6-3.5.8.8-3.5z%22/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22black%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M11.5 4.25H6.75a2.5 2.5 0 0 0-2.5 2.5v10.5a2.5 2.5 0 0 0 2.5 2.5h10.5a2.5 2.5 0 0 0 2.5-2.5V12.5%22/%3E%3Cpath d=%22M17.4 3.85a1.9 1.9 0 0 1 2.7 2.7l-7.6 7.6-3.5.8.8-3.5z%22/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.gm-lib-first .gm-lib-first-title { font-size: 15px; font-weight: 600; }
 .gm-lib-empty-view {
   grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 8px;
   padding: 48px 20px; text-align: center; color: var(--sys-on-surface-variant);

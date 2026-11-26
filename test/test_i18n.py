@@ -144,7 +144,7 @@ def test_normalize_and_accept_language():
 
 def test_route_key():
     assert i18n.route_key("/nano-banana") == "nano_banana"
-    assert i18n.route_key("/library_v2") == "library_v2"
+    assert i18n.route_key("/library") == "library"
 
 
 def test_every_nav_route_has_a_title_key():
@@ -221,7 +221,7 @@ def test_header_localizes_title_and_purpose(lang):
     assert title == "استوديو الفيديو"
     assert purpose == i18n.AR["page.veo.purpose"]
     title, purpose = localized_title_and_purpose("Library", "x", from_nav=True)
-    assert title == "المكتبة" and purpose == i18n.AR["nav.library_v2.desc"]
+    assert title == "المكتبة" and purpose == i18n.AR["nav.library.desc"]
     lang("en")
     assert localized_title_and_purpose("Video Studio", "Own", from_nav=False) == (
         "Video Studio",

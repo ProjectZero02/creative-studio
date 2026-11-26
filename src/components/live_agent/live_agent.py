@@ -45,7 +45,7 @@ ALLOWED_ROUTES = {
     "/lyria",
     "/voice",
     "/story",
-    "/library_v2",
+    "/library",
 }
 # Deep-link params each route reads: Video Studio (pages/veo.py on_veo_load)
 # and Story Studio (pages/story_studio.py on_load).

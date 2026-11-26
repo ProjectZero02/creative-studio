@@ -53,7 +53,7 @@ def on_lang_load(e: me.WebEvent):
 _TITLE_KEYS = {
     "gemini_image_generation": "nav.nano_banana",
     "interior_design_v2": "nav.interior_design",
-    "library": "nav.library_v2",
+    "library": "nav.library",
     "settings": "settings.title",
     "config": "settings.title",
     "account": "account.title",

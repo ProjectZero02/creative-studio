@@ -149,6 +149,8 @@ AR_TEXT: dict[str, str] = {
     "Nothing here yet": "لا شيء هنا بعد",
     "Your images, videos and audio show up here.": "تظهر هنا صورك وفيديوهاتك وملفاتك الصوتية.",
     "Create an image": "إنشاء صورة",
+    "Generate media": "أنشئ وسائط",
+    "Nothing matches these filters.": "لا شيء يطابق هذه الفلاتر.",
     "End of list": "نهاية القائمة",
     "Loading...": "جارٍ التحميل...",
     "Error: Could not load media item details.": "خطأ: تعذّر تحميل تفاصيل العنصر.",
